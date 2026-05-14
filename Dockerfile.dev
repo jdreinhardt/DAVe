@@ -1,0 +1,17 @@
+# Development image — source is bind-mounted at runtime, so we only pre-install
+# node_modules here. Hot reload is handled by tsx watch (backend) + Vite HMR (frontend).
+FROM node:20-alpine
+WORKDIR /app
+
+# Some native addons (e.g. better-sqlite3 in M2+) need build tools.
+RUN apk add --no-cache python3 make g++
+
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json   ./packages/shared/
+COPY packages/backend/package.json  ./packages/backend/
+COPY packages/frontend/package.json ./packages/frontend/
+RUN npm ci
+
+EXPOSE 3000 5173
+
+CMD ["npm", "run", "dev"]

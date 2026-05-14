@@ -1,0 +1,30 @@
+node_modules/
+dist/
+build/
+.env
+*.local
+
+# SQLite session store
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test output
+coverage/
+.vitest/
+playwright-report/
+test-results/
