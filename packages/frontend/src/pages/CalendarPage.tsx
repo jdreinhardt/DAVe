@@ -9,7 +9,20 @@ import { X, MapPin, AlignLeft, Clock, Repeat, Users } from 'lucide-react';
 import type { Calendar, EventJson, RecurrenceRule, AttendeeJson } from '@dave/shared';
 import { getCalendars, getCalendarEvents } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
+import { useSettings } from '../contexts/Settings';
+import type { MapService } from '../contexts/Settings';
 import { cn } from '../lib/utils';
+
+// ── Map helpers ───────────────────────────────────────────────────────────────
+
+function buildMapUrl(location: string, service: MapService): string {
+  const q = encodeURIComponent(location);
+  switch (service) {
+    case 'google': return `https://www.google.com/maps/search/?api=1&query=${q}`;
+    case 'apple':  return `https://maps.apple.com/?q=${q}`;
+    default:       return `https://www.openstreetmap.org/search?query=${q}`;
+  }
+}
 
 // ── Timezone helpers ──────────────────────────────────────────────────────────
 
@@ -247,6 +260,7 @@ function EventPopup({
   calendar: Calendar;
   onClose: () => void;
 }) {
+  const { mapService } = useSettings();
   const showOriginalTz =
     !event.allDay && event.tzid !== null && event.tzid !== BROWSER_TZ;
 
@@ -318,7 +332,14 @@ function EventPopup({
           {event.location && (
             <div className="flex items-start gap-2 text-sm">
               <MapPin className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
-              <span className="break-words">{event.location}</span>
+              <a
+                href={buildMapUrl(event.location, mapService)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="break-words hover:underline text-primary"
+              >
+                {event.location}
+              </a>
             </div>
           )}
 

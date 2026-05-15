@@ -2,29 +2,32 @@ import { useState } from 'react';
 import { X, ArrowUpAZ, ArrowDownAZ } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useSettings } from '../contexts/Settings';
-import type { SortBy, SortDir, ContactSubtitleField } from '../contexts/Settings';
+import type { SortBy, SortDir, ContactSubtitleField, MapService } from '../contexts/Settings';
 
 interface SettingsModalProps {
   onClose: () => void;
 }
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField } =
+  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService } =
     useSettings();
   const [sortBy, setSortBy] = useState<SortBy>(contactSort.sortBy);
   const [sortDir, setSortDir] = useState<SortDir>(contactSort.sortDir);
   const [subtitleField, setSubtitleField] = useState<ContactSubtitleField>(contactSubtitleField);
+  const [mapSvc, setMapSvc] = useState<MapService>(mapService);
 
   const handleSave = () => {
     updateContactSort({ sortBy, sortDir });
     updateContactSubtitleField(subtitleField);
+    updateMapService(mapSvc);
     onClose();
   };
 
   const isDirty =
     sortBy !== contactSort.sortBy ||
     sortDir !== contactSort.sortDir ||
-    subtitleField !== contactSubtitleField;
+    subtitleField !== contactSubtitleField ||
+    mapSvc !== mapService;
 
   return (
     <div
@@ -111,6 +114,29 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 <option value="phone">Phone</option>
                 <option value="organization">Organization</option>
                 <option value="title">Title</option>
+              </select>
+            </div>
+          </section>
+
+          {/* Calendar */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Calendar
+            </h3>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor="map-service" className="text-sm font-medium shrink-0">
+                Map service
+              </label>
+              <select
+                id="map-service"
+                value={mapSvc}
+                onChange={(e) => setMapSvc(e.target.value as MapService)}
+                className="flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="osm">OpenStreetMap</option>
+                <option value="google">Google Maps</option>
+                <option value="apple">Apple Maps</option>
               </select>
             </div>
           </section>

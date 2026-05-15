@@ -3,6 +3,7 @@ import { createContext, useContext, useState, useCallback } from 'react';
 export type SortBy = 'first' | 'last';
 export type SortDir = 'asc' | 'desc';
 export type ContactSubtitleField = 'nickname' | 'email' | 'phone' | 'organization' | 'title' | '';
+export type MapService = 'osm' | 'google' | 'apple';
 
 export interface ContactSortSettings {
   sortBy: SortBy;
@@ -14,12 +15,28 @@ interface SettingsContextValue {
   updateContactSort: (s: ContactSortSettings) => void;
   contactSubtitleField: ContactSubtitleField;
   updateContactSubtitleField: (f: ContactSubtitleField) => void;
+  mapService: MapService;
+  updateMapService: (s: MapService) => void;
 }
 
 const SORT_KEY = 'dave:settings:contactSort';
 const SUBTITLE_KEY = 'dave:settings:contactSubtitleField';
+const MAP_SERVICE_KEY = 'dave:settings:mapService';
 
 const VALID_SUBTITLE_FIELDS: ContactSubtitleField[] = ['nickname', 'email', 'phone', 'organization', 'title', ''];
+const VALID_MAP_SERVICES: MapService[] = ['osm', 'google', 'apple'];
+
+function loadMapService(): MapService {
+  try {
+    const raw = localStorage.getItem(MAP_SERVICE_KEY);
+    if (raw !== null && VALID_MAP_SERVICES.includes(raw as MapService)) {
+      return raw as MapService;
+    }
+  } catch {
+    // ignore corrupt storage
+  }
+  return 'osm';
+}
 
 function loadContactSort(): ContactSortSettings {
   try {
@@ -53,6 +70,7 @@ const SettingsContext = createContext<SettingsContextValue | null>(null);
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [contactSort, setContactSort] = useState<ContactSortSettings>(loadContactSort);
   const [contactSubtitleField, setContactSubtitleField] = useState<ContactSubtitleField>(loadContactSubtitleField);
+  const [mapService, setMapService] = useState<MapService>(loadMapService);
 
   const updateContactSort = useCallback((s: ContactSortSettings) => {
     setContactSort(s);
@@ -72,8 +90,17 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const updateMapService = useCallback((s: MapService) => {
+    setMapService(s);
+    try {
+      localStorage.setItem(MAP_SERVICE_KEY, s);
+    } catch {
+      // ignore write failures (private browsing quota)
+    }
+  }, []);
+
   return (
-    <SettingsContext.Provider value={{ contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField }}>
+    <SettingsContext.Provider value={{ contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService }}>
       {children}
     </SettingsContext.Provider>
   );
