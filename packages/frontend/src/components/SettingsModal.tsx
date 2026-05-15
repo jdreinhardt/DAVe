@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X } from 'lucide-react';
+import { X, ArrowUpAZ, ArrowDownAZ } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useSettings } from '../contexts/Settings';
 import type { SortBy, SortDir } from '../contexts/Settings';
@@ -23,7 +23,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div className="w-full max-w-sm rounded-lg border border-border bg-card shadow-lg">
         {/* Header */}
@@ -46,45 +48,46 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               Contacts
             </h3>
 
-            <fieldset className="space-y-1.5">
-              <legend className="text-sm font-medium">Sort by</legend>
-              <div className="flex flex-col gap-1.5">
-                <RadioOption
-                  name="sortBy"
-                  value="last"
-                  checked={sortBy === 'last'}
-                  onChange={() => setSortBy('last')}
-                  label="Last name"
-                />
-                <RadioOption
-                  name="sortBy"
-                  value="first"
-                  checked={sortBy === 'first'}
-                  onChange={() => setSortBy('first')}
-                  label="First name"
-                />
-              </div>
-            </fieldset>
-
-            <fieldset className="space-y-1.5">
-              <legend className="text-sm font-medium">Sort direction</legend>
-              <div className="flex flex-col gap-1.5">
-                <RadioOption
-                  name="sortDir"
-                  value="asc"
-                  checked={sortDir === 'asc'}
-                  onChange={() => setSortDir('asc')}
-                  label="Ascending (A → Z)"
-                />
-                <RadioOption
-                  name="sortDir"
-                  value="desc"
-                  checked={sortDir === 'desc'}
-                  onChange={() => setSortDir('desc')}
-                  label="Descending (Z → A)"
-                />
-              </div>
-            </fieldset>
+            <div className="flex items-center gap-2">
+              <label htmlFor="contact-sort-by" className="text-sm font-medium shrink-0">
+                Sort order
+              </label>
+              <select
+                id="contact-sort-by"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as SortBy)}
+                className="flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="last">Last name</option>
+                <option value="first">First name</option>
+              </select>
+              <button
+                onClick={() => setSortDir('asc')}
+                title="Ascending (A → Z)"
+                aria-label="Sort ascending"
+                className={cn(
+                  'rounded-md border p-1.5 transition-colors',
+                  sortDir === 'asc'
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                <ArrowDownAZ className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setSortDir('desc')}
+                title="Descending (Z → A)"
+                aria-label="Sort descending"
+                className={cn(
+                  'rounded-md border p-1.5 transition-colors',
+                  sortDir === 'desc'
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+                )}
+              >
+                <ArrowUpAZ className="h-4 w-4" />
+              </button>
+            </div>
           </section>
         </div>
 
@@ -101,9 +104,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             disabled={!isDirty}
             className={cn(
               'rounded-md px-3 py-1.5 text-sm text-primary-foreground transition-colors',
-              isDirty
-                ? 'bg-primary hover:bg-primary/90'
-                : 'bg-primary/40 cursor-not-allowed',
+              isDirty ? 'bg-primary hover:bg-primary/90' : 'bg-primary/40 cursor-not-allowed',
             )}
           >
             Save
@@ -111,33 +112,5 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         </div>
       </div>
     </div>
-  );
-}
-
-function RadioOption({
-  name,
-  value,
-  checked,
-  onChange,
-  label,
-}: {
-  name: string;
-  value: string;
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-}) {
-  return (
-    <label className="flex items-center gap-2 cursor-pointer select-none">
-      <input
-        type="radio"
-        name={name}
-        value={value}
-        checked={checked}
-        onChange={onChange}
-        className="accent-primary h-3.5 w-3.5"
-      />
-      <span className="text-sm">{label}</span>
-    </label>
   );
 }
