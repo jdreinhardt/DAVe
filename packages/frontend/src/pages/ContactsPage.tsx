@@ -1,6 +1,6 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2 } from 'lucide-react';
+import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X } from 'lucide-react';
 import type { AddressBook, Contact, ContactJson } from '@dave/shared';
 import { getAddressBooks, getContacts } from '../api/collections';
 import {
@@ -68,7 +68,9 @@ type Panel =
 export default function ContactsPage() {
   const queryClient = useQueryClient();
   const { startDrag, endDrag } = useContactDrag();
+
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [panel, setPanel] = useState<Panel>({ mode: 'empty' });
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
@@ -77,6 +79,21 @@ export default function ContactsPage() {
   const [editAbId, setEditAbId] = useState<string>('');
   const importFileRef = useRef<HTMLInputElement>(null);
   const { hiddenAddressBooks } = useCollectionVisibility();
+
+  const isMultiSelect = selectedIds.size > 0;
+
+  // ── Selection helpers ────────────────────────────────────────────────────
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
   // ── Data fetching ────────────────────────────────────────────────────────
 
@@ -179,7 +196,7 @@ export default function ContactsPage() {
     onError: (e) => { setDeleteTarget(null); showToast(errorMessage(e, true), 'err'); },
   });
 
-  // Move = create in new AB + delete from old AB
+  // Single-contact move: create in new AB + delete from old AB
   const moveMutation = useMutation({
     mutationFn: async ({
       contact,
@@ -195,12 +212,10 @@ export default function ContactsPage() {
       return { created, oldAbId: contact.addressBookId, oldId: contact.id };
     },
     onSuccess: ({ created, oldAbId, oldId }) => {
-      // Remove from old AB cache
       queryClient.setQueryData<Contact[]>(
         ['contacts', oldAbId],
         (old) => (old ?? []).filter((c) => c.id !== oldId),
       );
-      // Add to new AB cache
       const newContact = writeResponseToContact(created);
       queryClient.setQueryData<Contact[]>(
         ['contacts', created.addressBookId],
@@ -213,11 +228,42 @@ export default function ContactsPage() {
     onError: (e) => showToast(errorMessage(e, true), 'err'),
   });
 
+  // Bulk move: fires all moves in parallel, updates each cache entry
+  const bulkMoveMutation = useMutation({
+    mutationFn: ({ contacts, newAbId }: { contacts: Contact[]; newAbId: string }) =>
+      Promise.allSettled(
+        contacts.map(async (contact) => {
+          const created = await createContact(newAbId, contact.data);
+          await deleteContact(contact.addressBookId, contact.id, contact.etag);
+          return { created, oldAbId: contact.addressBookId, oldId: contact.id };
+        }),
+      ),
+    onSuccess: (results) => {
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          const { created, oldAbId, oldId } = r.value;
+          queryClient.setQueryData<Contact[]>(
+            ['contacts', oldAbId],
+            (old) => (old ?? []).filter((c) => c.id !== oldId),
+          );
+          queryClient.setQueryData<Contact[]>(
+            ['contacts', created.addressBookId],
+            (old) => [...(old ?? []), writeResponseToContact(created)],
+          );
+        }
+      }
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      clearSelection();
+      showToast(`Moved ${ok} contact${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+    },
+    onError: (e) => showToast(errorMessage(e), 'err'),
+  });
+
   const importMutation = useMutation({
     mutationFn: ({ abId, vcf }: { abId: string; vcf: string }) =>
       importContacts(abId, vcf),
     onSuccess: (result, { abId }) => {
-      // Invalidate so the list re-fetches with new contacts
       void queryClient.invalidateQueries({ queryKey: ['contacts', abId] });
       showToast(`Imported ${result.imported} contact${result.imported !== 1 ? 's' : ''}${result.failed ? ` (${result.failed} failed)` : ''}`);
     },
@@ -264,6 +310,11 @@ export default function ContactsPage() {
     a.href = exportContactsUrl(ab.id);
     a.download = `${ab.displayName || ab.id}.vcf`;
     a.click();
+  };
+
+  const handleBulkMove = (newAbId: string) => {
+    const contacts = allContacts.filter((c) => selectedIds.has(c.id));
+    bulkMoveMutation.mutate({ contacts, newAbId });
   };
 
   // ── Render helpers ────────────────────────────────────────────────────────
@@ -323,11 +374,24 @@ export default function ContactsPage() {
           </div>
         </div>
 
-        {/* Count */}
+        {/* Multi-select action bar OR count */}
         {!isLoadingContacts && (
-          <div className="px-3 py-1.5 text-xs text-muted-foreground border-b border-border">
-            {filtered.length} {filtered.length === 1 ? 'contact' : 'contacts'}
-          </div>
+          isMultiSelect ? (
+            <MultiSelectBar
+              count={selectedIds.size}
+              total={filtered.length}
+              addressBooks={addressBooks}
+              moving={bulkMoveMutation.isPending}
+              onSelectAll={() => setSelectedIds(new Set(filtered.map((c) => c.id)))}
+              onSelectNone={clearSelection}
+              onMove={handleBulkMove}
+              onClear={clearSelection}
+            />
+          ) : (
+            <div className="px-3 py-1.5 text-xs text-muted-foreground border-b border-border">
+              {filtered.length} {filtered.length === 1 ? 'contact' : 'contacts'}
+            </div>
+          )
         )}
 
         {/* List */}
@@ -351,12 +415,24 @@ export default function ContactsPage() {
                   key={c.id}
                   contact={c}
                   selected={c.id === selectedId}
+                  isChecked={selectedIds.has(c.id)}
+                  isMultiSelect={isMultiSelect}
                   onClick={() => handleSelectContact(c)}
-                  onDragStart={() =>
-                    startDrag(c, (targetAbId) =>
-                      moveMutation.mutate({ contact: c, data: c.data, newAbId: targetAbId }),
-                    )
-                  }
+                  onToggleSelect={() => toggleSelect(c.id)}
+                  onDragStart={() => {
+                    // If dragging a checked contact, move the whole selection;
+                    // otherwise move just this one.
+                    if (selectedIds.has(c.id) && selectedIds.size > 1) {
+                      const all = allContacts.filter((x) => selectedIds.has(x.id));
+                      startDrag(c, (targetAbId) =>
+                        bulkMoveMutation.mutate({ contacts: all, newAbId: targetAbId }),
+                      );
+                    } else {
+                      startDrag(c, (targetAbId) =>
+                        moveMutation.mutate({ contact: c, data: c.data, newAbId: targetAbId }),
+                      );
+                    }
+                  }}
                   onDragEnd={endDrag}
                 />
               ))}
@@ -367,88 +443,99 @@ export default function ContactsPage() {
 
       {/* ── Right: detail / edit pane ── */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {panel.mode === 'create' && (
+        {selectedIds.size >= 2 ? (
+          <MultiContactPanel
+            contacts={allContacts.filter((c) => selectedIds.has(c.id))}
+            addressBooks={addressBooks}
+            onClickContact={(c) => {
+              clearSelection();
+              handleSelectContact(c);
+            }}
+          />
+        ) : (
           <>
-            <PaneHeader title="New contact" />
-            <div className="flex-1 overflow-hidden">
-              <ContactEditForm
-                initial={emptyContactJson()}
-                addressBooks={addressBooks}
-                selectedAddressBookId={createAbId || defaultAbId()}
-                onAddressBookChange={setCreateAbId}
-                onSave={(data) => {
-                  const abId = createAbId || defaultAbId();
-                  createMutation.mutate({ abId, data });
-                }}
-                onCancel={() => setPanel({ mode: 'empty' })}
-                saving={createMutation.isPending}
-              />
-            </div>
-          </>
-        )}
+            {panel.mode === 'create' && (
+              <>
+                <PaneHeader title="New contact" />
+                <div className="flex-1 overflow-hidden">
+                  <ContactEditForm
+                    initial={emptyContactJson()}
+                    addressBooks={addressBooks}
+                    selectedAddressBookId={createAbId || defaultAbId()}
+                    onAddressBookChange={setCreateAbId}
+                    onSave={(data) => {
+                      const abId = createAbId || defaultAbId();
+                      createMutation.mutate({ abId, data });
+                    }}
+                    onCancel={() => setPanel({ mode: 'empty' })}
+                    saving={createMutation.isPending}
+                  />
+                </div>
+              </>
+            )}
 
-        {panel.mode === 'edit' && (
-          <>
-            <PaneHeader title="Edit contact" />
-            <div className="flex-1 overflow-hidden">
-              <ContactEditForm
-                initial={panel.contact.data}
-                addressBooks={addressBooks}
-                selectedAddressBookId={editAbId || panel.contact.addressBookId}
-                onAddressBookChange={setEditAbId}
-                onSave={(data) => {
-                  const targetAbId = editAbId || panel.contact.addressBookId;
-                  if (targetAbId !== panel.contact.addressBookId) {
-                    moveMutation.mutate({ contact: panel.contact, data, newAbId: targetAbId });
-                  } else {
-                    updateMutation.mutate({ contact: panel.contact, data });
-                  }
-                }}
-                onCancel={() => setPanel({ mode: 'detail', contact: panel.contact })}
-                saving={updateMutation.isPending || moveMutation.isPending}
-              />
-            </div>
-          </>
-        )}
+            {panel.mode === 'edit' && (
+              <>
+                <PaneHeader title="Edit contact" />
+                <div className="flex-1 overflow-hidden">
+                  <ContactEditForm
+                    initial={panel.contact.data}
+                    addressBooks={addressBooks}
+                    selectedAddressBookId={editAbId || panel.contact.addressBookId}
+                    onAddressBookChange={setEditAbId}
+                    onSave={(data) => {
+                      const targetAbId = editAbId || panel.contact.addressBookId;
+                      if (targetAbId !== panel.contact.addressBookId) {
+                        moveMutation.mutate({ contact: panel.contact, data, newAbId: targetAbId });
+                      } else {
+                        updateMutation.mutate({ contact: panel.contact, data });
+                      }
+                    }}
+                    onCancel={() => setPanel({ mode: 'detail', contact: panel.contact })}
+                    saving={updateMutation.isPending || moveMutation.isPending}
+                  />
+                </div>
+              </>
+            )}
 
-        {panel.mode === 'detail' && selectedContact && (
-          <>
-            {/* Detail header with actions */}
-            <div className="flex items-center justify-end gap-1 px-4 py-2 border-b border-border shrink-0">
-              {/* Export per-addressbook when multiple exist */}
-              {addressBooks.length > 1 && (
-                <button
-                  onClick={() => {
-                    const ab = addressBooks.find((a) => a.id === selectedContact.addressBookId);
-                    if (ab) handleExport(ab);
-                  }}
-                  title="Export this address book"
-                  className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
-                >
-                  <Download className="h-3.5 w-3.5" /> Export
-                </button>
-              )}
-              <button
-                onClick={() => handleEdit(selectedContact)}
-                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
-              >
-                <Pencil className="h-3.5 w-3.5" /> Edit
-              </button>
-              <button
-                onClick={() => setDeleteTarget(selectedContact)}
-                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
-              >
-                <Trash2 className="h-3.5 w-3.5" /> Delete
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              <ContactDetail contact={selectedContact} />
-            </div>
-          </>
-        )}
+            {panel.mode === 'detail' && selectedContact && (
+              <>
+                <div className="flex items-center justify-end gap-1 px-4 py-2 border-b border-border shrink-0">
+                  {addressBooks.length > 1 && (
+                    <button
+                      onClick={() => {
+                        const ab = addressBooks.find((a) => a.id === selectedContact.addressBookId);
+                        if (ab) handleExport(ab);
+                      }}
+                      title="Export this address book"
+                      className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                    >
+                      <Download className="h-3.5 w-3.5" /> Export
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleEdit(selectedContact)}
+                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Edit
+                  </button>
+                  <button
+                    onClick={() => setDeleteTarget(selectedContact)}
+                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  <ContactDetail contact={selectedContact} />
+                </div>
+              </>
+            )}
 
-        {panel.mode === 'empty' && (
-          <EmptyState hasContacts={allContacts.length > 0} isLoading={isLoadingContacts} />
+            {panel.mode === 'empty' && (
+              <EmptyState hasContacts={allContacts.length > 0} isLoading={isLoadingContacts} />
+            )}
+          </>
         )}
       </div>
 
@@ -479,18 +566,111 @@ export default function ContactsPage() {
   );
 }
 
+// ── Multi-select action bar ───────────────────────────────────────────────────
+
+function MultiSelectBar({
+  count,
+  total,
+  addressBooks,
+  moving,
+  onSelectAll,
+  onSelectNone,
+  onMove,
+  onClear,
+}: {
+  count: number;
+  total: number;
+  addressBooks: AddressBook[];
+  moving: boolean;
+  onSelectAll: () => void;
+  onSelectNone: () => void;
+  onMove: (abId: string) => void;
+  onClear: () => void;
+}) {
+  const [moveOpen, setMoveOpen] = useState(false);
+  const allSelected = count === total;
+
+  return (
+    <div className="px-3 py-1.5 border-b border-border bg-primary/5 flex items-center gap-1.5">
+      <span className="text-xs font-medium text-primary flex-1 shrink-0">
+        {count} selected
+      </span>
+
+      <button
+        onClick={allSelected ? onSelectNone : onSelectAll}
+        className="text-xs text-muted-foreground hover:text-foreground whitespace-nowrap"
+      >
+        {allSelected ? 'None' : 'All'}
+      </button>
+
+      {/* Move to dropdown */}
+      {addressBooks.length > 1 && (
+        <div className="relative">
+          <button
+            onClick={() => setMoveOpen((o) => !o)}
+            disabled={moving}
+            className={cn(
+              'flex items-center gap-1 rounded border border-input bg-background px-2 py-1 text-xs hover:bg-muted disabled:opacity-50',
+            )}
+          >
+            Move <ChevronDown className="h-3 w-3" />
+          </button>
+          {moveOpen && (
+            <>
+              {/* Backdrop to close */}
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setMoveOpen(false)}
+              />
+              <div className="absolute right-0 top-full mt-1 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                {addressBooks.map((ab) => (
+                  <button
+                    key={ab.id}
+                    onClick={() => { setMoveOpen(false); onMove(ab.id); }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted truncate"
+                  >
+                    <span
+                      className="h-2.5 w-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: ab.color || '#6C757D' }}
+                    />
+                    {ab.displayName}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      <button
+        onClick={onClear}
+        title="Clear selection"
+        className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 // ── List item ─────────────────────────────────────────────────────────────────
 
 function ContactListItem({
   contact,
   selected,
+  isChecked,
+  isMultiSelect,
   onClick,
+  onToggleSelect,
   onDragStart,
   onDragEnd,
 }: {
   contact: Contact;
   selected: boolean;
+  isChecked: boolean;
+  isMultiSelect: boolean;
   onClick: () => void;
+  onToggleSelect: () => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
 }) {
@@ -501,29 +681,57 @@ function ContactListItem({
   const subtitle = contactSubtitle(contact);
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       draggable
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = 'move';
-        onDragStart?.();
-      }}
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart?.(); }}
       onDragEnd={onDragEnd}
       onClick={onClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}
       className={cn(
-        'w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors cursor-grab active:cursor-grabbing',
-        selected ? 'bg-primary/10' : 'hover:bg-muted',
+        'group w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors',
+        'cursor-grab active:cursor-grabbing outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        isChecked ? 'bg-primary/10' : selected ? 'bg-primary/5' : 'hover:bg-muted',
       )}
     >
-      <Avatar contact={contact} size="sm" />
+      {/* Avatar with checkbox overlay — no layout shift */}
+      <div className="relative shrink-0 h-8 w-8">
+        {/* Avatar dims on hover or when checked */}
+        <div
+          className={cn(
+            'transition-opacity',
+            isChecked ? 'opacity-30' : 'group-hover:opacity-30',
+          )}
+        >
+          <Avatar contact={contact} size="sm" />
+        </div>
+        {/* Checkbox appears on hover or in multi-select mode */}
+        <label
+          className={cn(
+            'absolute inset-0 flex items-center justify-center rounded-full cursor-pointer transition-opacity',
+            isChecked || isMultiSelect ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+          )}
+          onClick={(e) => { e.stopPropagation(); }}
+        >
+          <input
+            type="checkbox"
+            checked={isChecked}
+            onChange={onToggleSelect}
+            className="h-4 w-4 cursor-pointer accent-primary"
+          />
+        </label>
+      </div>
+
       <div className="min-w-0">
-        <p className={cn('text-sm font-medium truncate', selected ? 'text-primary' : 'text-foreground')}>
+        <p className={cn('text-sm font-medium truncate', selected && !isChecked ? 'text-primary' : 'text-foreground')}>
           {name}
         </p>
         {subtitle && (
           <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -561,6 +769,62 @@ function EmptyState({ hasContacts, isLoading }: { hasContacts: boolean; isLoadin
       <p className="text-sm">
         {hasContacts ? 'Select a contact to view details' : 'No contacts yet'}
       </p>
+    </div>
+  );
+}
+
+// ── Multi-contact selection panel ─────────────────────────────────────────────
+
+function MultiContactPanel({
+  contacts,
+  addressBooks,
+  onClickContact,
+}: {
+  contacts: Contact[];
+  addressBooks: AddressBook[];
+  onClickContact: (c: Contact) => void;
+}) {
+  const abName = (id: string) =>
+    addressBooks.find((ab) => ab.id === id)?.displayName ?? id;
+
+  return (
+    <div className="flex-1 overflow-y-auto p-5">
+      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-4">
+        {contacts.length} contacts selected
+      </p>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+        {contacts.map((c) => {
+          const name =
+            c.data.fullName ||
+            [c.data.name.given, c.data.name.family].filter(Boolean).join(' ') ||
+            '(No name)';
+          const subtitle =
+            c.data.emails[0]?.value ||
+            c.data.phones[0]?.value ||
+            c.data.organization ||
+            '';
+
+          return (
+            <button
+              key={c.id}
+              onClick={() => onClickContact(c)}
+              className={cn(
+                'flex flex-col items-center gap-2 p-4 rounded-lg border border-border',
+                'text-center hover:bg-muted hover:border-primary/30 transition-colors',
+              )}
+            >
+              <Avatar contact={c} size="lg" />
+              <div className="w-full min-w-0 space-y-0.5">
+                <p className="text-sm font-medium truncate">{name}</p>
+                {subtitle && (
+                  <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
+                )}
+                <p className="text-xs text-muted-foreground/60 truncate">{abName(c.addressBookId)}</p>
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
