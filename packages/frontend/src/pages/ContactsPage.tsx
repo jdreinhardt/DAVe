@@ -3,6 +3,7 @@ import { useQuery, useQueries } from '@tanstack/react-query';
 import { Search, UserRound } from 'lucide-react';
 import type { Contact } from '@dave/shared';
 import { getAddressBooks, getContacts } from '../api/collections';
+import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { cn } from '../lib/utils';
 import ContactDetail, { Avatar } from '../components/ContactDetail';
 
@@ -47,6 +48,7 @@ function matchesSearch(c: Contact, term: string): boolean {
 export default function ContactsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const { hiddenAddressBooks } = useCollectionVisibility();
 
   // Address books (shared cache with sidebar)
   const abQuery = useQuery({
@@ -73,10 +75,11 @@ export default function ContactsPage() {
     return flat.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
   }, [contactQueries]);
 
-  const filtered = useMemo(
-    () => (search.trim() ? allContacts.filter((c) => matchesSearch(c, search.trim())) : allContacts),
-    [allContacts, search],
-  );
+  const filtered = useMemo(() => {
+    let result = allContacts.filter((c) => !hiddenAddressBooks.has(c.addressBookId));
+    if (search.trim()) result = result.filter((c) => matchesSearch(c, search.trim()));
+    return result;
+  }, [allContacts, search, hiddenAddressBooks]);
 
   // Group by first letter
   const groups = useMemo(() => {

@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -6,6 +5,7 @@ import { BookUser, Calendar, LogOut, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
+import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import type { AddressBook, Calendar as CalendarType } from '@dave/shared';
 import type { MeResponse } from '@dave/shared';
 
@@ -63,6 +63,7 @@ export default function Sidebar({ me }: SidebarProps) {
       {/* Address books */}
       <CollectionSection
         title="Address Books"
+        kind="addressbook"
         items={abQuery.data}
         isError={abQuery.isError}
         defaultColor="#6C757D"
@@ -73,6 +74,7 @@ export default function Sidebar({ me }: SidebarProps) {
       {/* Calendars */}
       <CollectionSection
         title="Calendars"
+        kind="calendar"
         items={calQuery.data}
         isError={calQuery.isError}
         defaultColor="#0082C9"
@@ -125,24 +127,22 @@ function SidebarNavLink({
 
 function CollectionSection({
   title,
+  kind,
   items,
   isError,
   defaultColor,
 }: {
   title: string;
+  kind: 'addressbook' | 'calendar';
   items: (AddressBook | CalendarType)[] | undefined;
   isError: boolean;
   defaultColor: string;
 }) {
-  // Local visibility toggles — persisted client-side only for now (M8 will persist to prefs).
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const { hiddenAddressBooks, hiddenCalendars, toggleAddressBook, toggleCalendar } =
+    useCollectionVisibility();
 
-  const toggle = (id: string) =>
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) { next.delete(id); } else { next.add(id); }
-      return next;
-    });
+  const hidden = kind === 'addressbook' ? hiddenAddressBooks : hiddenCalendars;
+  const toggle = kind === 'addressbook' ? toggleAddressBook : toggleCalendar;
 
   return (
     <div className="px-2 py-2">
