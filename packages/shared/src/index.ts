@@ -113,6 +113,13 @@ export interface AlarmJson {
   description: string;
 }
 
+export interface AttendeeJson {
+  email: string;
+  name: string;   // CN parameter; empty string if absent
+  partstat: string; // ACCEPTED | DECLINED | TENTATIVE | NEEDS-ACTION | DELEGATED | …
+  role: string;   // CHAIR | REQ-PARTICIPANT | OPT-PARTICIPANT | NON-PARTICIPANT | …
+}
+
 export interface RecurrenceRule {
   freq: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
   interval?: number;
@@ -136,6 +143,7 @@ export interface EventJson {
   recurrenceRule: RecurrenceRule | null;
   recurrenceId: string | null; // set on exception instances
   alarms: AlarmJson[];
+  attendees: AttendeeJson[];
   calendarId: string;
   color: string | null; // per-event color override if present
 }

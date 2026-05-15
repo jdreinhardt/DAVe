@@ -1,4 +1,4 @@
-import type { AddressBook, Calendar, Contact } from '@dave/shared';
+import type { AddressBook, Calendar, Contact, CalendarEvent } from '@dave/shared';
 import { apiFetch } from './client';
 
 export const getAddressBooks = (): Promise<AddressBook[]> =>
@@ -9,3 +9,8 @@ export const getCalendars = (): Promise<Calendar[]> =>
 
 export const getContacts = (addressBookId: string): Promise<Contact[]> =>
   apiFetch<Contact[]>(`/api/addressbooks/${encodeURIComponent(addressBookId)}/contacts`);
+
+export const getCalendarEvents = (calendarId: string, start: string, end: string): Promise<CalendarEvent[]> =>
+  apiFetch<CalendarEvent[]>(
+    `/api/calendars/${encodeURIComponent(calendarId)}/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+  );

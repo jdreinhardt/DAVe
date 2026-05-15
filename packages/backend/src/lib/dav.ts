@@ -3,8 +3,9 @@ import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
-import type { Calendar, AddressBook, Contact, ContactJson } from '@dave/shared';
+import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
+import { parseIcalEvents } from './ical.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
@@ -13,6 +14,7 @@ const {
   DAVClient,
   fetchAddressBooks: _fetchAddressBooks,
   fetchCalendars: _fetchCalendars,
+  fetchCalendarObjects: _fetchCalendarObjects,
   fetchVCards: _fetchVCards,
   getBasicAuthHeaders: _getBasicAuthHeaders,
 } = _req('tsdav') as typeof TsdavTypes;
@@ -298,4 +300,46 @@ export async function fetchRawContacts(
   return vcards
     .filter((v) => v.data)
     .map((v) => ({ url: v.url, etag: v.etag ?? '', raw: v.data as string }));
+}
+
+// ── Calendar event fetching ───────────────────────────────────────────────────
+
+function calendarObjectId(url: string): string {
+  try {
+    const seg = new URL(url).pathname.replace(/\/$/, '').split('/').filter(Boolean);
+    const last = seg[seg.length - 1] ?? url;
+    return last.replace(/\.ics$/i, '');
+  } catch {
+    return url;
+  }
+}
+
+export async function fetchEvents(
+  session: SessionData,
+  calendarId: string,
+  start: string,
+  end: string,
+  _config: Config,
+): Promise<CalendarEvent[]> {
+  const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${calendarId}/`;
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+
+  const objects = await _fetchCalendarObjects({
+    calendar: { url: calUrl },
+    timeRange: { start, end },
+    headers: authHeaders,
+  });
+
+  return objects
+    .filter((obj: TsdavTypes.DAVCalendarObject) => obj.data)
+    .flatMap((obj: TsdavTypes.DAVCalendarObject) => {
+      const events = parseIcalEvents(obj.data as string, calendarId, start, end);
+      return events.map((eventData) => ({
+        id: calendarObjectId(obj.url),
+        url: obj.url,
+        etag: obj.etag ?? '',
+        calendarId,
+        data: eventData,
+      }));
+    });
 }
