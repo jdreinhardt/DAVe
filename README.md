@@ -19,7 +19,9 @@ docker compose -f docker-compose.dev.yml up -d
 
 # 3. Complete the Baikal first-run wizard
 open http://localhost:8800/admin/
-# Set an admin password, then save the system config page.
+# a) Set an admin password and save the system config page.
+# b) In Settings → WebDAV auth type, switch from Digest to Basic.
+#    (tsdav uses Basic auth — Digest will cause login to fail with 401)
 
 # 4. Seed a test user + collections
 ./scripts/seed.sh

@@ -23,6 +23,9 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Dev session store (created by docker-compose.dev.yml DATA_DIR)
+.dev-data/
+
 # Test output
 coverage/
 .vitest/
