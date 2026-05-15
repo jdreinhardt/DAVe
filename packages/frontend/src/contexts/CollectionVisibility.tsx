@@ -5,6 +5,10 @@ interface CollectionVisibilityValue {
   hiddenCalendars: Set<string>;
   toggleAddressBook: (id: string) => void;
   toggleCalendar: (id: string) => void;
+  showAllAddressBooks: () => void;
+  hideAllAddressBooks: (ids: string[]) => void;
+  showAllCalendars: () => void;
+  hideAllCalendars: (ids: string[]) => void;
 }
 
 const CollectionVisibilityContext = createContext<CollectionVisibilityValue | null>(null);
@@ -29,7 +33,16 @@ export function CollectionVisibilityProvider({ children }: { children: React.Rea
 
   return (
     <CollectionVisibilityContext.Provider
-      value={{ hiddenAddressBooks, hiddenCalendars, toggleAddressBook, toggleCalendar }}
+      value={{
+        hiddenAddressBooks,
+        hiddenCalendars,
+        toggleAddressBook,
+        toggleCalendar,
+        showAllAddressBooks: () => setHiddenAddressBooks(new Set()),
+        hideAllAddressBooks: (ids) => setHiddenAddressBooks(new Set(ids)),
+        showAllCalendars: () => setHiddenCalendars(new Set()),
+        hideAllCalendars: (ids) => setHiddenCalendars(new Set(ids)),
+      }}
     >
       {children}
     </CollectionVisibilityContext.Provider>
