@@ -17,6 +17,7 @@
     "fastify": "^5.0.0",
     "fastify-plugin": "^5.0.0",
     "tsdav": "^2.0.0",
+    "vcard4": "^4.0.5",
     "zod": "^3.23.0"
   },
   "devDependencies": {

@@ -44,7 +44,7 @@ These decisions are made; don't relitigate them mid-task.
 
 - **`tsdav`** owns CalDAV/CardDAV. Don't hand-roll PROPFIND/REPORT XML. If you hit a tsdav bug, wrap around it; don't replace it.
 - **`ical.js`** is the iCalendar parser. One parser, not two.
-- **`vcard4`** (or `vcard4-ts`) is the vCard parser. Same rule.
+- ~~**`vcard4`** (or `vcard4-ts`) is the vCard parser. Same rule.~~ Baikal uses vcard v3, so this is no longer valid.
 - **FullCalendar** owns the calendar view. Don't render events with custom DOM.
 - **`pica`** does photo resizing. Canvas-native scaling is too soft for photos.
 

@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { DbInstance as DatabaseSync } from '../db/index.js';
 import type { Config } from '../config.js';
-import type { AddressBook, Calendar } from '@dave/shared';
-import { listAddressBooks, listCalendars } from '../lib/dav.js';
+import type { AddressBook, Calendar, Contact } from '@dave/shared';
+import { listAddressBooks, listCalendars, fetchContacts } from '../lib/dav.js';
 import { deleteSession } from '../services/session.js';
 import { requireAuth, COOKIE_NAME } from '../plugins/session.js';
 
@@ -49,4 +49,17 @@ export async function collectionsRoutes(
       await handleDavError(e, req, reply, app, db);
     }
   });
+
+  app.get<{ Params: { id: string } }>(
+    '/api/addressbooks/:id/contacts',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      try {
+        const contacts = await fetchContacts(req.sessionData!, req.params.id, config);
+        return reply.send(contacts as Contact[]);
+      } catch (e) {
+        await handleDavError(e, req, reply, app, db);
+      }
+    },
+  );
 }

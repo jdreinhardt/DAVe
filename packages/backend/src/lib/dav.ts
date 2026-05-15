@@ -1,13 +1,21 @@
 import { createRequire } from 'node:module';
 import type { DAVClient as DAVClientClass, DAVAccount } from 'tsdav';
+import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
-import type { Calendar, AddressBook } from '@dave/shared';
+import type { Calendar, AddressBook, Contact } from '@dave/shared';
+import { parseVCard } from './vcard.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
 const _req = createRequire(import.meta.url);
-const { DAVClient } = _req('tsdav') as { DAVClient: typeof DAVClientClass };
+const {
+  DAVClient,
+  fetchAddressBooks: _fetchAddressBooks,
+  fetchCalendars: _fetchCalendars,
+  fetchVCards: _fetchVCards,
+  getBasicAuthHeaders: _getBasicAuthHeaders,
+} = _req('tsdav') as typeof TsdavTypes;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -79,6 +87,7 @@ function calAccount(session: SessionData, config: Config): DAVAccount {
   return {
     accountType: 'caldav',
     serverUrl: config.BAIKAL_BASE_URL,
+    rootUrl: config.BAIKAL_BASE_URL,
     credentials: { username: session.username, password: session.password },
     principalUrl: session.principalUrl,
     homeUrl: session.calendarHomeUrl,
@@ -89,6 +98,7 @@ function cardAccount(session: SessionData, config: Config): DAVAccount {
   return {
     accountType: 'carddav',
     serverUrl: config.BAIKAL_BASE_URL,
+    rootUrl: config.BAIKAL_BASE_URL,
     credentials: { username: session.username, password: session.password },
     principalUrl: session.principalUrl,
     homeUrl: session.addressBookHomeUrl,
@@ -99,14 +109,8 @@ export async function listCalendars(
   session: SessionData,
   config: Config,
 ): Promise<Calendar[]> {
-  const client = new DAVClient({
-    serverUrl: config.BAIKAL_BASE_URL,
-    credentials: { username: session.username, password: session.password },
-    authMethod: 'Basic',
-    defaultAccountType: 'caldav',
-  });
-
-  const davCals = await client.fetchCalendars({ account: calAccount(session, config) });
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const davCals = await _fetchCalendars({ account: calAccount(session, config), headers: authHeaders });
 
   return davCals.map((cal) => ({
     id: collectionId(cal.url),
@@ -124,14 +128,8 @@ export async function listAddressBooks(
   session: SessionData,
   config: Config,
 ): Promise<AddressBook[]> {
-  const client = new DAVClient({
-    serverUrl: config.BAIKAL_BASE_URL,
-    credentials: { username: session.username, password: session.password },
-    authMethod: 'Basic',
-    defaultAccountType: 'carddav',
-  });
-
-  const davBooks = await client.fetchAddressBooks({ account: cardAccount(session, config) });
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const davBooks = await _fetchAddressBooks({ account: cardAccount(session, config), headers: authHeaders });
 
   return davBooks.map((book) => ({
     id: collectionId(book.url),
@@ -141,4 +139,39 @@ export async function listAddressBooks(
     ctag: str(book.ctag),
     syncToken: str(book.syncToken),
   }));
+}
+
+export async function fetchContacts(
+  session: SessionData,
+  addressBookId: string,
+  config: Config,
+): Promise<Contact[]> {
+  const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
+  const addressBookUrl = `${homeUrl}/${addressBookId}/`;
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+
+  const vcards = await _fetchVCards({
+    addressBook: { url: addressBookUrl },
+    headers: authHeaders,
+  });
+
+  return vcards
+    .filter((v) => v.data)
+    .map((v) => ({
+      id: contactId(v.url),
+      url: v.url,
+      etag: v.etag ?? '',
+      addressBookId,
+      data: parseVCard(v.data as string),
+    }));
+}
+
+function contactId(url: string): string {
+  try {
+    const seg = new URL(url).pathname.replace(/\/$/, '').split('/').filter(Boolean);
+    const last = seg[seg.length - 1] ?? url;
+    return last.replace(/\.vcf$/i, '');
+  } catch {
+    return url;
+  }
 }
