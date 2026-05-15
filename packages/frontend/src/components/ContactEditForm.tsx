@@ -65,6 +65,16 @@ export default function ContactEditForm({
   const [cropSrc, setCropSrc] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // True when the user has manually typed in the Display name field, meaning we
+  // should stop overwriting it when given/family name fields change.
+  // Also true on load if the stored fullName doesn't match the auto-derived value
+  // (e.g. includes a prefix, or was set to something entirely different).
+  const [fullNameCustomized, setFullNameCustomized] = useState(
+    () =>
+      !!initial.fullName &&
+      initial.fullName !== [initial.name.given, initial.name.family].filter(Boolean).join(' '),
+  );
+
   const set = <K extends keyof ContactJson>(key: K, value: ContactJson[K]) =>
     setData((d) => ({ ...d, [key]: value }));
 
@@ -227,7 +237,10 @@ export default function ContactEditForm({
                   type="text"
                   placeholder="Full name (auto-computed if blank)"
                   value={data.fullName}
-                  onChange={(e) => set('fullName', e.target.value)}
+                  onChange={(e) => {
+                    set('fullName', e.target.value);
+                    setFullNameCustomized(true);
+                  }}
                   className={inputCls}
                 />
               </div>
@@ -244,7 +257,16 @@ export default function ContactEditForm({
                     type="text"
                     placeholder={placeholder}
                     value={data.name[field]}
-                    onChange={(e) => set('name', { ...data.name, [field]: e.target.value })}
+                    onChange={(e) => {
+                      const newName = { ...data.name, [field]: e.target.value };
+                      setData((d) => {
+                        const next = { ...d, name: newName };
+                        if (!fullNameCustomized && (field === 'given' || field === 'family')) {
+                          next.fullName = [newName.given, newName.family].filter(Boolean).join(' ');
+                        }
+                        return next;
+                      });
+                    }}
                     className={inputCls}
                   />
                 </div>
