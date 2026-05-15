@@ -7,6 +7,9 @@ import type {
   VCardPhone,
 } from '@dave/shared';
 
+// re-export for callers that import from this module
+export type { ContactJson };
+
 // Standard properties we handle explicitly; everything else → customFields.
 const STANDARD_PROPS = new Set([
   'BEGIN', 'END', 'VERSION', 'FN', 'N', 'NICKNAME', 'PHOTO', 'BDAY',
@@ -260,4 +263,124 @@ export function parseVCard(raw: string): ContactJson {
     uid, version, name, fullName, nickname, organization, title,
     phones, emails, addresses, urls, birthday, anniversary, note, photo, customFields,
   };
+}
+
+// ── Serializer ────────────────────────────────────────────────────────────────
+
+// Fold a vCard line per RFC 6350: lines over 75 octets get wrapped with CRLF + space.
+function foldLine(line: string): string {
+  if (line.length <= 75) return line;
+  const parts: string[] = [line.slice(0, 75)];
+  let i = 75;
+  while (i < line.length) {
+    parts.push(' ' + line.slice(i, i + 74));
+    i += 74;
+  }
+  return parts.join('\r\n');
+}
+
+function escapeText(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;');
+}
+
+// In structured fields (N, ADR) only backslash, newline, and semicolons need escaping.
+function escapeStructured(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/;/g, '\\;');
+}
+
+// Serialize a date back to YYYYMMDD (or --MMDD for no-year).
+function serializeDate(iso: string | null): string | null {
+  if (!iso) return null;
+  // --MMDD or --MM-DD (no-year)
+  if (iso.startsWith('--')) return iso.replace(/-/g, (_, i) => (i === 0 ? '-' : ''));
+  // YYYY-MM-DD → YYYYMMDD
+  return iso.replace(/-/g, '');
+}
+
+export function serializeVCard(data: ContactJson): string {
+  const lines: string[] = [
+    'BEGIN:VCARD',
+    `VERSION:${data.version || '3.0'}`,
+  ];
+
+  // UID and FN are required by RFC
+  lines.push(foldLine(`UID:${data.uid}`));
+  lines.push(foldLine(`FN:${escapeText(data.fullName || [data.name.given, data.name.family].filter(Boolean).join(' ') || data.uid)}`));
+
+  // N: family;given;middle;prefix;suffix
+  const n = data.name;
+  lines.push(foldLine(`N:${escapeStructured(n.family)};${escapeStructured(n.given)};${escapeStructured(n.middle)};${escapeStructured(n.prefix)};${escapeStructured(n.suffix)}`));
+
+  if (data.nickname) lines.push(foldLine(`NICKNAME:${escapeText(data.nickname)}`));
+  if (data.organization) lines.push(foldLine(`ORG:${escapeText(data.organization)}`));
+  if (data.title) lines.push(foldLine(`TITLE:${escapeText(data.title)}`));
+
+  for (const phone of data.phones) {
+    const types = phone.preferred ? [...phone.types, 'PREF'] : phone.types;
+    const typePart = types.length ? `;TYPE=${types.join(',')}` : '';
+    lines.push(foldLine(`TEL${typePart}:${phone.value}`));
+  }
+
+  for (const email of data.emails) {
+    const types = email.preferred ? [...email.types, 'PREF'] : email.types;
+    const typePart = types.length ? `;TYPE=${types.join(',')}` : '';
+    lines.push(foldLine(`EMAIL${typePart}:${email.value}`));
+  }
+
+  for (const addr of data.addresses) {
+    const types = addr.preferred ? [...addr.types, 'PREF'] : addr.types;
+    const typePart = types.length ? `;TYPE=${types.join(',')}` : '';
+    // ADR: POBox;ExtAddr;Street;City;Region;PostalCode;Country
+    const val = [
+      '',
+      '',
+      escapeStructured(addr.street),
+      escapeStructured(addr.city),
+      escapeStructured(addr.region),
+      escapeStructured(addr.postalCode),
+      escapeStructured(addr.country),
+    ].join(';');
+    lines.push(foldLine(`ADR${typePart}:${val}`));
+  }
+
+  for (const url of data.urls) {
+    lines.push(foldLine(`URL:${url}`));
+  }
+
+  const bday = serializeDate(data.birthday);
+  if (bday) lines.push(foldLine(`BDAY:${bday}`));
+
+  const ann = serializeDate(data.anniversary);
+  if (ann) lines.push(foldLine(`ANNIVERSARY:${ann}`));
+
+  if (data.note) lines.push(foldLine(`NOTE:${escapeText(data.note)}`));
+
+  if (data.photo) {
+    if (data.photo.startsWith('data:')) {
+      const m = data.photo.match(/^data:(image\/(\w+));base64,(.+)$/s);
+      if (m) {
+        const subtype = m[2]!.toUpperCase();
+        const b64 = m[3]!.replace(/\s/g, '');
+        // vCard 3.0 encoding
+        if ((data.version ?? '3.0') === '3.0') {
+          lines.push(foldLine(`PHOTO;ENCODING=b;TYPE=${subtype}:${b64}`));
+        } else {
+          lines.push(foldLine(`PHOTO:data:${m[1]!};base64,${b64}`));
+        }
+      }
+    } else {
+      lines.push(foldLine(`PHOTO:${data.photo}`));
+    }
+  }
+
+  for (const cf of data.customFields) {
+    const params = Object.entries(cf.parameters)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(';');
+    const paramPart = params ? `;${params}` : '';
+    lines.push(foldLine(`${cf.property}${paramPart}:${cf.value}`));
+  }
+
+  lines.push('END:VCARD');
+  return lines.join('\r\n') + '\r\n';
 }

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -6,6 +7,7 @@ import { cn } from '../lib/utils';
 import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
+import { useContactDrag } from '../contexts/ContactDrag';
 import type { AddressBook, Calendar as CalendarType } from '@dave/shared';
 import type { MeResponse } from '@dave/shared';
 
@@ -148,6 +150,10 @@ function CollectionSection({
     showAllCalendars, hideAllCalendars,
   } = useCollectionVisibility();
 
+  const { dragging } = useContactDrag();
+  const isDraggingContact = kind === 'addressbook' && dragging !== null;
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
   const hidden = kind === 'addressbook' ? hiddenAddressBooks : hiddenCalendars;
   const toggle = kind === 'addressbook' ? toggleAddressBook : toggleCalendar;
   const showAll = kind === 'addressbook' ? showAllAddressBooks : showAllCalendars;
@@ -194,33 +200,49 @@ function CollectionSection({
           ))}
         </div>
       )}
-      {items?.map((item) => (
-        <label
-          key={item.id}
-          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer hover:bg-muted group"
-        >
-          <input
-            type="checkbox"
-            className="sr-only"
-            checked={!hidden.has(item.id)}
-            onChange={() => toggle(item.id)}
-          />
-          <span
-            className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
-            style={{
-              backgroundColor: hidden.has(item.id) ? 'transparent' : (item.color || defaultColor),
-              borderColor: item.color || defaultColor,
-            }}
-          >
-            {!hidden.has(item.id) && (
-              <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+      {items?.map((item) => {
+        const isSameAb = isDraggingContact && dragging!.contact.addressBookId === item.id;
+        const isOver = dropTargetId === item.id;
+
+        return (
+          <label
+            key={item.id}
+            onDragOver={isDraggingContact && !isSameAb ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropTargetId(item.id); } : undefined}
+            onDragLeave={isDraggingContact ? () => setDropTargetId(null) : undefined}
+            onDrop={isDraggingContact && !isSameAb ? (e) => { e.preventDefault(); setDropTargetId(null); dragging!.onMove(item.id); } : undefined}
+            className={cn(
+              'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer group transition-colors',
+              isOver
+                ? 'bg-primary/15 ring-1 ring-primary/40'
+                : isDraggingContact && !isSameAb
+                  ? 'hover:bg-primary/10'
+                  : 'hover:bg-muted',
+              isSameAb && isDraggingContact && 'opacity-40',
             )}
-          </span>
-          <span className={cn('truncate', hidden.has(item.id) && 'text-muted-foreground line-through')}>
-            {item.displayName}
-          </span>
-        </label>
-      ))}
+          >
+            <input
+              type="checkbox"
+              className="sr-only"
+              checked={!hidden.has(item.id)}
+              onChange={() => toggle(item.id)}
+            />
+            <span
+              className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+              style={{
+                backgroundColor: hidden.has(item.id) ? 'transparent' : (item.color || defaultColor),
+                borderColor: item.color || defaultColor,
+              }}
+            >
+              {!hidden.has(item.id) && (
+                <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+              )}
+            </span>
+            <span className={cn('truncate', hidden.has(item.id) && 'text-muted-foreground line-through')}>
+              {item.displayName}
+            </span>
+          </label>
+        );
+      })}
     </div>
   );
 }

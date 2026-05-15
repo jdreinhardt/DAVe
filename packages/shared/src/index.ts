@@ -148,6 +148,35 @@ export interface CalendarEvent {
   data: EventJson;
 }
 
+// ── Contact write request/response shapes ─────────────────────────────────────
+
+export interface CreateContactRequest {
+  addressBookId: string;
+  data: ContactJson;
+}
+
+export interface UpdateContactRequest {
+  data: ContactJson;
+  etag: string;
+}
+
+export interface ContactWriteResponse {
+  id: string;
+  url: string;
+  etag: string;
+  addressBookId: string;
+  data: ContactJson;
+}
+
+export interface ImportContactsRequest {
+  vcf: string; // raw .vcf file content
+}
+
+export interface ImportContactsResponse {
+  imported: number;
+  failed: number;
+}
+
 // ── API error shape ───────────────────────────────────────────────────────────
 
 export interface ApiError {

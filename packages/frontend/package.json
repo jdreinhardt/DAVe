@@ -15,8 +15,10 @@
     "@tanstack/react-query": "^5.0.0",
     "clsx": "^2.0.0",
     "lucide-react": "^0.400.0",
+    "pica": "^9.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-easy-crop": "^5.5.7",
     "react-router-dom": "^7.0.0",
     "tailwind-merge": "^2.0.0"
   },

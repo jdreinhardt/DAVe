@@ -1,5 +1,5 @@
 import { Mail, Phone, MapPin, Globe, Cake, StickyNote, Tag, User } from 'lucide-react';
-import type { Contact, VCardAddress, VCardEmail, VCardPhone } from '@dave/shared';
+import type { Contact, VCardAddress } from '@dave/shared';
 import { cn } from '../lib/utils';
 
 interface ContactDetailProps {
@@ -28,7 +28,7 @@ export default function ContactDetail({ contact }: ContactDetailProps) {
             <p className="text-sm text-muted-foreground">{data.organization}</p>
           )}
           {data.nickname && (
-            <p className="text-xs text-muted-foreground italic mt-0.5">"{data.nickname}"</p>
+            <p className="text-xs text-muted-foreground italic mt-0.5">&ldquo;{data.nickname}&rdquo;</p>
           )}
         </div>
       </div>

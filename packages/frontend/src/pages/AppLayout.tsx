@@ -4,6 +4,7 @@ import { getMe } from '../api/auth';
 import { ApiError } from '../api/client';
 import Sidebar from '../components/Sidebar';
 import { CollectionVisibilityProvider } from '../contexts/CollectionVisibility';
+import { ContactDragProvider } from '../contexts/ContactDrag';
 
 export default function AppLayout() {
   const meQuery = useQuery({
@@ -31,12 +32,14 @@ export default function AppLayout() {
 
   return (
     <CollectionVisibilityProvider>
-      <div className="flex h-screen overflow-hidden bg-background">
-        <Sidebar me={meQuery.data!} />
-        <main className="flex-1 overflow-auto">
-          <Outlet />
-        </main>
-      </div>
+      <ContactDragProvider>
+        <div className="flex h-screen overflow-hidden bg-background">
+          <Sidebar me={meQuery.data!} />
+          <main className="flex-1 overflow-auto">
+            <Outlet />
+          </main>
+        </div>
+      </ContactDragProvider>
     </CollectionVisibilityProvider>
   );
 }

@@ -1,10 +1,10 @@
 import { createRequire } from 'node:module';
-import type { DAVClient as DAVClientClass, DAVAccount } from 'tsdav';
+import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
-import type { Calendar, AddressBook, Contact } from '@dave/shared';
-import { parseVCard } from './vcard.js';
+import type { Calendar, AddressBook, Contact, ContactJson } from '@dave/shared';
+import { parseVCard, serializeVCard } from './vcard.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
@@ -144,7 +144,7 @@ export async function listAddressBooks(
 export async function fetchContacts(
   session: SessionData,
   addressBookId: string,
-  config: Config,
+  _config: Config,
 ): Promise<Contact[]> {
   const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
   const addressBookUrl = `${homeUrl}/${addressBookId}/`;
@@ -174,4 +174,128 @@ function contactId(url: string): string {
   } catch {
     return url;
   }
+}
+
+// ── Contact write operations ───────────────────────────────────────────────────
+
+function addressBookUrl(session: SessionData, addressBookId: string): string {
+  return `${session.addressBookHomeUrl.replace(/\/$/, '')}/${addressBookId}/`;
+}
+
+function contactUrl(session: SessionData, addressBookId: string, id: string): string {
+  return `${addressBookUrl(session, addressBookId)}${id}.vcf`;
+}
+
+function basicAuthHeader(session: SessionData): Record<string, string> {
+  return _getBasicAuthHeaders({ username: session.username, password: session.password });
+}
+
+export interface ContactWriteResult {
+  id: string;
+  url: string;
+  etag: string;
+  addressBookId: string;
+  data: ContactJson;
+}
+
+export async function createContact(
+  session: SessionData,
+  addressBookId: string,
+  data: ContactJson,
+  _config: Config,
+): Promise<ContactWriteResult> {
+  const uid = data.uid || crypto.randomUUID();
+  const contactData: ContactJson = { ...data, uid };
+  const vcardStr = serializeVCard(contactData);
+  const url = contactUrl(session, addressBookId, uid);
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/vcard; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: vcardStr,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const etag = res.headers.get('ETag') ?? `"${uid}"`;
+  return { id: uid, url, etag, addressBookId, data: contactData };
+}
+
+export async function updateContact(
+  session: SessionData,
+  addressBookId: string,
+  id: string,
+  data: ContactJson,
+  etag: string,
+  _config: Config,
+): Promise<ContactWriteResult> {
+  const vcardStr = serializeVCard(data);
+  const url = contactUrl(session, addressBookId, id);
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/vcard; charset=utf-8',
+      'If-Match': etag,
+    },
+    body: vcardStr,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const newEtag = res.headers.get('ETag') ?? etag;
+  return { id, url, etag: newEtag, addressBookId, data };
+}
+
+export async function deleteContact(
+  session: SessionData,
+  addressBookId: string,
+  id: string,
+  etag: string,
+  _config: Config,
+): Promise<void> {
+  const url = contactUrl(session, addressBookId, id);
+
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      ...basicAuthHeader(session),
+      'If-Match': etag,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
+  }
+}
+
+export async function fetchRawContacts(
+  session: SessionData,
+  addressBookId: string,
+  _config: Config,
+): Promise<{ url: string; etag: string; raw: string }[]> {
+  const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
+  const abUrl = `${homeUrl}/${addressBookId}/`;
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+
+  const vcards = await _fetchVCards({
+    addressBook: { url: abUrl },
+    headers: authHeaders,
+  });
+
+  return vcards
+    .filter((v) => v.data)
+    .map((v) => ({ url: v.url, etag: v.etag ?? '', raw: v.data as string }));
 }

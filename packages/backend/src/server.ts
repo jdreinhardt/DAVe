@@ -12,6 +12,7 @@ import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
 import { meRoutes } from './routes/me.js';
 import { collectionsRoutes } from './routes/collections.js';
+import { contactsRoutes } from './routes/contacts.js';
 
 const config = loadConfig();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +40,7 @@ await app.register(healthRoutes);
 await app.register(authRoutes, { config, db });
 await app.register(meRoutes);
 await app.register(collectionsRoutes, { config, db });
+await app.register(contactsRoutes, { config, db });
 
 // ── Static frontend (production only) ────────────────────────────────────────
 
