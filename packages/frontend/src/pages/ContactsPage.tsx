@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine } from 'lucide-react';
+import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine, GitMerge } from 'lucide-react';
 import type { AddressBook, Contact, ContactJson } from '@dave/shared';
 import { getAddressBooks, getContacts } from '../api/collections';
 import {
@@ -21,6 +21,7 @@ import DeleteContactDialog from '../components/DeleteContactDialog';
 import BulkDeleteDialog from '../components/BulkDeleteDialog';
 import BulkEditModal, { applyBulkEdit } from '../components/BulkEditModal';
 import type { BulkEditConfig } from '../components/BulkEditModal';
+import MergeContactsModal, { mergeContactData } from '../components/MergeContactsModal';
 
 // ── Sort / group helpers ──────────────────────────────────────────────────────
 
@@ -82,6 +83,7 @@ export default function ContactsPage() {
   const [editAbId, setEditAbId] = useState<string>('');
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [showMerge, setShowMerge] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
   const { hiddenAddressBooks } = useCollectionVisibility();
 
@@ -263,6 +265,39 @@ export default function ContactsPage() {
       showToast(`Moved ${ok} contact${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
     },
     onError: (e) => showToast(errorMessage(e), 'err'),
+  });
+
+  const mergeMutation = useMutation({
+    mutationFn: async ({
+      primary,
+      secondary,
+      mergedData,
+    }: {
+      primary: Contact;
+      secondary: Contact;
+      mergedData: ReturnType<typeof mergeContactData>;
+    }) => {
+      const updated = await updateContact(primary.addressBookId, primary.id, mergedData, primary.etag);
+      await deleteContact(secondary.addressBookId, secondary.id, secondary.etag);
+      return { updated, secondary };
+    },
+    onSuccess: ({ updated, secondary }) => {
+      const updatedContact = writeResponseToContact(updated);
+      queryClient.setQueryData<Contact[]>(
+        ['contacts', updatedContact.addressBookId],
+        (old) => (old ?? []).map((c) => (c.id === updatedContact.id ? updatedContact : c)),
+      );
+      queryClient.setQueryData<Contact[]>(
+        ['contacts', secondary.addressBookId],
+        (old) => (old ?? []).filter((c) => c.id !== secondary.id),
+      );
+      setShowMerge(false);
+      clearSelection();
+      setSelectedId(updatedContact.id);
+      setPanel({ mode: 'detail', contact: updatedContact });
+      showToast('Contacts merged');
+    },
+    onError: (e) => { setShowMerge(false); showToast(errorMessage(e, true), 'err'); },
   });
 
   const importMutation = useMutation({
@@ -513,6 +548,8 @@ export default function ContactsPage() {
             moving={bulkMoveMutation.isPending}
             deleting={bulkDeleteMutation.isPending}
             editing={bulkEditMutation.isPending}
+            merging={mergeMutation.isPending}
+            onMerge={() => setShowMerge(true)}
             onExport={() => {
               const byAb = new Map<string, string[]>();
               for (const c of allContacts.filter((c) => selectedIds.has(c.id))) {
@@ -655,6 +692,22 @@ export default function ContactsPage() {
           applying={bulkEditMutation.isPending}
         />
       )}
+
+      {/* ── Merge modal ── */}
+      {showMerge && (() => {
+        const pair = allContacts.filter((c) => selectedIds.has(c.id));
+        if (pair.length !== 2) return null;
+        return (
+          <MergeContactsModal
+            contacts={pair as [Contact, Contact]}
+            merging={mergeMutation.isPending}
+            onConfirm={(mergedData, primary, secondary) =>
+              mergeMutation.mutate({ primary, secondary, mergedData })
+            }
+            onCancel={() => setShowMerge(false)}
+          />
+        );
+      })()}
 
       {/* ── Toast ── */}
       {toast && (
@@ -842,10 +895,12 @@ function MultiContactPanel({
   moving,
   deleting,
   editing,
+  merging,
   onExport,
   onMove,
   onDelete,
   onEdit,
+  onMerge,
   onClickContact,
 }: {
   contacts: Contact[];
@@ -853,14 +908,16 @@ function MultiContactPanel({
   moving: boolean;
   deleting: boolean;
   editing: boolean;
+  merging: boolean;
   onExport: () => void;
   onMove: (abId: string) => void;
   onDelete: () => void;
   onEdit: () => void;
+  onMerge: () => void;
   onClickContact: (c: Contact) => void;
 }) {
   const [moveOpen, setMoveOpen] = useState(false);
-  const busy = moving || deleting || editing;
+  const busy = moving || deleting || editing || merging;
   const abName = (id: string) =>
     addressBooks.find((ab) => ab.id === id)?.displayName ?? id;
 
@@ -885,6 +942,16 @@ function MultiContactPanel({
           >
             <PencilLine className="h-3.5 w-3.5" /> Edit
           </button>
+
+          {contacts.length === 2 && (
+            <button
+              onClick={onMerge}
+              disabled={busy}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+            >
+              <GitMerge className="h-3.5 w-3.5" /> Merge
+            </button>
+          )}
 
           {addressBooks.length > 1 && (
             <div className="relative">
