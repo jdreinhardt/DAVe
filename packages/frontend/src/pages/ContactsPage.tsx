@@ -15,7 +15,7 @@ import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useContactDrag } from '../contexts/ContactDrag';
 import { useSettings } from '../contexts/Settings';
-import type { SortBy } from '../contexts/Settings';
+import type { SortBy, ContactSubtitleField } from '../contexts/Settings';
 import { cn } from '../lib/utils';
 import ContactDetail, { Avatar } from '../components/ContactDetail';
 import ContactEditForm, { emptyContactJson } from '../components/ContactEditForm';
@@ -43,12 +43,15 @@ function groupLetter(c: Contact, sortBy: SortBy): string {
   return /[a-z]/i.test(ch) ? ch.toUpperCase() : '#';
 }
 
-function contactSubtitle(c: Contact): string {
-  const email = c.data.emails[0]?.value;
-  if (email) return email;
-  const phone = c.data.phones[0]?.value;
-  if (phone) return phone;
-  return c.data.organization;
+function contactSubtitle(c: Contact, field: ContactSubtitleField): string {
+  switch (field) {
+    case 'nickname': return c.data.nickname;
+    case 'email': return c.data.emails[0]?.value ?? '';
+    case 'phone': return c.data.phones[0]?.value ?? '';
+    case 'organization': return c.data.organization;
+    case 'title': return c.data.title;
+    default: return '';
+  }
 }
 
 function matchesSearch(c: Contact, term: string): boolean {
@@ -803,11 +806,12 @@ function ContactListItem({
   onDragStart?: () => void;
   onDragEnd?: () => void;
 }) {
+  const { contactSubtitleField } = useSettings();
   const name =
     contact.data.fullName ||
     [contact.data.name.given, contact.data.name.family].filter(Boolean).join(' ') ||
     '(No name)';
-  const subtitle = contactSubtitle(contact);
+  const subtitle = contactSubtitle(contact, contactSubtitleField);
 
   return (
     <div
@@ -935,6 +939,7 @@ function MultiContactPanel({
   const busy = moving || deleting || editing || merging;
   const abName = (id: string) =>
     addressBooks.find((ab) => ab.id === id)?.displayName ?? id;
+  const { contactSubtitleField } = useSettings();
 
   return (
     <>
@@ -1017,11 +1022,7 @@ function MultiContactPanel({
               c.data.fullName ||
               [c.data.name.given, c.data.name.family].filter(Boolean).join(' ') ||
               '(No name)';
-            const subtitle =
-              c.data.emails[0]?.value ||
-              c.data.phones[0]?.value ||
-              c.data.organization ||
-              '';
+            const subtitle = contactSubtitle(c, contactSubtitleField);
 
             return (
               <button

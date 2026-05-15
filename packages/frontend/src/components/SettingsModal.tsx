@@ -2,23 +2,29 @@ import { useState } from 'react';
 import { X, ArrowUpAZ, ArrowDownAZ } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useSettings } from '../contexts/Settings';
-import type { SortBy, SortDir } from '../contexts/Settings';
+import type { SortBy, SortDir, ContactSubtitleField } from '../contexts/Settings';
 
 interface SettingsModalProps {
   onClose: () => void;
 }
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const { contactSort, updateContactSort } = useSettings();
+  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField } =
+    useSettings();
   const [sortBy, setSortBy] = useState<SortBy>(contactSort.sortBy);
   const [sortDir, setSortDir] = useState<SortDir>(contactSort.sortDir);
+  const [subtitleField, setSubtitleField] = useState<ContactSubtitleField>(contactSubtitleField);
 
   const handleSave = () => {
     updateContactSort({ sortBy, sortDir });
+    updateContactSubtitleField(subtitleField);
     onClose();
   };
 
-  const isDirty = sortBy !== contactSort.sortBy || sortDir !== contactSort.sortDir;
+  const isDirty =
+    sortBy !== contactSort.sortBy ||
+    sortDir !== contactSort.sortDir ||
+    subtitleField !== contactSubtitleField;
 
   return (
     <div
@@ -87,6 +93,25 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
               >
                 <ArrowUpAZ className="h-4 w-4" />
               </button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor="contact-subtitle-field" className="text-sm font-medium shrink-0">
+                Contact subtitle
+              </label>
+              <select
+                id="contact-subtitle-field"
+                value={subtitleField}
+                onChange={(e) => setSubtitleField(e.target.value as ContactSubtitleField)}
+                className="flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="">Nothing</option>
+                <option value="nickname">Nickname</option>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
+                <option value="organization">Organization</option>
+                <option value="title">Title</option>
+              </select>
             </div>
           </section>
         </div>
