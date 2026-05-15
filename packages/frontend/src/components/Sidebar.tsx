@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BookUser, Calendar, Check, LogOut, RefreshCw } from 'lucide-react';
+import { BookUser, Calendar, Check, LogOut, RefreshCw, Settings } from 'lucide-react';
+import SettingsModal from './SettingsModal';
 import { cn } from '../lib/utils';
 import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
@@ -17,6 +18,7 @@ interface SidebarProps {
 
 export default function Sidebar({ me }: SidebarProps) {
   const queryClient = useQueryClient();
+  const [showSettings, setShowSettings] = useState(false);
 
   const abQuery = useQuery({
     queryKey: ['addressbooks'],
@@ -85,20 +87,31 @@ export default function Sidebar({ me }: SidebarProps) {
         />
       )}
 
-      {/* Footer: logged-in user + logout */}
+      {/* Footer: logged-in user + settings + logout */}
       <div className="mt-auto border-t border-border px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-muted-foreground truncate">{me.displayName || me.username}</span>
-          <button
-            onClick={() => logoutMutation.mutate()}
-            disabled={logoutMutation.isPending}
-            title="Sign out"
-            className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setShowSettings(true)}
+              title="Settings"
+              className="text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => logoutMutation.mutate()}
+              disabled={logoutMutation.isPending}
+              title="Sign out"
+              className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       </div>
+
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </aside>
   );
 }

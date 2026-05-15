@@ -14,6 +14,8 @@ import {
 import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useContactDrag } from '../contexts/ContactDrag';
+import { useSettings } from '../contexts/Settings';
+import type { SortBy } from '../contexts/Settings';
 import { cn } from '../lib/utils';
 import ContactDetail, { Avatar } from '../components/ContactDetail';
 import ContactEditForm, { emptyContactJson } from '../components/ContactEditForm';
@@ -25,14 +27,18 @@ import MergeContactsModal, { mergeContactData } from '../components/MergeContact
 
 // ── Sort / group helpers ──────────────────────────────────────────────────────
 
-function sortKey(c: Contact): string {
+function sortKey(c: Contact, sortBy: SortBy): string {
   const { family, given } = c.data.name;
-  if (family) return `${family}\x00${given}`.toLowerCase();
+  if (sortBy === 'last') {
+    if (family) return `${family}\x00${given}`.toLowerCase();
+  } else {
+    if (given) return `${given}\x00${family}`.toLowerCase();
+  }
   return c.data.fullName.toLowerCase();
 }
 
-function groupLetter(c: Contact): string {
-  const key = sortKey(c);
+function groupLetter(c: Contact, sortBy: SortBy): string {
+  const key = sortKey(c, sortBy);
   const ch = key[0] ?? '#';
   return /[a-z]/i.test(ch) ? ch.toUpperCase() : '#';
 }
@@ -72,6 +78,7 @@ type Panel =
 export default function ContactsPage() {
   const queryClient = useQueryClient();
   const { startDrag, endDrag } = useContactDrag();
+  const { contactSort } = useSettings();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -124,8 +131,13 @@ export default function ContactsPage() {
 
   const allContacts: Contact[] = useMemo(() => {
     const flat = contactQueries.flatMap((q) => q.data ?? []);
-    return flat.sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
-  }, [contactQueries]);
+    const { sortBy, sortDir } = contactSort;
+    flat.sort((a, b) => {
+      const cmp = sortKey(a, sortBy).localeCompare(sortKey(b, sortBy));
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return flat;
+  }, [contactQueries, contactSort]);
 
   const filtered = useMemo(() => {
     let result = allContacts.filter((c) => !hiddenAddressBooks.has(c.addressBookId));
@@ -136,16 +148,19 @@ export default function ContactsPage() {
   const groups = useMemo(() => {
     const map = new Map<string, Contact[]>();
     for (const c of filtered) {
-      const letter = groupLetter(c);
+      const letter = groupLetter(c, contactSort.sortBy);
       if (!map.has(letter)) map.set(letter, []);
       map.get(letter)!.push(c);
     }
-    return [...map.entries()].sort(([a], [b]) => {
+    const entries = [...map.entries()];
+    entries.sort(([a], [b]) => {
       if (a === '#') return 1;
       if (b === '#') return -1;
-      return a.localeCompare(b);
+      const cmp = a.localeCompare(b);
+      return contactSort.sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [filtered]);
+    return entries;
+  }, [filtered, contactSort]);
 
   const selectedContact = allContacts.find((c) => c.id === selectedId) ?? null;
 

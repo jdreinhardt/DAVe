@@ -5,6 +5,7 @@ import { ApiError } from '../api/client';
 import Sidebar from '../components/Sidebar';
 import { CollectionVisibilityProvider } from '../contexts/CollectionVisibility';
 import { ContactDragProvider } from '../contexts/ContactDrag';
+import { SettingsProvider } from '../contexts/Settings';
 
 export default function AppLayout() {
   const meQuery = useQuery({
@@ -31,15 +32,17 @@ export default function AppLayout() {
   }
 
   return (
-    <CollectionVisibilityProvider>
-      <ContactDragProvider>
-        <div className="flex h-screen overflow-hidden bg-background">
-          <Sidebar me={meQuery.data!} />
-          <main className="flex-1 overflow-auto">
-            <Outlet />
-          </main>
-        </div>
-      </ContactDragProvider>
-    </CollectionVisibilityProvider>
+    <SettingsProvider>
+      <CollectionVisibilityProvider>
+        <ContactDragProvider>
+          <div className="flex h-screen overflow-hidden bg-background">
+            <Sidebar me={meQuery.data!} />
+            <main className="flex-1 overflow-auto">
+              <Outlet />
+            </main>
+          </div>
+        </ContactDragProvider>
+      </CollectionVisibilityProvider>
+    </SettingsProvider>
   );
 }
