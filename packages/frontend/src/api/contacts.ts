@@ -45,8 +45,11 @@ export const importContacts = (
     { method: 'POST', body: JSON.stringify({ vcf }) },
   );
 
-export const exportContactsUrl = (addressBookId: string): string =>
-  `/api/addressbooks/${encodeURIComponent(addressBookId)}/export`;
+export const exportContactsUrl = (addressBookId: string, ids?: string[]): string => {
+  const base = `/api/addressbooks/${encodeURIComponent(addressBookId)}/export`;
+  if (ids && ids.length > 0) return `${base}?ids=${ids.map(encodeURIComponent).join(',')}`;
+  return base;
+};
 
 // Helper to convert a ContactWriteResponse to a Contact shape for cache updates.
 export function writeResponseToContact(r: ContactWriteResponse): Contact {

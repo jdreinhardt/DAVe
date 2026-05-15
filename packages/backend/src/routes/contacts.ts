@@ -168,25 +168,34 @@ export async function contactsRoutes(
 
   // ── Export ──────────────────────────────────────────────────────────────────
 
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { ids?: string } }>(
     '/api/addressbooks/:id/export',
     { preHandler: requireAuth },
     async (req, reply) => {
       try {
-        // Fetch raw vCards when possible; fall back to re-serializing parsed data
+        // Optional filter: comma-separated contact IDs (last path segment without .vcf)
+        const filterIds = req.query.ids
+          ? new Set(req.query.ids.split(',').filter(Boolean))
+          : null;
+
+        const urlToId = (url: string): string => {
+          const seg = url.replace(/\/$/, '').split('/').filter(Boolean);
+          return (seg[seg.length - 1] ?? url).replace(/\.vcf$/i, '');
+        };
+
         let vcfContent: string;
         try {
           const raws = await fetchRawContacts(req.sessionData!, req.params.id, config);
-          vcfContent = raws.map((r) => r.raw.trim()).join('\r\n') + '\r\n';
+          const filtered = filterIds ? raws.filter((r) => filterIds.has(urlToId(r.url))) : raws;
+          vcfContent = filtered.map((r) => r.raw.trim()).join('\r\n') + '\r\n';
         } catch {
-          // Fallback: fetch parsed contacts and re-serialize
           const contacts = await fetchContacts(req.sessionData!, req.params.id, config);
-          vcfContent = contacts.map((c) => serializeVCard(c.data)).join('');
+          const filtered = filterIds ? contacts.filter((c) => filterIds.has(c.id)) : contacts;
+          vcfContent = filtered.map((c) => serializeVCard(c.data)).join('');
         }
 
-        const filename = `contacts-${req.params.id}.vcf`;
         reply.header('Content-Type', 'text/vcard; charset=utf-8');
-        reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+        reply.header('Content-Disposition', 'attachment');
         return reply.send(vcfContent);
       } catch (e) {
         await handleDavError(e, req, reply, app, db);

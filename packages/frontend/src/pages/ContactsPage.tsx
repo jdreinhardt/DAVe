@@ -361,10 +361,10 @@ export default function ContactsPage() {
     reader.readAsText(file);
   };
 
-  const handleExport = (ab: AddressBook) => {
+  const handleExport = (ab: AddressBook, ids?: string[], filename?: string) => {
     const a = document.createElement('a');
-    a.href = exportContactsUrl(ab.id);
-    a.download = `${ab.displayName || ab.id}.vcf`;
+    a.href = exportContactsUrl(ab.id, ids);
+    a.download = filename ?? `${ab.displayName || ab.id}.vcf`;
     a.click();
   };
 
@@ -514,10 +514,17 @@ export default function ContactsPage() {
             deleting={bulkDeleteMutation.isPending}
             editing={bulkEditMutation.isPending}
             onExport={() => {
-              const ids = new Set(
-                allContacts.filter((c) => selectedIds.has(c.id)).map((c) => c.addressBookId),
-              );
-              addressBooks.filter((ab) => ids.has(ab.id)).forEach(handleExport);
+              const byAb = new Map<string, string[]>();
+              for (const c of allContacts.filter((c) => selectedIds.has(c.id))) {
+                if (!byAb.has(c.addressBookId)) byAb.set(c.addressBookId, []);
+                byAb.get(c.addressBookId)!.push(c.id);
+              }
+              const date = new Date().toISOString().slice(0, 10);
+              const filename = `dave-export-${date}.vcf`;
+              for (const [abId, ids] of byAb) {
+                const ab = addressBooks.find((a) => a.id === abId);
+                if (ab) handleExport(ab, ids, filename);
+              }
             }}
             onMove={handleBulkMove}
             onDelete={() => setShowBulkDelete(true)}
@@ -576,18 +583,23 @@ export default function ContactsPage() {
             {panel.mode === 'detail' && selectedContact && (
               <>
                 <div className="flex items-center justify-end gap-1 px-4 py-2 border-b border-border shrink-0">
-                  {addressBooks.length > 1 && (
-                    <button
-                      onClick={() => {
-                        const ab = addressBooks.find((a) => a.id === selectedContact.addressBookId);
-                        if (ab) handleExport(ab);
-                      }}
-                      title="Export this address book"
-                      className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
-                    >
-                      <Download className="h-3.5 w-3.5" /> Export
-                    </button>
-                  )}
+                  <button
+                    onClick={() => {
+                      const ab = addressBooks.find((a) => a.id === selectedContact.addressBookId);
+                      if (ab) {
+                        const name =
+                          selectedContact.data.fullName ||
+                          [selectedContact.data.name.given, selectedContact.data.name.family]
+                            .filter(Boolean)
+                            .join(' ') ||
+                          selectedContact.id;
+                        handleExport(ab, [selectedContact.id], `${name}.vcf`);
+                      }
+                    }}
+                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                  >
+                    <Download className="h-3.5 w-3.5" /> Export
+                  </button>
                   <button
                     onClick={() => handleEdit(selectedContact)}
                     className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
