@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X } from 'lucide-react';
+import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine } from 'lucide-react';
 import type { AddressBook, Contact, ContactJson } from '@dave/shared';
 import { getAddressBooks, getContacts } from '../api/collections';
 import {
@@ -18,6 +18,9 @@ import { cn } from '../lib/utils';
 import ContactDetail, { Avatar } from '../components/ContactDetail';
 import ContactEditForm, { emptyContactJson } from '../components/ContactEditForm';
 import DeleteContactDialog from '../components/DeleteContactDialog';
+import BulkDeleteDialog from '../components/BulkDeleteDialog';
+import BulkEditModal, { applyBulkEdit } from '../components/BulkEditModal';
+import type { BulkEditConfig } from '../components/BulkEditModal';
 
 // ── Sort / group helpers ──────────────────────────────────────────────────────
 
@@ -77,6 +80,8 @@ export default function ContactsPage() {
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
   const [createAbId, setCreateAbId] = useState<string>('');
   const [editAbId, setEditAbId] = useState<string>('');
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
   const { hiddenAddressBooks } = useCollectionVisibility();
 
@@ -270,6 +275,57 @@ export default function ContactsPage() {
     onError: (e) => showToast(errorMessage(e), 'err'),
   });
 
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (contacts: Contact[]) =>
+      Promise.allSettled(contacts.map((c) => deleteContact(c.addressBookId, c.id, c.etag))),
+    onSuccess: (results, contacts) => {
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled') {
+          const c = contacts[i]!;
+          queryClient.setQueryData<Contact[]>(
+            ['contacts', c.addressBookId],
+            (old) => (old ?? []).filter((x) => x.id !== c.id),
+          );
+        }
+      });
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      setShowBulkDelete(false);
+      clearSelection();
+      setSelectedId(null);
+      setPanel({ mode: 'empty' });
+      showToast(`Deleted ${ok} contact${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+    },
+    onError: (e) => { setShowBulkDelete(false); showToast(errorMessage(e), 'err'); },
+  });
+
+  const bulkEditMutation = useMutation({
+    mutationFn: ({ contacts, config }: { contacts: Contact[]; config: BulkEditConfig }) =>
+      Promise.allSettled(
+        contacts.map((contact) => {
+          const newData = applyBulkEdit(contact.data, config);
+          return updateContact(contact.addressBookId, contact.id, newData, contact.etag)
+            .then((result) => ({ result, contact }));
+        }),
+      ),
+    onSuccess: (results) => {
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          const updated = writeResponseToContact(r.value.result);
+          queryClient.setQueryData<Contact[]>(
+            ['contacts', updated.addressBookId],
+            (old) => (old ?? []).map((c) => (c.id === updated.id ? updated : c)),
+          );
+        }
+      }
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      setShowBulkEdit(false);
+      showToast(`Updated ${ok} contact${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+    },
+    onError: (e) => { setShowBulkEdit(false); showToast(errorMessage(e), 'err'); },
+  });
+
   // ── UI handlers ──────────────────────────────────────────────────────────
 
   const defaultAbId = (): string => {
@@ -315,6 +371,16 @@ export default function ContactsPage() {
   const handleBulkMove = (newAbId: string) => {
     const contacts = allContacts.filter((c) => selectedIds.has(c.id));
     bulkMoveMutation.mutate({ contacts, newAbId });
+  };
+
+  const handleBulkDelete = () => {
+    const contacts = allContacts.filter((c) => selectedIds.has(c.id));
+    bulkDeleteMutation.mutate(contacts);
+  };
+
+  const handleBulkEdit = (config: BulkEditConfig) => {
+    const contacts = allContacts.filter((c) => selectedIds.has(c.id));
+    bulkEditMutation.mutate({ contacts, config });
   };
 
   // ── Render helpers ────────────────────────────────────────────────────────
@@ -380,11 +446,8 @@ export default function ContactsPage() {
             <MultiSelectBar
               count={selectedIds.size}
               total={filtered.length}
-              addressBooks={addressBooks}
-              moving={bulkMoveMutation.isPending}
               onSelectAll={() => setSelectedIds(new Set(filtered.map((c) => c.id)))}
               onSelectNone={clearSelection}
-              onMove={handleBulkMove}
               onClear={clearSelection}
             />
           ) : (
@@ -447,6 +510,18 @@ export default function ContactsPage() {
           <MultiContactPanel
             contacts={allContacts.filter((c) => selectedIds.has(c.id))}
             addressBooks={addressBooks}
+            moving={bulkMoveMutation.isPending}
+            deleting={bulkDeleteMutation.isPending}
+            editing={bulkEditMutation.isPending}
+            onExport={() => {
+              const ids = new Set(
+                allContacts.filter((c) => selectedIds.has(c.id)).map((c) => c.addressBookId),
+              );
+              addressBooks.filter((ab) => ids.has(ab.id)).forEach(handleExport);
+            }}
+            onMove={handleBulkMove}
+            onDelete={() => setShowBulkDelete(true)}
+            onEdit={() => setShowBulkEdit(true)}
             onClickContact={(c) => {
               clearSelection();
               handleSelectContact(c);
@@ -549,6 +624,26 @@ export default function ContactsPage() {
         />
       )}
 
+      {/* ── Bulk delete dialog ── */}
+      {showBulkDelete && (
+        <BulkDeleteDialog
+          count={selectedIds.size}
+          onConfirm={handleBulkDelete}
+          onCancel={() => setShowBulkDelete(false)}
+          deleting={bulkDeleteMutation.isPending}
+        />
+      )}
+
+      {/* ── Bulk edit modal ── */}
+      {showBulkEdit && (
+        <BulkEditModal
+          count={selectedIds.size}
+          onApply={handleBulkEdit}
+          onCancel={() => setShowBulkEdit(false)}
+          applying={bulkEditMutation.isPending}
+        />
+      )}
+
       {/* ── Toast ── */}
       {toast && (
         <div
@@ -571,23 +666,16 @@ export default function ContactsPage() {
 function MultiSelectBar({
   count,
   total,
-  addressBooks,
-  moving,
   onSelectAll,
   onSelectNone,
-  onMove,
   onClear,
 }: {
   count: number;
   total: number;
-  addressBooks: AddressBook[];
-  moving: boolean;
   onSelectAll: () => void;
   onSelectNone: () => void;
-  onMove: (abId: string) => void;
   onClear: () => void;
 }) {
-  const [moveOpen, setMoveOpen] = useState(false);
   const allSelected = count === total;
 
   return (
@@ -602,45 +690,6 @@ function MultiSelectBar({
       >
         {allSelected ? 'None' : 'All'}
       </button>
-
-      {/* Move to dropdown */}
-      {addressBooks.length > 1 && (
-        <div className="relative">
-          <button
-            onClick={() => setMoveOpen((o) => !o)}
-            disabled={moving}
-            className={cn(
-              'flex items-center gap-1 rounded border border-input bg-background px-2 py-1 text-xs hover:bg-muted disabled:opacity-50',
-            )}
-          >
-            Move <ChevronDown className="h-3 w-3" />
-          </button>
-          {moveOpen && (
-            <>
-              {/* Backdrop to close */}
-              <div
-                className="fixed inset-0 z-10"
-                onClick={() => setMoveOpen(false)}
-              />
-              <div className="absolute right-0 top-full mt-1 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
-                {addressBooks.map((ab) => (
-                  <button
-                    key={ab.id}
-                    onClick={() => { setMoveOpen(false); onMove(ab.id); }}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted truncate"
-                  >
-                    <span
-                      className="h-2.5 w-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: ab.color || '#6C757D' }}
-                    />
-                    {ab.displayName}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
 
       <button
         onClick={onClear}
@@ -778,54 +827,131 @@ function EmptyState({ hasContacts, isLoading }: { hasContacts: boolean; isLoadin
 function MultiContactPanel({
   contacts,
   addressBooks,
+  moving,
+  deleting,
+  editing,
+  onExport,
+  onMove,
+  onDelete,
+  onEdit,
   onClickContact,
 }: {
   contacts: Contact[];
   addressBooks: AddressBook[];
+  moving: boolean;
+  deleting: boolean;
+  editing: boolean;
+  onExport: () => void;
+  onMove: (abId: string) => void;
+  onDelete: () => void;
+  onEdit: () => void;
   onClickContact: (c: Contact) => void;
 }) {
+  const [moveOpen, setMoveOpen] = useState(false);
+  const busy = moving || deleting || editing;
   const abName = (id: string) =>
     addressBooks.find((ab) => ab.id === id)?.displayName ?? id;
 
   return (
-    <div className="flex-1 overflow-y-auto p-5">
-      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-4">
-        {contacts.length} contacts selected
-      </p>
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
-        {contacts.map((c) => {
-          const name =
-            c.data.fullName ||
-            [c.data.name.given, c.data.name.family].filter(Boolean).join(' ') ||
-            '(No name)';
-          const subtitle =
-            c.data.emails[0]?.value ||
-            c.data.phones[0]?.value ||
-            c.data.organization ||
-            '';
+    <>
+      {/* Action header — mirrors the single-contact detail toolbar */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
+        <span className="text-xs text-muted-foreground">
+          {contacts.length} contacts selected
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onExport}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+          >
+            <Download className="h-3.5 w-3.5" /> Export
+          </button>
+          <button
+            onClick={onEdit}
+            disabled={busy}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <PencilLine className="h-3.5 w-3.5" /> Edit
+          </button>
 
-          return (
-            <button
-              key={c.id}
-              onClick={() => onClickContact(c)}
-              className={cn(
-                'flex flex-col items-center gap-2 p-4 rounded-lg border border-border',
-                'text-center hover:bg-muted hover:border-primary/30 transition-colors',
+          {addressBooks.length > 1 && (
+            <div className="relative">
+              <button
+                onClick={() => setMoveOpen((o) => !o)}
+                disabled={busy}
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+              >
+                Move <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {moveOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMoveOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                    {addressBooks.map((ab) => (
+                      <button
+                        key={ab.id}
+                        onClick={() => { setMoveOpen(false); onMove(ab.id); }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted truncate"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: ab.color || '#6C757D' }}
+                        />
+                        {ab.displayName}
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
-            >
-              <Avatar contact={c} size="lg" />
-              <div className="w-full min-w-0 space-y-0.5">
-                <p className="text-sm font-medium truncate">{name}</p>
-                {subtitle && (
-                  <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
-                )}
-                <p className="text-xs text-muted-foreground/60 truncate">{abName(c.addressBookId)}</p>
-              </div>
-            </button>
-          );
-        })}
+            </div>
+          )}
+
+          <button
+            onClick={onDelete}
+            disabled={busy}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Delete
+          </button>
+        </div>
       </div>
-    </div>
+
+      <div className="flex-1 overflow-y-auto p-5">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+          {contacts.map((c) => {
+            const name =
+              c.data.fullName ||
+              [c.data.name.given, c.data.name.family].filter(Boolean).join(' ') ||
+              '(No name)';
+            const subtitle =
+              c.data.emails[0]?.value ||
+              c.data.phones[0]?.value ||
+              c.data.organization ||
+              '';
+
+            return (
+              <button
+                key={c.id}
+                onClick={() => onClickContact(c)}
+                className={cn(
+                  'flex flex-col items-center gap-2 p-4 rounded-lg border border-border',
+                  'text-center hover:bg-muted hover:border-primary/30 transition-colors',
+                )}
+              >
+                <Avatar contact={c} size="lg" />
+                <div className="w-full min-w-0 space-y-0.5">
+                  <p className="text-sm font-medium truncate">{name}</p>
+                  {subtitle && (
+                    <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground/60 truncate">{abName(c.addressBookId)}</p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>
   );
 }
 
