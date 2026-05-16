@@ -5,7 +5,7 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import type { EventInput, DatesSetArg, EventClickArg } from '@fullcalendar/core';
-import { X, MapPin, AlignLeft, Clock, Repeat, Users } from 'lucide-react';
+import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell } from 'lucide-react';
 import type { Calendar, EventJson, RecurrenceRule, AttendeeJson } from '@dave/shared';
 import { getCalendars, getCalendarEvents } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
@@ -22,6 +22,44 @@ function buildMapUrl(location: string, service: MapService): string {
     case 'apple':  return `https://maps.apple.com/?q=${q}`;
     default:       return `https://www.openstreetmap.org/search?query=${q}`;
   }
+}
+
+function formatAlarmTrigger(trigger: string): string {
+  const negative = trigger.startsWith('-');
+  const raw = negative ? trigger.slice(1) : trigger.startsWith('+') ? trigger.slice(1) : trigger;
+
+  // Absolute datetime trigger
+  if (!raw.startsWith('P')) {
+    try { return new Date(trigger).toLocaleString(); } catch { return trigger; }
+  }
+
+  const match = raw.match(/^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/);
+  if (!match) return trigger;
+
+  const totalMinutes =
+    (parseInt(match[1] ?? '0')) * 7 * 24 * 60 +
+    (parseInt(match[2] ?? '0')) * 24 * 60 +
+    (parseInt(match[3] ?? '0')) * 60 +
+    (parseInt(match[4] ?? '0')) +
+    Math.round(parseInt(match[5] ?? '0') / 60);
+
+  if (totalMinutes === 0) return 'At time of event';
+
+  let label: string;
+  if (totalMinutes % (7 * 24 * 60) === 0) {
+    const n = totalMinutes / (7 * 24 * 60);
+    label = `${n} ${n === 1 ? 'week' : 'weeks'}`;
+  } else if (totalMinutes % (24 * 60) === 0) {
+    const n = totalMinutes / (24 * 60);
+    label = `${n} ${n === 1 ? 'day' : 'days'}`;
+  } else if (totalMinutes % 60 === 0) {
+    const n = totalMinutes / 60;
+    label = `${n} ${n === 1 ? 'hour' : 'hours'}`;
+  } else {
+    label = `${totalMinutes} ${totalMinutes === 1 ? 'minute' : 'minutes'}`;
+  }
+
+  return negative ? `${label} before` : `${label} after`;
 }
 
 // ── Timezone helpers ──────────────────────────────────────────────────────────
@@ -325,6 +363,20 @@ function EventPopup({
             <div className="flex items-center gap-2 text-sm">
               <Repeat className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span className="text-muted-foreground">{formatRecurrence(event.recurrenceRule)}</span>
+            </div>
+          )}
+
+          {/* Alarms */}
+          {event.alarms.length > 0 && (
+            <div className="flex items-start gap-2 text-sm">
+              <Bell className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+              <div className="space-y-0.5">
+                {event.alarms.map((alarm, i) => (
+                  <div key={i} className="text-muted-foreground">
+                    {formatAlarmTrigger(alarm.trigger)}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
