@@ -185,6 +185,25 @@ export interface ImportContactsResponse {
   failed: number;
 }
 
+// ── Event write request/response shapes ───────────────────────────────────────
+
+export interface CreateEventRequest {
+  data: EventJson;
+}
+
+export interface UpdateEventRequest {
+  data: EventJson;
+  etag: string;
+}
+
+export interface EventWriteResponse {
+  id: string;
+  url: string;
+  etag: string;
+  calendarId: string;
+  data: EventJson;
+}
+
 // ── API error shape ───────────────────────────────────────────────────────────
 
 export interface ApiError {

@@ -3,9 +3,9 @@ import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
-import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent } from '@dave/shared';
+import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
-import { parseIcalEvents } from './ical.js';
+import { parseIcalEvents, serializeIcalEvent } from './ical.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
@@ -342,4 +342,106 @@ export async function fetchEvents(
         data: eventData,
       }));
     });
+}
+
+// ── Calendar event write operations ───────────────────────────────────────────
+
+function calendarUrl(session: SessionData, calendarId: string): string {
+  return `${session.calendarHomeUrl.replace(/\/$/, '')}/${calendarId}/`;
+}
+
+function calendarObjectUrl(session: SessionData, calendarId: string, uid: string): string {
+  return `${calendarUrl(session, calendarId)}${uid}.ics`;
+}
+
+export interface EventWriteResult {
+  id: string;
+  url: string;
+  etag: string;
+  calendarId: string;
+  data: EventJson;
+}
+
+export async function createEvent(
+  session: SessionData,
+  calendarId: string,
+  data: EventJson,
+  _config: Config,
+): Promise<EventWriteResult> {
+  const uid = data.uid || crypto.randomUUID();
+  const eventData: EventJson = { ...data, uid, calendarId };
+  const icsStr = serializeIcalEvent(eventData);
+  const url = calendarObjectUrl(session, calendarId, uid);
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: icsStr,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const etag = res.headers.get('ETag') ?? `"${uid}"`;
+  return { id: uid, url, etag, calendarId, data: eventData };
+}
+
+export async function updateEvent(
+  session: SessionData,
+  calendarId: string,
+  id: string,
+  data: EventJson,
+  etag: string,
+  _config: Config,
+): Promise<EventWriteResult> {
+  const eventData: EventJson = { ...data, calendarId };
+  const icsStr = serializeIcalEvent(eventData);
+  const url = calendarObjectUrl(session, calendarId, id);
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-Match': etag,
+    },
+    body: icsStr,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const newEtag = res.headers.get('ETag') ?? etag;
+  return { id, url, etag: newEtag, calendarId, data: eventData };
+}
+
+export async function deleteEvent(
+  session: SessionData,
+  calendarId: string,
+  id: string,
+  etag: string,
+  _config: Config,
+): Promise<void> {
+  const url = calendarObjectUrl(session, calendarId, id);
+
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      ...basicAuthHeader(session),
+      'If-Match': etag,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
+  }
 }

@@ -1,17 +1,25 @@
 import { useState, useMemo } from 'react';
-import { useQuery, useQueries } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import type { EventInput, DatesSetArg, EventClickArg } from '@fullcalendar/core';
-import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell } from 'lucide-react';
-import type { Calendar, EventJson, RecurrenceRule, AttendeeJson } from '@dave/shared';
-import { getCalendars, getCalendarEvents } from '../api/collections';
+import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2 } from 'lucide-react';
+import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson } from '@dave/shared';
+import {
+  getCalendars,
+  getCalendarEvents,
+  createCalendarEvent,
+  updateCalendarEvent,
+  deleteCalendarEvent,
+} from '../api/collections';
+import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useSettings } from '../contexts/Settings';
 import type { MapService } from '../contexts/Settings';
 import { cn } from '../lib/utils';
+import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
 
 // ── Map helpers ───────────────────────────────────────────────────────────────
 
@@ -28,7 +36,6 @@ function formatAlarmTrigger(trigger: string): string {
   const negative = trigger.startsWith('-');
   const raw = negative ? trigger.slice(1) : trigger.startsWith('+') ? trigger.slice(1) : trigger;
 
-  // Absolute datetime trigger
   if (!raw.startsWith('P')) {
     try { return new Date(trigger).toLocaleString(); } catch { return trigger; }
   }
@@ -68,7 +75,6 @@ const BROWSER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 function formatEventTime(isoStr: string, allDay: boolean): string {
   if (allDay) {
-    // All-day dates are stored as YYYY-MM-DD; parse without timezone shift.
     return new Intl.DateTimeFormat('en-US', {
       weekday: 'long',
       month: 'long',
@@ -103,7 +109,6 @@ const DAY_NAMES: Record<string, string> = {
 };
 
 function dayLabel(byday: string): string {
-  // Strip optional ordinal prefix (e.g. "2MO" → "Mon", "-1FR" → "Fri")
   const code = byday.replace(/^[+-]?\d*/, '').toUpperCase();
   return DAY_NAMES[code] ?? byday;
 }
@@ -174,16 +179,47 @@ function AttendeeRow({ attendee }: { attendee: AttendeeJson }) {
 // ── Popup data shape ──────────────────────────────────────────────────────────
 
 interface PopupData {
-  event: EventJson;
+  calendarEvent: CalendarEvent;
   calendar: Calendar;
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+
+interface ToastData { msg: string; type: 'ok' | 'err' }
+
+// ── Edit modal state ──────────────────────────────────────────────────────────
+
+interface EditModalState {
+  calendarEvent: CalendarEvent | null; // null = creating new
+  initialStart: string;
+  initialEnd: string;
+  allDay: boolean;
+  calendarId: string;
+}
+
+// ── Error helper ──────────────────────────────────────────────────────────────
+
+function errorMessage(e: unknown, is412Special = false): string {
+  if (e instanceof ApiError) {
+    if (is412Special && e.statusCode === 412) {
+      return 'Event was modified elsewhere — please reload and try again.';
+    }
+    return e.message;
+  }
+  return 'Something went wrong.';
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CalendarPage() {
   const { hiddenCalendars } = useCollectionVisibility();
+  const queryClient = useQueryClient();
+
   const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
   const [popup, setPopup] = useState<PopupData | null>(null);
+  const [editModal, setEditModal] = useState<EditModalState | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CalendarEvent | null>(null);
+  const [toast, setToast] = useState<ToastData | null>(null);
 
   const calQuery = useQuery({
     queryKey: ['calendars'],
@@ -207,12 +243,60 @@ export default function CalendarPage() {
 
   const isLoadingEvents = dateRange !== null && eventQueries.some((q) => q.isFetching);
 
-  // Map CalendarEvents → FullCalendar EventInput.
+  // ── Toast helper ─────────────────────────────────────────────────────────
+
+  const showToast = (msg: string, type: 'ok' | 'err' = 'ok') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  };
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
+
+  const createMutation = useMutation({
+    mutationFn: ({ calId, data }: { calId: string; data: EventJson }) =>
+      createCalendarEvent(calId, data),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['events', result.calendarId] });
+      setEditModal(null);
+      showToast('Event created');
+    },
+    onError: (e) => showToast(errorMessage(e), 'err'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ ev, data }: { ev: CalendarEvent; data: EventJson }) =>
+      updateCalendarEvent(ev.id, data, ev.etag),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['events', result.calendarId] });
+      setEditModal(null);
+      setPopup(null);
+      showToast('Event saved');
+    },
+    onError: (e) => showToast(errorMessage(e, true), 'err'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (ev: CalendarEvent) =>
+      deleteCalendarEvent(ev.id, ev.calendarId, ev.etag),
+    onSuccess: (_, ev) => {
+      queryClient.invalidateQueries({ queryKey: ['events', ev.calendarId] });
+      setDeleteTarget(null);
+      setPopup(null);
+      setEditModal(null);
+      showToast('Event deleted');
+    },
+    onError: (e) => {
+      setDeleteTarget(null);
+      showToast(errorMessage(e, true), 'err');
+    },
+  });
+
+  // ── FullCalendar event mapping ─────────────────────────────────────────────
+
   const fcEvents = useMemo<EventInput[]>(() => {
     return visibleCalendars.flatMap((cal, i) => {
       const events = eventQueries[i]?.data ?? [];
       return events.map((ev) => ({
-        // Include start time so recurring instances (same URL, different time) each get a unique id.
         id: `${cal.id}::${ev.id}::${ev.data.start}`,
         title: ev.data.summary || '(No title)',
         start: ev.data.start,
@@ -221,26 +305,103 @@ export default function CalendarPage() {
         backgroundColor: cal.color,
         borderColor: cal.color,
         textColor: '#ffffff',
-        extendedProps: { eventData: ev.data, calendar: cal },
+        extendedProps: {
+          eventData: ev.data,
+          calendarEvent: ev,       // full CalendarEvent (includes etag)
+          calendar: cal,
+        },
       }));
     });
   }, [visibleCalendars, eventQueries]);
 
+  // ── FullCalendar handlers ─────────────────────────────────────────────────
+
   const handleDatesSet = (arg: DatesSetArg) => {
-    setDateRange({
-      start: arg.start.toISOString(),
-      end: arg.end.toISOString(),
-    });
+    setDateRange({ start: arg.start.toISOString(), end: arg.end.toISOString() });
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleDateClick = (arg: any) => {
+    const calId = visibleCalendars[0]?.id ?? (calQuery.data?.[0]?.id ?? '');
+    if (!calId) return;
+    const start = arg.dateStr;
+    const isAllDay = arg.allDay;
+    const end = isAllDay
+      ? start
+      : new Date(new Date(start).getTime() + 60 * 60_000).toISOString();
+    setEditModal({ calendarEvent: null, initialStart: start, initialEnd: end, allDay: isAllDay, calendarId: calId });
   };
 
   const handleEventClick = (arg: EventClickArg) => {
     arg.jsEvent.preventDefault();
-    const { eventData, calendar } = arg.event.extendedProps as {
+    const { calendarEvent, calendar } = arg.event.extendedProps as {
       eventData: EventJson;
+      calendarEvent: CalendarEvent;
       calendar: Calendar;
     };
-    setPopup({ event: eventData, calendar });
+    setPopup({ calendarEvent, calendar });
   };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleEventDrop = (arg: any) => {
+    const { calendarEvent, eventData } = arg.event.extendedProps as {
+      eventData: EventJson;
+      calendarEvent: CalendarEvent;
+    };
+    if (!calendarEvent) { arg.revert(); return; }
+
+    const newData: EventJson = {
+      ...eventData,
+      start: arg.event.startStr,
+      end: arg.event.endStr || arg.event.startStr,
+      allDay: arg.event.allDay,
+    };
+
+    updateMutation.mutate({ ev: calendarEvent, data: newData }, {
+      onError: () => arg.revert(),
+    });
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleEventResize = (arg: any) => {
+    const { calendarEvent, eventData } = arg.event.extendedProps as {
+      eventData: EventJson;
+      calendarEvent: CalendarEvent;
+    };
+    if (!calendarEvent) { arg.revert(); return; }
+
+    const newData: EventJson = {
+      ...eventData,
+      start: arg.event.startStr,
+      end: arg.event.endStr || arg.event.startStr,
+    };
+
+    updateMutation.mutate({ ev: calendarEvent, data: newData }, {
+      onError: () => arg.revert(),
+    });
+  };
+
+  // ── Edit modal handlers ───────────────────────────────────────────────────
+
+  const handleSave = (data: EventJson) => {
+    if (editModal?.calendarEvent) {
+      updateMutation.mutate({ ev: editModal.calendarEvent, data });
+    } else {
+      createMutation.mutate({ calId: data.calendarId || editModal?.calendarId || '', data });
+    }
+  };
+
+  const handleDeleteRequest = (ev: CalendarEvent) => {
+    setDeleteTarget(ev);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (deleteTarget) deleteMutation.mutate(deleteTarget);
+  };
+
+  const isSaving = createMutation.isPending || updateMutation.isPending;
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="h-full flex flex-col p-4 relative">
@@ -261,27 +422,108 @@ export default function CalendarPage() {
             center: 'title',
             right: 'dayGridMonth,timeGridWeek,timeGridDay',
           }}
-          buttonText={{
-            today: 'Today',
-            month: 'Month',
-            week: 'Week',
-            day: 'Day',
-          }}
+          buttonText={{ today: 'Today', month: 'Month', week: 'Week', day: 'Day' }}
           events={fcEvents}
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
+          dateClick={handleDateClick}
+          eventDrop={handleEventDrop}
+          eventResize={handleEventResize}
+          editable={true}
+          selectable={true}
           height="100%"
           eventDisplay="block"
           dayMaxEvents={4}
         />
       </div>
 
-      {popup && (
+      {/* Event detail popup */}
+      {popup && !editModal && (
         <EventPopup
-          event={popup.event}
+          calendarEvent={popup.calendarEvent}
           calendar={popup.calendar}
           onClose={() => setPopup(null)}
+          onEdit={() => {
+            setEditModal({
+              calendarEvent: popup.calendarEvent,
+              initialStart: popup.calendarEvent.data.start,
+              initialEnd: popup.calendarEvent.data.end,
+              allDay: popup.calendarEvent.data.allDay,
+              calendarId: popup.calendarEvent.calendarId,
+            });
+            setPopup(null);
+          }}
+          onDelete={() => handleDeleteRequest(popup.calendarEvent)}
         />
+      )}
+
+      {/* Event editor modal */}
+      {editModal && (
+        <EventEditForm
+          initial={
+            editModal.calendarEvent?.data ??
+            emptyEventJson(
+              editModal.calendarId,
+              editModal.initialStart,
+              editModal.initialEnd,
+              editModal.allDay,
+            )
+          }
+          calendars={calQuery.data ?? []}
+          selectedCalendarId={editModal.calendarId}
+          isNew={!editModal.calendarEvent}
+          saving={isSaving}
+          onSave={handleSave}
+          onDelete={editModal.calendarEvent ? () => handleDeleteRequest(editModal.calendarEvent!) : undefined}
+          onCancel={() => setEditModal(null)}
+        />
+      )}
+
+      {/* Delete confirmation */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50"
+          onClick={() => setDeleteTarget(null)}
+        >
+          <div
+            className="bg-background rounded-lg border border-border shadow-xl p-6 max-w-sm mx-4 w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="font-semibold text-base mb-2">Delete event?</h3>
+            <p className="text-sm text-muted-foreground mb-5">
+              &ldquo;{deleteTarget.data.summary || '(No title)'}&rdquo; will be permanently deleted.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="rounded-md border border-input bg-background px-3 py-1.5 text-sm hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                disabled={deleteMutation.isPending}
+                className="rounded-md bg-destructive text-destructive-foreground px-3 py-1.5 text-sm hover:bg-destructive/90 disabled:opacity-50"
+              >
+                {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div
+          className={cn(
+            'fixed bottom-4 right-4 z-[70] rounded-lg px-4 py-2.5 text-sm shadow-lg',
+            toast.type === 'ok'
+              ? 'bg-background border border-border text-foreground'
+              : 'bg-destructive text-destructive-foreground',
+          )}
+        >
+          {toast.msg}
+        </div>
       )}
     </div>
   );
@@ -290,15 +532,20 @@ export default function CalendarPage() {
 // ── Event detail popup ────────────────────────────────────────────────────────
 
 function EventPopup({
-  event,
+  calendarEvent,
   calendar,
   onClose,
+  onEdit,
+  onDelete,
 }: {
-  event: EventJson;
+  calendarEvent: CalendarEvent;
   calendar: Calendar;
   onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
 }) {
   const { mapService } = useSettings();
+  const event = calendarEvent.data;
   const showOriginalTz =
     !event.allDay && event.tzid !== null && event.tzid !== BROWSER_TZ;
 
@@ -318,17 +565,33 @@ function EventPopup({
         <div className="h-1.5 w-full" style={{ backgroundColor: calendar.color }} />
 
         <div className="p-4 space-y-3">
-          {/* Title + close button */}
+          {/* Title + actions */}
           <div className="flex items-start justify-between gap-3">
             <h3 className="font-semibold text-base leading-snug">
               {event.summary || '(No title)'}
             </h3>
-            <button
-              onClick={onClose}
-              className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={onEdit}
+                className="rounded p-1 text-muted-foreground hover:bg-muted"
+                title="Edit event"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={onDelete}
+                className="rounded p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                title="Delete event"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={onClose}
+                className="rounded p-0.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           {/* Calendar label */}

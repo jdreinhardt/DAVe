@@ -1,5 +1,7 @@
 import { createRequire } from 'node:module';
 import type { EventJson, AlarmJson, AttendeeJson, RecurrenceRule } from '@dave/shared';
+// crypto is available as a global in Node 19+; the import keeps older Node happy.
+import { randomUUID } from 'node:crypto';
 
 const _req = createRequire(import.meta.url);
 // ical.js ships CommonJS only with no official TypeScript types.
@@ -250,6 +252,152 @@ function parseAttendees(vevent: any): AttendeeJson[] {
       return [];
     }
   });
+}
+
+// ── Serialization ─────────────────────────────────────────────────────────────
+
+/**
+ * Serialize an EventJson into a VCALENDAR iCalendar string suitable for PUT to
+ * a CalDAV server. Only handles non-recurring events (RRULE serialization is
+ * deferred to Milestone 7). Unknown properties from the original ICS are not
+ * preserved here because EventJson is a normalized representation; round-trip
+ * fidelity for exotic properties requires storing the raw ICS, which is M7+.
+ */
+export function serializeIcalEvent(event: EventJson): string {
+  const vcal = new ICAL.Component(['vcalendar', [], []]);
+  vcal.addPropertyWithValue('version', '2.0');
+  vcal.addPropertyWithValue('prodid', '-//dave//EN');
+  vcal.addPropertyWithValue('calscale', 'GREGORIAN');
+
+  // VTIMEZONE — minimal block so servers that require it don't reject the PUT.
+  // Baikal is lenient; it only needs the TZID declared.
+  if (event.tzid && !event.allDay) {
+    const vtz = new ICAL.Component('vtimezone');
+    vtz.addPropertyWithValue('tzid', event.tzid);
+    const std = new ICAL.Component('standard');
+    std.addPropertyWithValue('dtstart', '19700101T000000');
+    std.addPropertyWithValue('tzoffsetfrom', '+0000');
+    std.addPropertyWithValue('tzoffsetto', '+0000');
+    vtz.addSubcomponent(std);
+    vcal.addSubcomponent(vtz);
+  }
+
+  const vevent = new ICAL.Component('vevent');
+
+  // UID
+  const uid = event.uid || randomUUID();
+  vevent.addPropertyWithValue('uid', uid);
+
+  // DTSTAMP (required by RFC 5545)
+  const dtstamp = ICAL.Time.fromJSDate(new Date(), true);
+  vevent.addPropertyWithValue('dtstamp', dtstamp);
+
+  // DTSTART / DTEND
+  if (event.allDay) {
+    // DATE value type; event.end is the exclusive date (day after last day).
+    const startProp = new ICAL.Property('dtstart');
+    startProp.resetType('date');
+    startProp.setValue(ICAL.Time.fromDateString(event.start.substring(0, 10)));
+    vevent.addProperty(startProp);
+
+    const endDateStr = event.end ? event.end.substring(0, 10) : event.start.substring(0, 10);
+    const endProp = new ICAL.Property('dtend');
+    endProp.resetType('date');
+    endProp.setValue(ICAL.Time.fromDateString(endDateStr));
+    vevent.addProperty(endProp);
+  } else if (event.tzid) {
+    // Zoned time: convert the stored UTC (or wall-clock) value to wall-clock in
+    // the target timezone using Intl, then emit with TZID parameter.
+    const startLocal = toIcalLocalString(event.start, event.tzid);
+    const startProp = new ICAL.Property('dtstart');
+    startProp.resetType('date-time');
+    startProp.setParameter('tzid', event.tzid);
+    startProp.setValue(ICAL.Time.fromDateTimeString(startLocal));
+    vevent.addProperty(startProp);
+
+    const endLocal = toIcalLocalString(event.end || event.start, event.tzid);
+    const endProp = new ICAL.Property('dtend');
+    endProp.resetType('date-time');
+    endProp.setParameter('tzid', event.tzid);
+    endProp.setValue(ICAL.Time.fromDateTimeString(endLocal));
+    vevent.addProperty(endProp);
+  } else {
+    // No timezone — emit as UTC.
+    vevent.addPropertyWithValue('dtstart', ICAL.Time.fromJSDate(new Date(event.start), true));
+    vevent.addPropertyWithValue('dtend', ICAL.Time.fromJSDate(new Date(event.end || event.start), true));
+  }
+
+  // Text properties
+  if (event.summary) vevent.addPropertyWithValue('summary', event.summary);
+  if (event.description) vevent.addPropertyWithValue('description', event.description);
+  if (event.location) vevent.addPropertyWithValue('location', event.location);
+
+  // VALARMs
+  for (const alarm of event.alarms) {
+    serializeAlarm(vevent, alarm, event.summary);
+  }
+
+  vcal.addSubcomponent(vevent);
+  return vcal.toString();
+}
+
+/**
+ * Convert a UTC ISO string or wall-clock string to "YYYY-MM-DDTHH:MM:SS" local
+ * wall-clock time in the given IANA timezone using Intl, so ical.js can emit
+ * DTSTART;TZID=…:YYYYMMDDTHHMMSS without bundling timezone data.
+ */
+function toIcalLocalString(isoStr: string, tzid: string): string {
+  // If the input has no timezone indicator, treat as already wall-clock.
+  const isUtcOrOffset = /Z$/.test(isoStr) || /[+-]\d{2}:\d{2}$/.test(isoStr);
+  const date = isUtcOrOffset ? new Date(isoStr) : new Date(isoStr + 'Z');
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tzid,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const p: Record<string, string> = {};
+  for (const part of parts) p[part.type] = part.value;
+  const h = p.hour === '24' ? '00' : p.hour;
+  return `${p.year}-${p.month}-${p.day}T${h}:${p.minute}:${p.second}`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function serializeAlarm(vevent: any, alarm: AlarmJson, eventSummary: string): void {
+  const valarm = new ICAL.Component('valarm');
+  valarm.addPropertyWithValue('action', alarm.action);
+
+  const triggerProp = new ICAL.Property('trigger');
+  const raw = alarm.trigger;
+
+  if (/^-?P/.test(raw)) {
+    // ISO 8601 duration (relative trigger)
+    const dur = ICAL.Duration.fromString(raw);
+    triggerProp.resetType('duration');
+    // RELATED=START is required for relative triggers per RFC 5545 §3.8.6.3
+    triggerProp.setParameter('related', 'START');
+    triggerProp.setValue(dur);
+  } else {
+    // Absolute datetime trigger
+    try {
+      const absTime = ICAL.Time.fromJSDate(new Date(raw), true);
+      triggerProp.resetType('date-time');
+      triggerProp.setParameter('value', 'DATE-TIME');
+      triggerProp.setValue(absTime);
+    } catch {
+      triggerProp.setValue(raw);
+    }
+  }
+  valarm.addProperty(triggerProp);
+
+  valarm.addPropertyWithValue('description', alarm.description || eventSummary || 'Reminder');
+  vevent.addSubcomponent(valarm);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
