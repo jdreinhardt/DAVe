@@ -269,15 +269,17 @@ export function serializeIcalEvent(event: EventJson): string {
   vcal.addPropertyWithValue('prodid', '-//dave//EN');
   vcal.addPropertyWithValue('calscale', 'GREGORIAN');
 
-  // VTIMEZONE — minimal block so servers that require it don't reject the PUT.
-  // Baikal is lenient; it only needs the TZID declared.
+  // VTIMEZONE with the correct UTC offset for this timezone at the event's reference
+  // time. This is a simplified single-component block (no DST transitions), but it
+  // gives ical.js enough information to convert DTSTART back to UTC correctly.
   if (event.tzid && !event.allDay) {
     const vtz = new ICAL.Component('vtimezone');
     vtz.addPropertyWithValue('tzid', event.tzid);
     const std = new ICAL.Component('standard');
-    std.addPropertyWithValue('dtstart', '19700101T000000');
-    std.addPropertyWithValue('tzoffsetfrom', '+0000');
-    std.addPropertyWithValue('tzoffsetto', '+0000');
+    std.addPropertyWithValue('dtstart', ICAL.Time.fromDateTimeString('1970-01-01T00:00:00'));
+    const offsetStr = utcOffsetString(event.start, event.tzid);
+    std.addPropertyWithValue('tzoffsetfrom', offsetStr);
+    std.addPropertyWithValue('tzoffsetto', offsetStr);
     vtz.addSubcomponent(std);
     vcal.addSubcomponent(vtz);
   }
@@ -339,6 +341,35 @@ export function serializeIcalEvent(event: EventJson): string {
 
   vcal.addSubcomponent(vevent);
   return vcal.toString();
+}
+
+/**
+ * Return the UTC offset for a given IANA timezone at the instant described by
+ * isoStr, as a ±HHMM string suitable for VTIMEZONE TZOFFSETFROM/TZOFFSETTO.
+ * Uses Intl so no tz database is needed.
+ */
+function utcOffsetString(isoStr: string, tzid: string): string {
+  const isUtcOrOffset = /Z$/.test(isoStr) || /[+-]\d{2}:\d{2}$/.test(isoStr);
+  const date = isUtcOrOffset ? new Date(isoStr) : new Date(isoStr + 'Z');
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tzid,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const p: Record<string, string> = {};
+  for (const part of parts) p[part.type] = part.value;
+  const h = p.hour === '24' ? '00' : p.hour;
+  const localAsUtc = new Date(`${p.year}-${p.month}-${p.day}T${h}:${p.minute}:${p.second}Z`);
+
+  const offsetMs = localAsUtc.getTime() - date.getTime();
+  const offsetMin = Math.round(offsetMs / 60_000);
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const hh = Math.floor(abs / 60).toString().padStart(2, '0');
+  const mm = (abs % 60).toString().padStart(2, '0');
+  return `${sign}${hh}${mm}`;
 }
 
 /**

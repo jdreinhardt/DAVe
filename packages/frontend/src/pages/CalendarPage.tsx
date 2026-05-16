@@ -332,6 +332,20 @@ export default function CalendarPage() {
     setEditModal({ calendarEvent: null, initialStart: start, initialEnd: end, allDay: isAllDay, calendarId: calId });
   };
 
+  // Drag to select a time range (week/day views) opens the create modal pre-filled.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleSelect = (arg: any) => {
+    const calId = visibleCalendars[0]?.id ?? (calQuery.data?.[0]?.id ?? '');
+    if (!calId) return;
+    setEditModal({
+      calendarEvent: null,
+      initialStart: arg.startStr,
+      initialEnd: arg.endStr,
+      allDay: arg.allDay,
+      calendarId: calId,
+    });
+  };
+
   const handleEventClick = (arg: EventClickArg) => {
     arg.jsEvent.preventDefault();
     const { calendarEvent, calendar } = arg.event.extendedProps as {
@@ -427,10 +441,12 @@ export default function CalendarPage() {
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
           dateClick={handleDateClick}
+          select={handleSelect}
           eventDrop={handleEventDrop}
           eventResize={handleEventResize}
           editable={true}
           selectable={true}
+          unselectAuto={true}
           height="100%"
           eventDisplay="block"
           dayMaxEvents={4}

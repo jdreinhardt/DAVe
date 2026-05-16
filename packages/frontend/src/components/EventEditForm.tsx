@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import type { Calendar, EventJson, AlarmJson } from '@dave/shared';
 import { cn } from '../lib/utils';
 
@@ -23,9 +23,9 @@ interface AlarmDraft {
   triggerType: 'relative' | 'absolute';
   n: number;
   unit: TriggerUnit;
+  // `before` is always true for new alarms; existing "after" alarms are read-only.
   before: boolean;
-  absoluteStr: string; // datetime-local value for absolute triggers
-  description: string;
+  absoluteStr: string; // only populated when triggerType === 'absolute' (read-only display)
 }
 
 // ── Factory ───────────────────────────────────────────────────────────────────
@@ -66,17 +66,16 @@ function alarmToAlarmDraft(alarm: AlarmJson): AlarmDraft {
       unit: parsed.unit,
       before: parsed.before,
       absoluteStr: '',
-      description: alarm.description,
     };
   }
+  // Absolute trigger — preserved but shown read-only.
   return {
     action: alarm.action,
     triggerType: 'absolute',
     n: 15,
     unit: 'minutes',
     before: true,
-    absoluteStr: alarm.trigger.substring(0, 16),
-    description: alarm.description,
+    absoluteStr: alarm.trigger,
   };
 }
 
@@ -85,9 +84,11 @@ function alarmDraftToAlarmJson(draft: AlarmDraft): AlarmJson {
   if (draft.triggerType === 'relative') {
     trigger = durationToIso(draft.n, draft.unit, draft.before);
   } else {
-    trigger = draft.absoluteStr ? new Date(draft.absoluteStr).toISOString() : '-PT15M';
+    // Absolute: emit the stored string as-is (already ISO or duration).
+    trigger = draft.absoluteStr || '-PT15M';
   }
-  return { action: draft.action, trigger, description: draft.description };
+  // Description intentionally omitted — serializer defaults to event title.
+  return { action: draft.action, trigger, description: '' };
 }
 
 function durationToIso(n: number, unit: TriggerUnit, before: boolean): string {
@@ -115,17 +116,17 @@ function parseDuration(trigger: string): { n: number; unit: TriggerUnit; before:
   const m = raw.match(/^PT(\d+)M$/);
   if (m) return { n: parseInt(m[1] ?? '15'), unit: 'minutes', before };
 
-  return null; // complex duration; fall back to absolute UI
+  return null;
+}
+
+function formatAbsoluteTrigger(isoStr: string): string {
+  try { return new Date(isoStr).toLocaleString(); } catch { return isoStr; }
 }
 
 // ── Date/time helpers ─────────────────────────────────────────────────────────
 
 const BROWSER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-/**
- * Convert a UTC ISO string to a "YYYY-MM-DDTHH:MM" string in the given
- * timezone for use with <input type="datetime-local">.
- */
 function utcToLocalInput(utcIso: string, tzid: string): string {
   try {
     const date = new Date(utcIso);
@@ -147,15 +148,7 @@ function utcToLocalInput(utcIso: string, tzid: string): string {
   }
 }
 
-/**
- * Convert a "YYYY-MM-DDTHH:MM" datetime-local value (wall-clock in tzid) to
- * a UTC ISO string. When tzid equals the browser TZ (the default), new Date()
- * handles this correctly. For other zones, we compute the offset via Intl.
- * Note: DST-ambiguous times may resolve to either side of the transition.
- */
 function localInputToUTC(localStr: string, tzid: string): string {
-  // Treat the input as UTC first to get an approximation, then find the actual
-  // offset by seeing what local time that UTC maps to in the target zone.
   const approx = new Date(localStr + ':00Z');
   try {
     const parts = new Intl.DateTimeFormat('en-CA', {
@@ -175,7 +168,6 @@ function localInputToUTC(localStr: string, tzid: string): string {
   }
 }
 
-/** Add N days to a YYYY-MM-DD string. */
 function addDays(dateStr: string, n: number): string {
   const d = new Date(dateStr + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + n);
@@ -207,7 +199,6 @@ export default function EventEditForm({
 }: EventEditFormProps) {
   const initTzid = initial.tzid ?? BROWSER_TZ;
 
-  // Form field state
   const [summary, setSummary] = useState(initial.summary);
   const [description, setDescription] = useState(initial.description);
   const [location, setLocation] = useState(initial.location);
@@ -215,20 +206,19 @@ export default function EventEditForm({
   const [tzid, setTzid] = useState(initTzid);
   const [calendarId, setCalendarId] = useState(selectedCalendarId);
   const [summaryError, setSummaryError] = useState(false);
+  const [showMore, setShowMore] = useState(
+    // Auto-expand if the event has any non-default "more" content.
+    !!(initial.location || initial.description || initial.alarms.length || (initial.tzid && initial.tzid !== BROWSER_TZ)),
+  );
 
-  // Start / end stored as datetime-local strings (YYYY-MM-DDTHH:MM) for timed,
-  // or YYYY-MM-DD for all-day. The all-day end shown to the user is INCLUSIVE
-  // (EventJson stores the exclusive end, i.e. the day after).
   const [startStr, setStartStr] = useState<string>(() => {
     if (initial.allDay) return initial.start.substring(0, 10);
     return utcToLocalInput(initial.start, initTzid);
   });
   const [endStr, setEndStr] = useState<string>(() => {
     if (initial.allDay) {
-      // Display inclusive end (subtract 1 exclusive day stored in EventJson).
       const exc = initial.end || initial.start;
       const incl = addDays(exc.substring(0, 10), -1);
-      // Guard: never show end before start.
       return incl >= initial.start.substring(0, 10) ? incl : initial.start.substring(0, 10);
     }
     return utcToLocalInput(initial.end || initial.start, initTzid);
@@ -243,25 +233,18 @@ export default function EventEditForm({
   const handleAllDayToggle = (checked: boolean) => {
     setAllDay(checked);
     if (checked) {
-      // Snap timed values to date portion
       setStartStr(startStr.substring(0, 10));
       setEndStr(endStr.substring(0, 10));
     } else {
-      // Add default time (09:00 – 10:00)
       setStartStr(startStr.substring(0, 10) + 'T09:00');
       setEndStr(endStr.substring(0, 10) + 'T10:00');
     }
   };
 
-  const handleTzChange = (newTz: string) => {
-    // Reinterpret the current wall-clock as the new timezone (no time shift).
-    setTzid(newTz);
-  };
-
   const addAlarm = () =>
     setAlarms((a) => [
       ...a,
-      { action: 'DISPLAY', triggerType: 'relative', n: 15, unit: 'minutes', before: true, absoluteStr: '', description: '' },
+      { action: 'DISPLAY', triggerType: 'relative', n: 15, unit: 'minutes', before: true, absoluteStr: '' },
     ]);
 
   const updateAlarm = (i: number, patch: Partial<AlarmDraft>) =>
@@ -284,7 +267,6 @@ export default function EventEditForm({
 
     if (allDay) {
       start = startStr.substring(0, 10);
-      // Convert inclusive end back to exclusive.
       const inclEnd = endStr.substring(0, 10);
       end = addDays(inclEnd >= start ? inclEnd : start, 1);
       resolvedTzid = null;
@@ -294,7 +276,7 @@ export default function EventEditForm({
       resolvedTzid = tzid;
     }
 
-    const data: EventJson = {
+    onSave({
       ...initial,
       uid: initial.uid || crypto.randomUUID(),
       calendarId,
@@ -306,9 +288,7 @@ export default function EventEditForm({
       allDay,
       tzid: resolvedTzid,
       alarms: alarms.map(alarmDraftToAlarmJson),
-    };
-
-    onSave(data);
+    });
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -323,19 +303,16 @@ export default function EventEditForm({
       <div
         className={cn(
           'bg-background rounded-lg shadow-xl border border-border',
-          'w-full max-w-lg mx-4 flex flex-col',
-          'max-h-[90vh]',
+          'w-full max-w-lg mx-4 flex flex-col max-h-[90vh]',
         )}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Calendar color accent */}
         <div className="h-1.5 w-full rounded-t-lg shrink-0" style={{ backgroundColor: selectedCal?.color ?? '#0082C9' }} />
 
         <form onSubmit={handleSubmit} className="flex flex-col min-h-0">
-          {/* Scrollable body */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-5 min-h-0">
+          <div className="flex-1 overflow-y-auto p-5 space-y-4 min-h-0">
 
-            {/* Calendar selector — only shown when creating with multiple calendars */}
+            {/* Calendar selector */}
             {isNew && calendars.length > 1 && (
               <FormSection title="Calendar">
                 <select
@@ -350,7 +327,7 @@ export default function EventEditForm({
               </FormSection>
             )}
 
-            {/* Summary */}
+            {/* Title */}
             <FormSection title="Title">
               <input
                 type="text"
@@ -360,12 +337,10 @@ export default function EventEditForm({
                 className={cn(inputCls, summaryError && 'border-destructive ring-destructive')}
                 autoFocus
               />
-              {summaryError && (
-                <p className="text-xs text-destructive">Title is required</p>
-              )}
+              {summaryError && <p className="text-xs text-destructive">Title is required</p>}
             </FormSection>
 
-            {/* All-day + dates */}
+            {/* When */}
             <FormSection title="When">
               <label className="flex items-center gap-2 text-sm cursor-pointer">
                 <input
@@ -377,7 +352,7 @@ export default function EventEditForm({
                 All day
               </label>
 
-              <div className="grid grid-cols-2 gap-3 mt-2">
+              <div className="grid grid-cols-2 gap-3 mt-1">
                 <div>
                   <label className={labelCls}>Start</label>
                   <input
@@ -400,77 +375,91 @@ export default function EventEditForm({
                   />
                 </div>
               </div>
-
-              {!allDay && (
-                <div className="mt-2">
-                  <label className={labelCls}>Timezone</label>
-                  <select
-                    value={tzid}
-                    onChange={(e) => handleTzChange(e.target.value)}
-                    className={inputCls}
-                  >
-                    {TZ_LIST.map((tz) => (
-                      <option key={tz} value={tz}>{tz}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
             </FormSection>
 
-            {/* Location */}
-            <FormSection title="Location">
-              <input
-                type="text"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="Add a location"
-                className={inputCls}
-              />
-            </FormSection>
-
-            {/* Description */}
-            <FormSection title="Description">
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Add a description"
-                rows={3}
-                className={cn(inputCls, 'resize-none')}
-              />
-            </FormSection>
-
-            {/* Alarms */}
-            <FormSection
-              title="Reminders"
-              action={
-                <button
-                  type="button"
-                  onClick={addAlarm}
-                  className="flex items-center gap-1 text-xs text-primary hover:underline"
-                >
-                  <Plus className="h-3 w-3" /> Add
-                </button>
-              }
+            {/* More / Less toggle */}
+            <button
+              type="button"
+              onClick={() => setShowMore((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground w-full"
             >
-              {alarms.length === 0 && (
-                <p className="text-xs text-muted-foreground">No reminders — other CalDAV clients will fire them.</p>
-              )}
-              {alarms.map((alarm, i) => (
-                <AlarmRow
-                  key={i}
-                  alarm={alarm}
-                  onChange={(patch) => updateAlarm(i, patch)}
-                  onRemove={() => removeAlarm(i)}
-                />
-              ))}
-            </FormSection>
+              {showMore ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              {showMore ? 'Less' : 'More options'}
+            </button>
+
+            {/* Expanded section */}
+            {showMore && (
+              <div className="space-y-4">
+                {/* Timezone */}
+                {!allDay && (
+                  <FormSection title="Timezone">
+                    <select
+                      value={tzid}
+                      onChange={(e) => setTzid(e.target.value)}
+                      className={inputCls}
+                    >
+                      {TZ_LIST.map((tz) => (
+                        <option key={tz} value={tz}>{tz}</option>
+                      ))}
+                    </select>
+                  </FormSection>
+                )}
+
+                {/* Location */}
+                <FormSection title="Location">
+                  <input
+                    type="text"
+                    value={location}
+                    onChange={(e) => setLocation(e.target.value)}
+                    placeholder="Add a location"
+                    className={inputCls}
+                  />
+                </FormSection>
+
+                {/* Description */}
+                <FormSection title="Description">
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Add a description"
+                    rows={3}
+                    className={cn(inputCls, 'resize-none')}
+                  />
+                </FormSection>
+
+                {/* Reminders */}
+                <FormSection
+                  title="Reminders"
+                  action={
+                    <button
+                      type="button"
+                      onClick={addAlarm}
+                      className="flex items-center gap-1 text-xs text-primary hover:underline"
+                    >
+                      <Plus className="h-3 w-3" /> Add
+                    </button>
+                  }
+                >
+                  {alarms.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      Reminders are fired by your other CalDAV clients (phone, desktop).
+                    </p>
+                  )}
+                  {alarms.map((alarm, i) => (
+                    <AlarmRow
+                      key={i}
+                      alarm={alarm}
+                      onChange={(patch) => updateAlarm(i, patch)}
+                      onRemove={() => removeAlarm(i)}
+                    />
+                  ))}
+                </FormSection>
+              </div>
+            )}
           </div>
 
           {/* Footer */}
-          <div className={cn(
-            'flex items-center justify-between gap-3 px-6 py-4',
-            'border-t border-border shrink-0',
-          )}>
+          <div className="flex items-center justify-between gap-3 px-5 py-4 border-t border-border shrink-0">
             <div>
               {!isNew && onDelete && (
                 <button
@@ -517,84 +506,66 @@ function AlarmRow({
   onChange: (patch: Partial<AlarmDraft>) => void;
   onRemove: () => void;
 }) {
+  // Absolute triggers (from existing events) are displayed read-only.
+  if (alarm.triggerType === 'absolute') {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+        <span className="text-xs text-muted-foreground">
+          {alarm.action === 'EMAIL' ? 'Email' : 'Notification'} at {formatAbsoluteTrigger(alarm.absoluteStr)}
+        </span>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  // Relative trigger (the only type users can create).
+  const beforeLabel = alarm.before ? 'before start' : 'after start';
+
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-border p-3 relative">
+    <div className="flex items-center gap-2 flex-wrap rounded-md border border-border px-3 py-2">
+      <select
+        value={alarm.action}
+        onChange={(e) => onChange({ action: e.target.value as 'DISPLAY' | 'EMAIL' })}
+        className={smallSelectCls}
+      >
+        <option value="DISPLAY">Notification</option>
+        <option value="EMAIL">Email</option>
+      </select>
+
+      <input
+        type="number"
+        min={1}
+        value={alarm.n}
+        onChange={(e) => onChange({ n: Math.max(1, parseInt(e.target.value) || 1) })}
+        className={cn(smallSelectCls, 'w-16')}
+      />
+
+      <select
+        value={alarm.unit}
+        onChange={(e) => onChange({ unit: e.target.value as TriggerUnit })}
+        className={smallSelectCls}
+      >
+        <option value="minutes">min</option>
+        <option value="hours">hr</option>
+        <option value="days">day(s)</option>
+        <option value="weeks">week(s)</option>
+      </select>
+
+      <span className="text-xs text-muted-foreground">{beforeLabel}</span>
+
       <button
         type="button"
         onClick={onRemove}
-        className="absolute top-2 right-2 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+        className="ml-auto rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0"
       >
         <Trash2 className="h-3.5 w-3.5" />
       </button>
-
-      <div className="flex gap-2 flex-wrap pr-6">
-        {/* Action */}
-        <select
-          value={alarm.action}
-          onChange={(e) => onChange({ action: e.target.value as 'DISPLAY' | 'EMAIL' })}
-          className={smallSelectCls}
-        >
-          <option value="DISPLAY">Notification</option>
-          <option value="EMAIL">Email</option>
-        </select>
-
-        {/* Trigger type */}
-        <select
-          value={alarm.triggerType}
-          onChange={(e) => onChange({ triggerType: e.target.value as 'relative' | 'absolute' })}
-          className={smallSelectCls}
-        >
-          <option value="relative">Relative</option>
-          <option value="absolute">Absolute time</option>
-        </select>
-      </div>
-
-      {alarm.triggerType === 'relative' ? (
-        <div className="flex gap-2 flex-wrap items-center">
-          <input
-            type="number"
-            min={1}
-            value={alarm.n}
-            onChange={(e) => onChange({ n: Math.max(1, parseInt(e.target.value) || 1) })}
-            className={cn(smallSelectCls, 'w-16')}
-          />
-          <select
-            value={alarm.unit}
-            onChange={(e) => onChange({ unit: e.target.value as TriggerUnit })}
-            className={smallSelectCls}
-          >
-            <option value="minutes">minute(s)</option>
-            <option value="hours">hour(s)</option>
-            <option value="days">day(s)</option>
-            <option value="weeks">week(s)</option>
-          </select>
-          <select
-            value={alarm.before ? 'before' : 'after'}
-            onChange={(e) => onChange({ before: e.target.value === 'before' })}
-            className={smallSelectCls}
-          >
-            <option value="before">before</option>
-            <option value="after">after</option>
-          </select>
-          <span className="text-xs text-muted-foreground">start</span>
-        </div>
-      ) : (
-        <input
-          type="datetime-local"
-          value={alarm.absoluteStr}
-          onChange={(e) => onChange({ absoluteStr: e.target.value })}
-          className={cn(inputCls, 'text-sm')}
-        />
-      )}
-
-      {/* Optional description override */}
-      <input
-        type="text"
-        value={alarm.description}
-        onChange={(e) => onChange({ description: e.target.value })}
-        placeholder="Description (defaults to event title)"
-        className={cn(inputCls, 'text-xs')}
-      />
     </div>
   );
 }
