@@ -24,6 +24,7 @@ export interface AddressBook {
   id: string;
   url: string;
   displayName: string;
+  description: string;
   color: string;
   ctag: string;
   syncToken: string;
@@ -33,11 +34,35 @@ export interface Calendar {
   id: string;
   url: string;
   displayName: string;
+  description: string;
   color: string;
   ctag: string;
   syncToken: string;
   components: string[]; // ['VEVENT', 'VTODO', …]
   timezone: string;
+}
+
+export interface CreateAddressBookRequest {
+  displayName: string;
+  description?: string;
+}
+
+export interface UpdateAddressBookRequest {
+  displayName: string;
+  description?: string;
+}
+
+export interface CreateCalendarRequest {
+  displayName: string;
+  description?: string;
+  color: string;
+  components: string[];
+}
+
+export interface UpdateCalendarRequest {
+  displayName: string;
+  description?: string;
+  color: string;
 }
 
 // ── Contacts ──────────────────────────────────────────────────────────────────

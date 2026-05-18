@@ -1,11 +1,33 @@
-import type { AddressBook, Calendar, Contact, CalendarEvent, EventJson, EventWriteResponse, RecurrenceScope } from '@dave/shared';
+import type {
+  AddressBook, Calendar, Contact, CalendarEvent, EventJson, EventWriteResponse, RecurrenceScope,
+  CreateAddressBookRequest, UpdateAddressBookRequest,
+  CreateCalendarRequest, UpdateCalendarRequest,
+} from '@dave/shared';
 import { apiFetch } from './client';
 
 export const getAddressBooks = (): Promise<AddressBook[]> =>
   apiFetch<AddressBook[]>('/api/addressbooks');
 
+export const createAddressBook = (data: CreateAddressBookRequest): Promise<AddressBook[]> =>
+  apiFetch<AddressBook[]>('/api/addressbooks', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateAddressBook = (id: string, data: UpdateAddressBookRequest): Promise<AddressBook[]> =>
+  apiFetch<AddressBook[]>(`/api/addressbooks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+
+export const deleteAddressBook = (id: string): Promise<null> =>
+  apiFetch<null>(`/api/addressbooks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
 export const getCalendars = (): Promise<Calendar[]> =>
   apiFetch<Calendar[]>('/api/calendars');
+
+export const createCalendar = (data: CreateCalendarRequest): Promise<Calendar[]> =>
+  apiFetch<Calendar[]>('/api/calendars', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateCalendar = (id: string, data: UpdateCalendarRequest): Promise<Calendar[]> =>
+  apiFetch<Calendar[]>(`/api/calendars/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(data) });
+
+export const deleteCalendar = (id: string): Promise<null> =>
+  apiFetch<null>(`/api/calendars/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 export const getContacts = (addressBookId: string): Promise<Contact[]> =>
   apiFetch<Contact[]>(`/api/addressbooks/${encodeURIComponent(addressBookId)}/contacts`);

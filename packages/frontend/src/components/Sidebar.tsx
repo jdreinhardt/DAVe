@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BookUser, Calendar, Check, LogOut, RefreshCw, Settings } from 'lucide-react';
+import { BookUser, Calendar, Check, LogOut, Pencil, Plus, RefreshCw, Settings } from 'lucide-react';
 import SettingsModal from './SettingsModal';
+import AddressBookModal from './AddressBookModal';
+import CalendarModal from './CalendarModal';
 import { cn } from '../lib/utils';
 import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
@@ -19,6 +21,7 @@ interface SidebarProps {
 export default function Sidebar({ me }: SidebarProps) {
   const queryClient = useQueryClient();
   const [showSettings, setShowSettings] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
 
   const abQuery = useQuery({
     queryKey: ['addressbooks'],
@@ -87,31 +90,52 @@ export default function Sidebar({ me }: SidebarProps) {
         />
       )}
 
-      {/* Footer: logged-in user + settings + logout */}
-      <div className="mt-auto border-t border-border px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-muted-foreground truncate">{me.displayName || me.username}</span>
-          <div className="flex items-center gap-1.5">
+
+      {/* Bottom: create button (when in a collection view) + footer */}
+      <div className="mt-auto">
+        {(inContacts || inCalendar) && (
+          <div className="px-2 pb-1">
             <button
-              onClick={() => setShowSettings(true)}
-              title="Settings"
-              className="text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setShowCreate(true)}
+              className="flex items-center gap-1.5 w-full rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
             >
-              <Settings className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
+              {inContacts ? 'New address book' : 'New calendar'}
             </button>
-            <button
-              onClick={() => logoutMutation.mutate()}
-              disabled={logoutMutation.isPending}
-              title="Sign out"
-              className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
+          </div>
+        )}
+
+        <div className="border-t border-border px-4 py-3">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground truncate">{me.displayName || me.username}</span>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowSettings(true)}
+                title="Settings"
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => logoutMutation.mutate()}
+                disabled={logoutMutation.isPending}
+                title="Sign out"
+                className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+              >
+                <LogOut className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showCreate && inContacts && (
+        <AddressBookModal mode="create" onClose={() => setShowCreate(false)} />
+      )}
+      {showCreate && inCalendar && (
+        <CalendarModal mode="create" onClose={() => setShowCreate(false)} />
+      )}
     </aside>
   );
 }
@@ -166,6 +190,7 @@ function CollectionSection({
   const { dragging } = useContactDrag();
   const isDraggingContact = kind === 'addressbook' && dragging !== null;
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [editingItem, setEditingItem] = useState<AddressBook | CalendarType | null>(null);
 
   const hidden = kind === 'addressbook' ? hiddenAddressBooks : hiddenCalendars;
   const toggle = kind === 'addressbook' ? toggleAddressBook : toggleCalendar;
@@ -179,6 +204,7 @@ function CollectionSection({
 
   return (
     <div className="px-2 py-2">
+      {/* Section header */}
       <div className="group flex items-center justify-between px-3 mb-1">
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
@@ -203,6 +229,7 @@ function CollectionSection({
           </div>
         )}
       </div>
+
       {isError && (
         <p className="px-3 text-xs text-destructive">Failed to load</p>
       )}
@@ -213,18 +240,19 @@ function CollectionSection({
           ))}
         </div>
       )}
+
       {items?.map((item) => {
         const isSameAb = isDraggingContact && dragging!.contact.addressBookId === item.id;
         const isOver = dropTargetId === item.id;
 
         return (
-          <label
+          <div
             key={item.id}
             onDragOver={isDraggingContact && !isSameAb ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropTargetId(item.id); } : undefined}
             onDragLeave={isDraggingContact ? () => setDropTargetId(null) : undefined}
             onDrop={isDraggingContact && !isSameAb ? (e) => { e.preventDefault(); setDropTargetId(null); dragging!.onMove(item.id); } : undefined}
             className={cn(
-              'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer group transition-colors',
+              'group/item flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors',
               isOver
                 ? 'bg-primary/15 ring-1 ring-primary/40'
                 : isDraggingContact && !isSameAb
@@ -233,29 +261,57 @@ function CollectionSection({
               isSameAb && isDraggingContact && 'opacity-40',
             )}
           >
-            <input
-              type="checkbox"
-              className="sr-only"
-              checked={!hidden.has(item.id)}
-              onChange={() => toggle(item.id)}
-            />
-            <span
-              className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
-              style={{
-                backgroundColor: hidden.has(item.id) ? 'transparent' : (item.color || defaultColor),
-                borderColor: item.color || defaultColor,
-              }}
+            {/* Checkbox label occupies all available space */}
+            <label className="flex flex-1 items-center gap-2 cursor-pointer min-w-0">
+              <input
+                type="checkbox"
+                className="sr-only"
+                checked={!hidden.has(item.id)}
+                onChange={() => toggle(item.id)}
+              />
+              <span
+                className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+                style={{
+                  backgroundColor: hidden.has(item.id) ? 'transparent' : (item.color || defaultColor),
+                  borderColor: item.color || defaultColor,
+                }}
+              >
+                {!hidden.has(item.id) && (
+                  <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+                )}
+              </span>
+              <span className={cn('truncate', hidden.has(item.id) && 'text-muted-foreground line-through')}>
+                {item.displayName}
+              </span>
+            </label>
+
+            {/* Edit button — visible on row hover */}
+            <button
+              onClick={() => setEditingItem(item)}
+              title={`Edit ${item.displayName}`}
+              className="shrink-0 opacity-0 group-hover/item:opacity-100 text-muted-foreground hover:text-foreground transition-all"
             >
-              {!hidden.has(item.id) && (
-                <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
-              )}
-            </span>
-            <span className={cn('truncate', hidden.has(item.id) && 'text-muted-foreground line-through')}>
-              {item.displayName}
-            </span>
-          </label>
+              <Pencil className="h-3 w-3" />
+            </button>
+          </div>
         );
       })}
+
+      {/* Edit modals */}
+      {editingItem && kind === 'addressbook' && (
+        <AddressBookModal
+          mode="edit"
+          addressBook={editingItem as AddressBook}
+          onClose={() => setEditingItem(null)}
+        />
+      )}
+      {editingItem && kind === 'calendar' && (
+        <CalendarModal
+          mode="edit"
+          calendar={editingItem as CalendarType}
+          onClose={() => setEditingItem(null)}
+        />
+      )}
     </div>
   );
 }

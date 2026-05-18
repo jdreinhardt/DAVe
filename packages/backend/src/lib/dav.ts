@@ -4,7 +4,7 @@ import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
 import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson } from '@dave/shared';
-import type { RecurrenceScope } from '@dave/shared';
+import type { RecurrenceScope, CreateAddressBookRequest, UpdateAddressBookRequest, CreateCalendarRequest, UpdateCalendarRequest } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
 import { parseIcalEvents, serializeIcalEvent, injectException, addExdate, truncateRrule, updateMasterVevent } from './ical.js';
 
@@ -13,11 +13,12 @@ import { parseIcalEvents, serializeIcalEvent, injectException, addExdate, trunca
 const _req = createRequire(import.meta.url);
 const {
   DAVClient,
-  fetchAddressBooks: _fetchAddressBooks,
   fetchCalendars: _fetchCalendars,
   fetchCalendarObjects: _fetchCalendarObjects,
   fetchVCards: _fetchVCards,
   getBasicAuthHeaders: _getBasicAuthHeaders,
+  propfind: _propfind,
+  DAVNamespaceShort,
 } = _req('tsdav') as typeof TsdavTypes;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -119,6 +120,7 @@ export async function listCalendars(
     id: collectionId(cal.url),
     url: cal.url,
     displayName: str(cal.displayName, cal.url),
+    description: str((cal as Record<string, unknown>).description, ''),
     color: str(cal.calendarColor, '#0082C9'),
     ctag: str(cal.ctag),
     syncToken: str(cal.syncToken),
@@ -132,16 +134,42 @@ export async function listAddressBooks(
   config: Config,
 ): Promise<AddressBook[]> {
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
-  const davBooks = await _fetchAddressBooks({ account: cardAccount(session, config), headers: authHeaders });
+  const account = cardAccount(session, config);
 
-  return davBooks.map((book) => ({
-    id: collectionId(book.url),
-    url: book.url,
-    displayName: str(book.displayName, book.url),
-    color: '#6C757D',
-    ctag: str(book.ctag),
-    syncToken: str(book.syncToken),
-  }));
+  // Use a direct PROPFIND so we can request addressbook-description, which
+  // fetchAddressBooks() does not include in its default prop set.
+  const results = await _propfind({
+    url: account.homeUrl ?? '',
+    props: {
+      [`${DAVNamespaceShort.DAV}:displayname`]: {},
+      [`${DAVNamespaceShort.CALENDAR_SERVER}:getctag`]: {},
+      [`${DAVNamespaceShort.DAV}:resourcetype`]: {},
+      [`${DAVNamespaceShort.DAV}:sync-token`]: {},
+      [`${DAVNamespaceShort.CARDDAV}:addressbook-description`]: {},
+    },
+    depth: '1',
+    headers: authHeaders,
+  });
+
+  return (results as TsdavTypes.DAVResponse[])
+    .filter((r) => {
+      const rt = (r.props as Record<string, unknown> | undefined)?.resourcetype;
+      return rt && typeof rt === 'object' && 'addressbook' in (rt as object);
+    })
+    .map((rs) => {
+      const props = (rs.props ?? {}) as Record<string, unknown>;
+      const rawUrl = typeof rs.href === 'string' ? rs.href : '';
+      const fullUrl = new URL(rawUrl, account.rootUrl ?? config.BAIKAL_BASE_URL).href;
+      return {
+        id: collectionId(fullUrl),
+        url: fullUrl,
+        displayName: str(props.displayname, fullUrl),
+        description: str(props.addressbookDescription, ''),
+        color: '#6C757D',
+        ctag: str(props.getctag),
+        syncToken: str(props.syncToken),
+      };
+    });
 }
 
 export async function fetchContacts(
@@ -579,4 +607,189 @@ export async function deleteEventScoped(
   }
 
   await putRawIcs(session, url, modifiedIcs, freshEtag);
+}
+
+// ── Collection management (create / update / delete) ──────────────────────────
+
+function escapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Apple CalDAV color format is #RRGGBBAA; append full-opacity alpha if needed.
+function toCalendarColor(hex: string): string {
+  const h = hex.startsWith('#') ? hex : `#${hex}`;
+  return h.length === 7 ? `${h}FF` : h;
+}
+
+export async function createAddressBook(
+  session: SessionData,
+  req: CreateAddressBookRequest,
+  _config: Config,
+): Promise<{ id: string; url: string }> {
+  const slug = crypto.randomUUID().replace(/-/g, '');
+  const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${slug}/`;
+
+  const descXml = req.description
+    ? `<C:addressbook-description>${escapeXml(req.description)}</C:addressbook-description>`
+    : '';
+
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
+<D:mkcol xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:set>
+    <D:prop>
+      <D:resourcetype><D:collection/><C:addressbook/></D:resourcetype>
+      <D:displayname>${escapeXml(req.displayName)}</D:displayname>
+      ${descXml}
+    </D:prop>
+  </D:set>
+</D:mkcol>`;
+
+  const res = await fetch(url, {
+    method: 'MKCOL',
+    headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw Object.assign(new Error(`MKCOL failed: ${res.status}`), { statusCode: res.status, body: text });
+  }
+
+  return { id: slug, url };
+}
+
+export async function updateAddressBook(
+  session: SessionData,
+  id: string,
+  req: UpdateAddressBookRequest,
+  _config: Config,
+): Promise<void> {
+  const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${id}/`;
+  const descXml = req.description !== undefined
+    ? `<C:addressbook-description>${escapeXml(req.description)}</C:addressbook-description>`
+    : '';
+
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:set>
+    <D:prop>
+      <D:displayname>${escapeXml(req.displayName)}</D:displayname>
+      ${descXml}
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`;
+
+  const res = await fetch(url, {
+    method: 'PROPPATCH',
+    headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PROPPATCH failed: ${res.status}`), { statusCode: res.status, body: text });
+  }
+}
+
+export async function deleteAddressBook(
+  session: SessionData,
+  id: string,
+  _config: Config,
+): Promise<void> {
+  const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${id}/`;
+  const res = await fetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
+
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text().catch(() => '');
+    throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body: text });
+  }
+}
+
+export async function createCalendar(
+  session: SessionData,
+  req: CreateCalendarRequest,
+  _config: Config,
+): Promise<{ id: string; url: string }> {
+  const slug = crypto.randomUUID().replace(/-/g, '');
+  const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${slug}/`;
+
+  const descXml = req.description
+    ? `<C:calendar-description>${escapeXml(req.description)}</C:calendar-description>`
+    : '';
+  const components = (req.components.length > 0 ? req.components : ['VEVENT'])
+    .map((c) => `<C:comp name="${escapeXml(c)}"/>`)
+    .join('');
+
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
+<C:mkcalendar xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:D="DAV:" xmlns:A="http://apple.com/ns/ical/">
+  <D:set>
+    <D:prop>
+      <D:displayname>${escapeXml(req.displayName)}</D:displayname>
+      ${descXml}
+      <C:supported-calendar-component-set>${components}</C:supported-calendar-component-set>
+      <A:calendar-color>${escapeXml(toCalendarColor(req.color))}</A:calendar-color>
+    </D:prop>
+  </D:set>
+</C:mkcalendar>`;
+
+  const res = await fetch(url, {
+    method: 'MKCALENDAR',
+    headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw Object.assign(new Error(`MKCALENDAR failed: ${res.status}`), { statusCode: res.status, body: text });
+  }
+
+  return { id: slug, url };
+}
+
+export async function updateCalendar(
+  session: SessionData,
+  id: string,
+  req: UpdateCalendarRequest,
+  _config: Config,
+): Promise<void> {
+  const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${id}/`;
+  const descXml = req.description !== undefined
+    ? `<C:calendar-description>${escapeXml(req.description)}</C:calendar-description>`
+    : '';
+
+  const body = `<?xml version="1.0" encoding="UTF-8"?>
+<D:propertyupdate xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav" xmlns:A="http://apple.com/ns/ical/">
+  <D:set>
+    <D:prop>
+      <D:displayname>${escapeXml(req.displayName)}</D:displayname>
+      ${descXml}
+      <A:calendar-color>${escapeXml(toCalendarColor(req.color))}</A:calendar-color>
+    </D:prop>
+  </D:set>
+</D:propertyupdate>`;
+
+  const res = await fetch(url, {
+    method: 'PROPPATCH',
+    headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PROPPATCH failed: ${res.status}`), { statusCode: res.status, body: text });
+  }
+}
+
+export async function deleteCalendar(
+  session: SessionData,
+  id: string,
+  _config: Config,
+): Promise<void> {
+  const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${id}/`;
+  const res = await fetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
+
+  if (!res.ok && res.status !== 404) {
+    const text = await res.text().catch(() => '');
+    throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body: text });
+  }
 }
