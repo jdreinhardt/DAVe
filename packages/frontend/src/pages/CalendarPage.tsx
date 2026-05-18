@@ -6,7 +6,7 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import type { EventInput, DatesSetArg, EventClickArg } from '@fullcalendar/core';
 import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2 } from 'lucide-react';
-import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson } from '@dave/shared';
+import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope } from '@dave/shared';
 import {
   getCalendars,
   getCalendarEvents,
@@ -195,6 +195,7 @@ interface EditModalState {
   initialEnd: string;
   allDay: boolean;
   calendarId: string;
+  editScope?: RecurrenceScope; // set when user already chose a scope via dialog
 }
 
 // ── Error helper ──────────────────────────────────────────────────────────────
@@ -220,6 +221,16 @@ export default function CalendarPage() {
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CalendarEvent | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
+
+  // Pending scope confirmation: when a recurring event is about to be edited or
+  // deleted, we park the action here and show the scope dialog first.
+  const [pendingScopeAction, setPendingScopeAction] = useState<{
+    verb: 'edit' | 'delete';
+    calendarEvent: CalendarEvent;
+    // For edit-via-drag: the new EventJson to save after scope is chosen.
+    pendingData?: EventJson;
+    revert?: () => void;
+  } | null>(null);
 
   const calQuery = useQuery({
     queryKey: ['calendars'],
@@ -264,10 +275,13 @@ export default function CalendarPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ ev, data }: { ev: CalendarEvent; data: EventJson }) =>
-      updateCalendarEvent(ev.id, data, ev.etag),
+    mutationFn: ({ ev, data, scope }: { ev: CalendarEvent; data: EventJson; scope?: RecurrenceScope }) =>
+      updateCalendarEvent(ev.id, data, ev.etag, scope),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['events', result.calendarId] });
+      if (result.continuation) {
+        queryClient.invalidateQueries({ queryKey: ['events', result.continuation.calendarId] });
+      }
       setEditModal(null);
       setPopup(null);
       showToast('Event saved');
@@ -276,9 +290,16 @@ export default function CalendarPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (ev: CalendarEvent) =>
-      deleteCalendarEvent(ev.id, ev.calendarId, ev.etag),
-    onSuccess: (_, ev) => {
+    mutationFn: ({ ev, scope }: { ev: CalendarEvent; scope?: RecurrenceScope }) =>
+      deleteCalendarEvent(
+        ev.id,
+        ev.calendarId,
+        ev.etag,
+        scope,
+        ev.data.recurrenceId ?? undefined,
+        ev.data.allDay,
+      ),
+    onSuccess: (_, { ev }) => {
       queryClient.invalidateQueries({ queryKey: ['events', ev.calendarId] });
       setDeleteTarget(null);
       setPopup(null);
@@ -313,6 +334,35 @@ export default function CalendarPage() {
       }));
     });
   }, [visibleCalendars, eventQueries]);
+
+  // ── Scope dialog confirm ──────────────────────────────────────────────────
+
+  const handleScopeConfirm = (scope: RecurrenceScope) => {
+    if (!pendingScopeAction) return;
+    const { verb, calendarEvent, pendingData, revert } = pendingScopeAction;
+    setPendingScopeAction(null);
+
+    if (verb === 'delete') {
+      deleteMutation.mutate({ ev: calendarEvent, scope }, { onError: () => revert?.() });
+    } else {
+      // edit — either from modal or drag/resize
+      if (pendingData) {
+        updateMutation.mutate({ ev: calendarEvent, data: pendingData, scope }, {
+          onError: () => revert?.(),
+        });
+      } else {
+        // Open the edit modal with scope pre-chosen
+        setEditModal({
+          calendarEvent,
+          initialStart: calendarEvent.data.start,
+          initialEnd: calendarEvent.data.end,
+          allDay: calendarEvent.data.allDay,
+          calendarId: calendarEvent.calendarId,
+          editScope: scope,
+        });
+      }
+    }
+  };
 
   // ── FullCalendar handlers ─────────────────────────────────────────────────
 
@@ -371,6 +421,12 @@ export default function CalendarPage() {
       allDay: arg.event.allDay,
     };
 
+    const isRecurring = !!eventData.recurrenceRule || !!eventData.recurrenceId;
+    if (isRecurring) {
+      setPendingScopeAction({ verb: 'edit', calendarEvent, pendingData: newData, revert: () => arg.revert() });
+      return;
+    }
+
     updateMutation.mutate({ ev: calendarEvent, data: newData }, {
       onError: () => arg.revert(),
     });
@@ -390,6 +446,12 @@ export default function CalendarPage() {
       end: arg.event.endStr || arg.event.startStr,
     };
 
+    const isRecurring = !!eventData.recurrenceRule || !!eventData.recurrenceId;
+    if (isRecurring) {
+      setPendingScopeAction({ verb: 'edit', calendarEvent, pendingData: newData, revert: () => arg.revert() });
+      return;
+    }
+
     updateMutation.mutate({ ev: calendarEvent, data: newData }, {
       onError: () => arg.revert(),
     });
@@ -399,18 +461,34 @@ export default function CalendarPage() {
 
   const handleSave = (data: EventJson) => {
     if (editModal?.calendarEvent) {
-      updateMutation.mutate({ ev: editModal.calendarEvent, data });
+      const ev = editModal.calendarEvent;
+      const isRecurring = !!ev.data.recurrenceRule || !!ev.data.recurrenceId;
+      const scope = editModal.editScope;
+      if (isRecurring && !scope) {
+        // Need scope — park this data and show dialog
+        setPendingScopeAction({ verb: 'edit', calendarEvent: ev, pendingData: data });
+        setEditModal(null);
+        return;
+      }
+      updateMutation.mutate({ ev, data, scope });
     } else {
       createMutation.mutate({ calId: data.calendarId || editModal?.calendarId || '', data });
     }
   };
 
   const handleDeleteRequest = (ev: CalendarEvent) => {
-    setDeleteTarget(ev);
+    const isRecurring = !!ev.data.recurrenceRule || !!ev.data.recurrenceId;
+    if (isRecurring) {
+      setPopup(null);
+      setEditModal(null);
+      setPendingScopeAction({ verb: 'delete', calendarEvent: ev });
+    } else {
+      setDeleteTarget(ev);
+    }
   };
 
   const handleDeleteConfirm = () => {
-    if (deleteTarget) deleteMutation.mutate(deleteTarget);
+    if (deleteTarget) deleteMutation.mutate({ ev: deleteTarget, scope: 'all' });
   };
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
@@ -460,14 +538,20 @@ export default function CalendarPage() {
           calendar={popup.calendar}
           onClose={() => setPopup(null)}
           onEdit={() => {
-            setEditModal({
-              calendarEvent: popup.calendarEvent,
-              initialStart: popup.calendarEvent.data.start,
-              initialEnd: popup.calendarEvent.data.end,
-              allDay: popup.calendarEvent.data.allDay,
-              calendarId: popup.calendarEvent.calendarId,
-            });
+            const ev = popup.calendarEvent;
+            const isRecurring = !!ev.data.recurrenceRule || !!ev.data.recurrenceId;
             setPopup(null);
+            if (isRecurring) {
+              setPendingScopeAction({ verb: 'edit', calendarEvent: ev });
+            } else {
+              setEditModal({
+                calendarEvent: ev,
+                initialStart: ev.data.start,
+                initialEnd: ev.data.end,
+                allDay: ev.data.allDay,
+                calendarId: ev.calendarId,
+              });
+            }
           }}
           onDelete={() => handleDeleteRequest(popup.calendarEvent)}
         />
@@ -477,13 +561,18 @@ export default function CalendarPage() {
       {editModal && (
         <EventEditForm
           initial={
-            editModal.calendarEvent?.data ??
-            emptyEventJson(
-              editModal.calendarId,
-              editModal.initialStart,
-              editModal.initialEnd,
-              editModal.allDay,
-            )
+            editModal.calendarEvent
+              // scope=all: present the master (strip recurrenceId so the
+              // RecurrenceEditor is enabled and no RECURRENCE-ID is written back)
+              ? editModal.editScope === 'all'
+                ? { ...editModal.calendarEvent.data, recurrenceId: null }
+                : editModal.calendarEvent.data
+              : emptyEventJson(
+                  editModal.calendarId,
+                  editModal.initialStart,
+                  editModal.initialEnd,
+                  editModal.allDay,
+                )
           }
           calendars={calQuery.data ?? []}
           selectedCalendarId={editModal.calendarId}
@@ -528,6 +617,18 @@ export default function CalendarPage() {
         </div>
       )}
 
+      {/* Recurrence scope dialog */}
+      {pendingScopeAction && (
+        <RecurrenceScopeDialog
+          verb={pendingScopeAction.verb}
+          onConfirm={handleScopeConfirm}
+          onCancel={() => {
+            pendingScopeAction.revert?.();
+            setPendingScopeAction(null);
+          }}
+        />
+      )}
+
       {/* Toast */}
       {toast && (
         <div
@@ -541,6 +642,73 @@ export default function CalendarPage() {
           {toast.msg}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Recurrence scope dialog ───────────────────────────────────────────────────
+
+function RecurrenceScopeDialog({
+  verb,
+  onConfirm,
+  onCancel,
+}: {
+  verb: 'edit' | 'delete';
+  onConfirm: (scope: RecurrenceScope) => void;
+  onCancel: () => void;
+}) {
+  const [scope, setScope] = useState<RecurrenceScope>('this');
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50"
+      onClick={onCancel}
+    >
+      <div
+        className="bg-background rounded-lg border border-border shadow-xl p-6 max-w-sm mx-4 w-full"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="font-semibold text-base mb-4">
+          {verb === 'edit' ? 'Edit recurring event?' : 'Delete recurring event?'}
+        </h3>
+        <div className="space-y-2 mb-5">
+          {(['this', 'following', 'all'] as RecurrenceScope[]).map((s) => (
+            <label key={s} className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="radio"
+                name="recurrence-scope"
+                value={s}
+                checked={scope === s}
+                onChange={() => setScope(s)}
+                className="shrink-0"
+              />
+              <span className="text-sm">
+                {s === 'this' && 'This event'}
+                {s === 'following' && 'This and following events'}
+                {s === 'all' && 'All events'}
+              </span>
+            </label>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(scope)}
+            className={cn(
+              'rounded-md px-3 py-1.5 text-sm font-medium',
+              verb === 'delete'
+                ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                : 'bg-primary text-primary-foreground hover:bg-primary/90',
+            )}
+          >
+            {verb === 'edit' ? 'Edit' : 'Delete'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

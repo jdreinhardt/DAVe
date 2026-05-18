@@ -191,9 +191,20 @@ export interface CreateEventRequest {
   data: EventJson;
 }
 
+export type RecurrenceScope = 'this' | 'following' | 'all';
+
 export interface UpdateEventRequest {
   data: EventJson;
   etag: string;
+  scope?: RecurrenceScope;
+}
+
+export interface DeleteEventRequest {
+  etag: string;
+  calendarId: string;
+  scope?: RecurrenceScope;
+  recurrenceId?: string;
+  allDay?: boolean;
 }
 
 export interface EventWriteResponse {
@@ -202,6 +213,8 @@ export interface EventWriteResponse {
   etag: string;
   calendarId: string;
   data: EventJson;
+  // Populated for scope="following": the newly-created continuation event
+  continuation?: EventWriteResponse;
 }
 
 // ── API error shape ───────────────────────────────────────────────────────────

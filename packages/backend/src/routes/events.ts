@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { DbInstance as DatabaseSync } from '../db/index.js';
 import type { Config } from '../config.js';
 import type { EventJson, UpdateEventRequest } from '@dave/shared';
-import { createEvent, updateEvent, deleteEvent } from '../lib/dav.js';
+import { createEvent, updateEvent, deleteEvent, updateEventScoped, deleteEventScoped } from '../lib/dav.js';
 import { deleteSession } from '../services/session.js';
 import { requireAuth, COOKIE_NAME } from '../plugins/session.js';
 
@@ -74,7 +74,7 @@ export async function eventsRoutes(
     '/api/events/:eventId',
     { preHandler: requireAuth },
     async (req, reply) => {
-      const { data, etag } = req.body;
+      const { data, etag, scope } = req.body;
       if (!data || !etag) {
         return reply.status(400).send({ error: 'Missing data or etag', statusCode: 400 });
       }
@@ -82,14 +82,13 @@ export async function eventsRoutes(
         return reply.status(400).send({ error: 'Missing calendarId in event data', statusCode: 400 });
       }
       try {
-        const result = await updateEvent(
-          req.sessionData!,
-          data.calendarId,
-          req.params.eventId,
-          data,
-          etag,
-          config,
-        );
+        // When a scope is explicitly provided the request involves a recurring event
+        // and must go through updateEventScoped (which preserves exceptions for
+        // scope=all and handles this/following correctly). When no scope is provided
+        // the event is non-recurring and we use the simpler updateEvent path.
+        const result = scope != null
+          ? await updateEventScoped(req.sessionData!, data.calendarId, req.params.eventId, data, etag, scope, config)
+          : await updateEvent(req.sessionData!, data.calendarId, req.params.eventId, data, etag, config);
         return reply.send(result);
       } catch (e) {
         await handleDavError(e, req, reply, app, db);
@@ -101,17 +100,32 @@ export async function eventsRoutes(
 
   app.delete<{
     Params: { eventId: string };
-    Querystring: { etag: string; calendarId: string };
+    Querystring: {
+      etag: string;
+      calendarId: string;
+      scope?: string;
+      recurrenceId?: string;
+      allDay?: string;
+    };
   }>(
     '/api/events/:eventId',
     { preHandler: requireAuth },
     async (req, reply) => {
-      const { etag, calendarId } = req.query;
+      const { etag, calendarId, scope: scopeParam, recurrenceId, allDay: allDayParam } = req.query;
       if (!etag || !calendarId) {
         return reply.status(400).send({ error: 'Missing etag or calendarId query parameter', statusCode: 400 });
       }
+      const scope = (scopeParam === 'this' || scopeParam === 'following') ? scopeParam : 'all';
+      const allDay = allDayParam === 'true';
       try {
-        await deleteEvent(req.sessionData!, calendarId, req.params.eventId, etag, config);
+        if (scope === 'all') {
+          await deleteEvent(req.sessionData!, calendarId, req.params.eventId, etag, config);
+        } else {
+          if (!recurrenceId) {
+            return reply.status(400).send({ error: 'recurrenceId required for scoped delete', statusCode: 400 });
+          }
+          await deleteEventScoped(req.sessionData!, calendarId, req.params.eventId, etag, scope, recurrenceId, allDay, config);
+        }
         return reply.status(204).send();
       } catch (e) {
         await handleDavError(e, req, reply, app, db);

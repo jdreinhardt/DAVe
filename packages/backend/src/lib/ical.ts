@@ -258,10 +258,9 @@ function parseAttendees(vevent: any): AttendeeJson[] {
 
 /**
  * Serialize an EventJson into a VCALENDAR iCalendar string suitable for PUT to
- * a CalDAV server. Only handles non-recurring events (RRULE serialization is
- * deferred to Milestone 7). Unknown properties from the original ICS are not
- * preserved here because EventJson is a normalized representation; round-trip
- * fidelity for exotic properties requires storing the raw ICS, which is M7+.
+ * a CalDAV server. Unknown properties from the original ICS are not preserved
+ * here because EventJson is a normalized representation; round-trip fidelity
+ * for exotic properties requires storing the raw ICS (see injectException).
  */
 export function serializeIcalEvent(event: EventJson): string {
   const vcal = new ICAL.Component(['vcalendar', [], []]);
@@ -334,6 +333,26 @@ export function serializeIcalEvent(event: EventJson): string {
   if (event.description) vevent.addPropertyWithValue('description', event.description);
   if (event.location) vevent.addPropertyWithValue('location', event.location);
 
+  // RRULE
+  if (event.recurrenceRule?.raw) {
+    const rruleProp = new ICAL.Property('rrule');
+    rruleProp.setValue(ICAL.Recur.fromString(event.recurrenceRule.raw));
+    vevent.addProperty(rruleProp);
+  }
+
+  // RECURRENCE-ID (exception instances only)
+  if (event.recurrenceId) {
+    if (event.allDay) {
+      const ridProp = new ICAL.Property('recurrence-id');
+      ridProp.resetType('date');
+      ridProp.setValue(ICAL.Time.fromDateString(event.recurrenceId.substring(0, 10)));
+      vevent.addProperty(ridProp);
+    } else {
+      const ridTime = ICAL.Time.fromJSDate(new Date(event.recurrenceId), true);
+      vevent.addPropertyWithValue('recurrence-id', ridTime);
+    }
+  }
+
   // VALARMs
   for (const alarm of event.alarms) {
     serializeAlarm(vevent, alarm, event.summary);
@@ -341,6 +360,256 @@ export function serializeIcalEvent(event: EventJson): string {
 
   vcal.addSubcomponent(vevent);
   return vcal.toString();
+}
+
+// ── ICS mutation helpers (for recurring instance operations) ─────────────────
+
+/**
+ * Insert or replace a RECURRENCE-ID exception VEVENT into an existing raw ICS
+ * string. The exception carries the same UID as the master but different times.
+ * Used for scope="this" edits.
+ */
+export function injectException(rawIcs: string, exception: EventJson): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let jcal: any;
+  try { jcal = ICAL.parse(rawIcs); } catch { return rawIcs; }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const comp = new ICAL.Component(jcal) as any;
+
+  const ridStr = exception.recurrenceId;
+  if (!ridStr) return rawIcs;
+
+  // Remove any existing exception with the same RECURRENCE-ID
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const existing: any[] = comp.getAllSubcomponents('vevent');
+  for (const v of existing) {
+    const rid = v.getFirstPropertyValue('recurrence-id');
+    if (!rid) continue;
+    const ridIso = rid.toJSDate ? rid.toJSDate().toISOString() : String(rid);
+    const targetIso = exception.allDay
+      ? new Date(ridStr + 'T00:00:00Z').toISOString()
+      : new Date(ridStr).toISOString();
+    if (ridIso === targetIso) {
+      comp.removeSubcomponent(v);
+      break;
+    }
+  }
+
+  // Build the exception VEVENT using serializeIcalEvent, then extract its VEVENT
+  const excIcs = serializeIcalEvent({ ...exception, recurrenceRule: null });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let excJcal: any;
+  try { excJcal = ICAL.parse(excIcs); } catch { return rawIcs; }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const excComp = new ICAL.Component(excJcal) as any;
+  const excVevent = excComp.getFirstSubcomponent('vevent');
+  if (!excVevent) return rawIcs;
+
+  comp.addSubcomponent(excVevent);
+  return comp.toString();
+}
+
+/**
+ * Add an EXDATE property to the master VEVENT, excluding the given occurrence.
+ * Used for scope="this" deletes.
+ */
+export function addExdate(rawIcs: string, occurrenceIso: string, allDay: boolean): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let jcal: any;
+  try { jcal = ICAL.parse(rawIcs); } catch { return rawIcs; }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const comp = new ICAL.Component(jcal) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const master: any = comp.getAllSubcomponents('vevent').find((v: any) => !v.hasProperty('recurrence-id'));
+  if (!master) return rawIcs;
+
+  const exdateProp = new ICAL.Property('exdate');
+  if (allDay) {
+    exdateProp.resetType('date');
+    exdateProp.setValue(ICAL.Time.fromDateString(occurrenceIso.substring(0, 10)));
+  } else {
+    exdateProp.resetType('date-time');
+    exdateProp.setValue(ICAL.Time.fromJSDate(new Date(occurrenceIso), true));
+  }
+  master.addProperty(exdateProp);
+  return comp.toString();
+}
+
+/**
+ * Set UNTIL on the master RRULE to end the series before the given occurrence.
+ * Used for scope="following" edits and deletes.
+ * beforeIso is the DTSTART of the first occurrence to be cut (exclusive).
+ *
+ * ical.js's getFirstValue() returns a decoded copy, not a mutable reference, so
+ * we cannot simply assign to rruleVal.until. Instead we manipulate the RRULE as
+ * a string and replace the property with ICAL.Recur.fromString().
+ */
+export function truncateRrule(rawIcs: string, beforeIso: string, allDay: boolean): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let jcal: any;
+  try { jcal = ICAL.parse(rawIcs); } catch { return rawIcs; }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const comp = new ICAL.Component(jcal) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const master: any = comp.getAllSubcomponents('vevent').find((v: any) => !v.hasProperty('recurrence-id'));
+  if (!master) return rawIcs;
+
+  const rruleProp = master.getFirstProperty('rrule');
+  if (!rruleProp) return rawIcs;
+
+  // Get the RRULE as a string (ICAL.Recur.toString() returns the rule text).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rruleVal: any = rruleProp.getFirstValue();
+  const rawRrule: string = String(rruleVal?.toString?.() ?? '');
+  if (!rawRrule) return rawIcs;
+
+  // Build the UNTIL value string (RFC 5545 §3.3.10).
+  let untilStr: string;
+  if (allDay) {
+    const d = new Date(beforeIso + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() - 1);
+    untilStr = d.toISOString().substring(0, 10).replace(/-/g, ''); // YYYYMMDD
+  } else {
+    const d = new Date(new Date(beforeIso).getTime() - 1000); // 1 s before
+    untilStr = [
+      d.getUTCFullYear(),
+      String(d.getUTCMonth() + 1).padStart(2, '0'),
+      String(d.getUTCDate()).padStart(2, '0'),
+      'T',
+      String(d.getUTCHours()).padStart(2, '0'),
+      String(d.getUTCMinutes()).padStart(2, '0'),
+      String(d.getUTCSeconds()).padStart(2, '0'),
+      'Z',
+    ].join('');
+  }
+
+  // Strip any existing UNTIL/COUNT, append the new UNTIL.
+  const newRrule = rawRrule
+    .replace(/;?UNTIL=[^;]*/gi, '')
+    .replace(/;?COUNT=\d+/gi, '')
+    + `;UNTIL=${untilStr}`;
+
+  // Replace the property (creates a fresh ICAL.Recur from the string).
+  master.removeProperty('rrule');
+  const newProp = new ICAL.Property('rrule');
+  newProp.setValue(ICAL.Recur.fromString(newRrule));
+  master.addProperty(newProp);
+
+  // Drop exception VEVENTs at or after the cut point.
+  const cutTime = allDay
+    ? new Date(beforeIso + 'T00:00:00Z').getTime()
+    : new Date(beforeIso).getTime();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const exceptions: any[] = comp.getAllSubcomponents('vevent').filter((v: any) => v.hasProperty('recurrence-id'));
+  for (const exc of exceptions) {
+    const rid = exc.getFirstPropertyValue('recurrence-id');
+    if (!rid) continue;
+    const ridMs = rid.toJSDate ? rid.toJSDate().getTime() : new Date(String(rid)).getTime();
+    if (ridMs >= cutTime) comp.removeSubcomponent(exc);
+  }
+
+  return comp.toString();
+}
+
+/**
+ * Replace the master VEVENT in a raw ICS with a new version built from eventData,
+ * preserving any existing exception VEVENTs (unless the RRULE changed, in which
+ * case they are cleared since they may no longer correspond to valid occurrences).
+ * Used for scope="all" edits.
+ *
+ * IMPORTANT: `event` carries times from whichever occurrence the user clicked,
+ * not from the master. We must preserve the master's original DTSTART date so
+ * earlier occurrences are not cut off. We do apply the user's duration change
+ * (e.g. 1-hour → 2-hour events) by computing DTEND = original DTSTART + Δ.
+ */
+export function updateMasterVevent(rawIcs: string, event: EventJson): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let jcal: any;
+  try { jcal = ICAL.parse(rawIcs); } catch { return serializeIcalEvent({ ...event, recurrenceId: null }); }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const comp = new ICAL.Component(jcal) as any;
+
+  // Detect RRULE change so we can decide whether to keep exceptions.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const oldMaster: any = comp.getAllSubcomponents('vevent').find((v: any) => !v.hasProperty('recurrence-id'));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const oldRruleVal: any = oldMaster?.getFirstProperty('rrule')?.getFirstValue();
+  const oldRruleStr: string = String(oldRruleVal?.toString?.() ?? '');
+  const newRruleStr: string = event.recurrenceRule?.raw ?? '';
+  const rruleChanged = oldRruleStr !== newRruleStr;
+
+  // ── Anchor start/end to the master's original DTSTART ────────────────────
+  // The passed event.start is the occurrence's date, not the master's first
+  // occurrence date. Replacing DTSTART with it would silently delete all
+  // earlier occurrences. Instead we keep the master's DTSTART and only carry
+  // over the duration delta from the user's edit.
+  let anchoredEvent: EventJson = { ...event, recurrenceId: null };
+
+  if (oldMaster) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const origDtstartVal: any = oldMaster.getFirstProperty('dtstart')?.getFirstValue();
+    if (origDtstartVal) {
+      if (event.allDay) {
+        const origDateStr = icaltimeToDateString(origDtstartVal);
+        // Preserve original start date; carry over duration (in days).
+        const durationDays = Math.round(
+          (new Date(event.end + 'T00:00:00Z').getTime() -
+           new Date(event.start + 'T00:00:00Z').getTime()) / 86_400_000,
+        );
+        const endD = new Date(origDateStr + 'T00:00:00Z');
+        endD.setUTCDate(endD.getUTCDate() + durationDays);
+        anchoredEvent = {
+          ...anchoredEvent,
+          start: origDateStr,
+          end: endD.toISOString().substring(0, 10),
+        };
+      } else {
+        // Preserve original UTC instant; carry over duration (in ms).
+        const origStartIso: string = origDtstartVal.toJSDate().toISOString();
+        const durationMs =
+          new Date(event.end).getTime() - new Date(event.start).getTime();
+        const newEndIso = new Date(new Date(origStartIso).getTime() + durationMs).toISOString();
+        anchoredEvent = { ...anchoredEvent, start: origStartIso, end: newEndIso };
+      }
+    }
+  }
+
+  // Remove the old master VEVENT.
+  if (oldMaster) comp.removeSubcomponent(oldMaster);
+
+  // If RRULE changed, also clear exception VEVENTs (they may be orphaned).
+  if (rruleChanged) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const v of comp.getAllSubcomponents('vevent') as any[]) {
+      comp.removeSubcomponent(v);
+    }
+  }
+
+  // Build fresh master VEVENT via our serializer, then transplant it.
+  const newIcs = serializeIcalEvent(anchoredEvent);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let newJcal: any;
+  try { newJcal = ICAL.parse(newIcs); } catch { return rawIcs; }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const newComp = new ICAL.Component(newJcal) as any;
+  const newVevent = newComp.getFirstSubcomponent('vevent');
+  if (!newVevent) return rawIcs;
+
+  // Refresh VTIMEZONE for the event's timezone (regenerated by serializeIcalEvent).
+  if (anchoredEvent.tzid && !anchoredEvent.allDay) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const vtz of comp.getAllSubcomponents('vtimezone') as any[]) {
+      if (vtz.getFirstPropertyValue('tzid') === anchoredEvent.tzid) {
+        comp.removeSubcomponent(vtz);
+        break;
+      }
+    }
+    const newVtz = newComp.getFirstSubcomponent('vtimezone');
+    if (newVtz) comp.addSubcomponent(newVtz);
+  }
+
+  comp.addSubcomponent(newVevent);
+  return comp.toString();
 }
 
 /**

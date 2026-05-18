@@ -4,8 +4,9 @@ import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
 import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson } from '@dave/shared';
+import type { RecurrenceScope } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
-import { parseIcalEvents, serializeIcalEvent } from './ical.js';
+import { parseIcalEvents, serializeIcalEvent, injectException, addExdate, truncateRrule, updateMasterVevent } from './ical.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
@@ -400,7 +401,8 @@ export async function updateEvent(
   etag: string,
   _config: Config,
 ): Promise<EventWriteResult> {
-  const eventData: EventJson = { ...data, calendarId };
+  // Strip recurrenceId — a master VEVENT must never carry RECURRENCE-ID.
+  const eventData: EventJson = { ...data, calendarId, recurrenceId: null };
   const icsStr = serializeIcalEvent(eventData);
   const url = calendarObjectUrl(session, calendarId, id);
 
@@ -444,4 +446,137 @@ export async function deleteEvent(
     const body = await res.text().catch(() => '');
     throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
   }
+}
+
+// ── Recurring-aware write helpers ─────────────────────────────────────────────
+
+async function fetchRawEvent(
+  session: SessionData,
+  calendarId: string,
+  id: string,
+): Promise<{ raw: string; etag: string }> {
+  const url = calendarObjectUrl(session, calendarId, id);
+  const res = await fetch(url, { headers: basicAuthHeader(session) });
+  if (!res.ok) {
+    throw Object.assign(new Error(`GET failed: ${res.status}`), { statusCode: res.status });
+  }
+  const raw = await res.text();
+  const etag = res.headers.get('ETag') ?? '';
+  return { raw, etag };
+}
+
+async function putRawIcs(
+  session: SessionData,
+  url: string,
+  ics: string,
+  etag: string,
+): Promise<string> {
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-Match': etag,
+    },
+    body: ics,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+  return res.headers.get('ETag') ?? etag;
+}
+
+/**
+ * Update a (possibly recurring) event with a recurrence scope.
+ *
+ * scope="all"       → rewrite the master VEVENT (existing behavior).
+ * scope="this"      → inject a RECURRENCE-ID exception into the existing ICS.
+ * scope="following" → truncate the original series at this occurrence and
+ *                     create a new master event continuing from this point.
+ */
+export async function updateEventScoped(
+  session: SessionData,
+  calendarId: string,
+  id: string,
+  data: EventJson,
+  etag: string,
+  scope: RecurrenceScope,
+  _config: Config,
+): Promise<EventWriteResult> {
+  const url = calendarObjectUrl(session, calendarId, id);
+
+  if (scope === 'all') {
+    // Fetch the raw ICS so we can preserve existing exception VEVENTs (unless
+    // the RRULE changes, in which case updateMasterVevent clears them).
+    const masterData: EventJson = { ...data, recurrenceId: null };
+    const { raw, etag: freshEtag } = await fetchRawEvent(session, calendarId, id);
+    const updatedIcs = updateMasterVevent(raw, masterData);
+    const newEtag = await putRawIcs(session, url, updatedIcs, freshEtag);
+    return { id, url, etag: newEtag, calendarId, data: masterData };
+  }
+
+  if (scope === 'this') {
+    const { raw, etag: freshEtag } = await fetchRawEvent(session, calendarId, id);
+    const modifiedIcs = injectException(raw, data);
+    const newEtag = await putRawIcs(session, url, modifiedIcs, freshEtag);
+    return { id, url, etag: newEtag, calendarId, data };
+  }
+
+  // scope === 'following'
+  // 1. Truncate the original series
+  const { raw, etag: freshEtag } = await fetchRawEvent(session, calendarId, id);
+  const truncatedIcs = truncateRrule(raw, data.start, data.allDay);
+  const newEtag = await putRawIcs(session, url, truncatedIcs, freshEtag);
+
+  // 2. Create a new event starting from this occurrence
+  const newUid = crypto.randomUUID();
+  const newData: EventJson = { ...data, uid: newUid, recurrenceId: null };
+  const continuationResult = await createEvent(session, calendarId, newData, _config);
+
+  const result: EventWriteResult & { continuation?: EventWriteResult } = {
+    id,
+    url,
+    etag: newEtag,
+    calendarId,
+    data: { ...data, uid: data.uid },
+    continuation: continuationResult,
+  };
+  return result;
+}
+
+/**
+ * Delete a (possibly recurring) event with a recurrence scope.
+ *
+ * scope="all"       → DELETE the entire ICS resource (existing behavior).
+ * scope="this"      → add EXDATE to master and PUT back.
+ * scope="following" → truncate the series at this occurrence and PUT back.
+ */
+export async function deleteEventScoped(
+  session: SessionData,
+  calendarId: string,
+  id: string,
+  etag: string,
+  scope: RecurrenceScope,
+  occurrenceIso: string,
+  allDay: boolean,
+  _config: Config,
+): Promise<void> {
+  if (scope === 'all') {
+    await deleteEvent(session, calendarId, id, etag, _config);
+    return;
+  }
+
+  const { raw, etag: freshEtag } = await fetchRawEvent(session, calendarId, id);
+  const url = calendarObjectUrl(session, calendarId, id);
+
+  let modifiedIcs: string;
+  if (scope === 'this') {
+    modifiedIcs = addExdate(raw, occurrenceIso, allDay);
+  } else {
+    // following
+    modifiedIcs = truncateRrule(raw, occurrenceIso, allDay);
+  }
+
+  await putRawIcs(session, url, modifiedIcs, freshEtag);
 }

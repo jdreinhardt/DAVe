@@ -1,4 +1,4 @@
-import type { AddressBook, Calendar, Contact, CalendarEvent, EventJson, EventWriteResponse } from '@dave/shared';
+import type { AddressBook, Calendar, Contact, CalendarEvent, EventJson, EventWriteResponse, RecurrenceScope } from '@dave/shared';
 import { apiFetch } from './client';
 
 export const getAddressBooks = (): Promise<AddressBook[]> =>
@@ -28,21 +28,33 @@ export const updateCalendarEvent = (
   eventId: string,
   data: EventJson,
   etag: string,
+  scope?: RecurrenceScope,
 ): Promise<EventWriteResponse> =>
   apiFetch<EventWriteResponse>(
     `/api/events/${encodeURIComponent(eventId)}`,
-    { method: 'PUT', body: JSON.stringify({ data, etag }) },
+    { method: 'PUT', body: JSON.stringify({ data, etag, scope }) },
   );
 
 export const deleteCalendarEvent = (
   eventId: string,
   calendarId: string,
   etag: string,
-): Promise<null> =>
-  apiFetch<null>(
-    `/api/events/${encodeURIComponent(eventId)}?calendarId=${encodeURIComponent(calendarId)}&etag=${encodeURIComponent(etag)}`,
+  scope?: RecurrenceScope,
+  recurrenceId?: string,
+  allDay?: boolean,
+): Promise<null> => {
+  const qs = new URLSearchParams({
+    calendarId,
+    etag,
+    ...(scope && scope !== 'all' ? { scope } : {}),
+    ...(recurrenceId ? { recurrenceId } : {}),
+    ...(allDay ? { allDay: 'true' } : {}),
+  });
+  return apiFetch<null>(
+    `/api/events/${encodeURIComponent(eventId)}?${qs.toString()}`,
     { method: 'DELETE' },
   );
+};
 
 export function writeResponseToCalendarEvent(r: EventWriteResponse): CalendarEvent {
   return { id: r.id, url: r.url, etag: r.etag, calendarId: r.calendarId, data: r.data };
