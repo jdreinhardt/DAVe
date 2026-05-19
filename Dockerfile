@@ -3,7 +3,7 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json tsconfig.json ./
 COPY packages/shared/package.json   ./packages/shared/
 COPY packages/backend/package.json  ./packages/backend/
 COPY packages/frontend/package.json ./packages/frontend/
