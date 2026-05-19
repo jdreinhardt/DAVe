@@ -10,11 +10,15 @@
     "dev": "concurrently -n backend,frontend -c cyan,green \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
     "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
     "test": "npm test --workspaces --if-present",
+    "test:integration": "vitest run --config packages/backend/vitest.integration.config.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "lint": "eslint packages/*/src",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@playwright/test": "^1.48.0",
     "concurrently": "^9.0.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react": "^7.37.0",

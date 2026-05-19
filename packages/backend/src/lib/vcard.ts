@@ -292,7 +292,7 @@ function escapeStructured(s: string): string {
 function serializeDate(iso: string | null): string | null {
   if (!iso) return null;
   // --MMDD or --MM-DD (no-year)
-  if (iso.startsWith('--')) return iso.replace(/-/g, (_, i) => (i === 0 ? '-' : ''));
+  if (iso.startsWith('--')) return '--' + iso.slice(2).replace(/-/g, '');
   // YYYY-MM-DD → YYYYMMDD
   return iso.replace(/-/g, '');
 }

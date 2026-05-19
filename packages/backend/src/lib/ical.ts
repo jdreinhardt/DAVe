@@ -21,6 +21,7 @@ export function parseIcalEvents(
   rangeStart?: string,
   rangeEnd?: string,
 ): EventJson[] {
+  if (!icsText?.trim()) return [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let jcal: any;
   try {
