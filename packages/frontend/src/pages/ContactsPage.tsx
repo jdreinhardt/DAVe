@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine, GitMerge } from 'lucide-react';
+import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine, GitMerge, ArrowLeft } from 'lucide-react';
 import type { AddressBook, Contact, ContactJson } from '@dave/shared';
 import { getAddressBooks, getContacts } from '../api/collections';
 import {
@@ -168,6 +168,9 @@ export default function ContactsPage() {
   }, [filtered, contactSort]);
 
   const selectedContact = allContacts.find((c) => c.id === selectedId) ?? null;
+
+  // On mobile, only one pane is visible at a time.
+  const mobileShowingDetail = selectedIds.size >= 2 || panel.mode !== 'empty';
 
   // ── Toast helper ─────────────────────────────────────────────────────────
 
@@ -500,7 +503,10 @@ export default function ContactsPage() {
   return (
     <div className="flex h-full overflow-hidden">
       {/* ── Left: list pane ── */}
-      <div className="w-72 shrink-0 border-r border-border flex flex-col overflow-hidden">
+      <div className={cn(
+        'w-full md:w-72 shrink-0 border-r border-border flex flex-col overflow-hidden',
+        mobileShowingDetail && 'hidden md:flex',
+      )}>
         {/* Toolbar */}
         <div className="px-3 py-2 border-b border-border space-y-2">
           <div className="relative">
@@ -616,7 +622,10 @@ export default function ContactsPage() {
       </div>
 
       {/* ── Right: detail / edit pane ── */}
-      <div className="flex-1 overflow-hidden flex flex-col">
+      <div className={cn(
+        'flex-1 overflow-hidden flex flex-col',
+        !mobileShowingDetail && 'hidden md:flex',
+      )}>
         {selectedIds.size >= 2 ? (
           <MultiContactPanel
             contacts={allContacts.filter((c) => selectedIds.has(c.id))}
@@ -625,6 +634,7 @@ export default function ContactsPage() {
             deleting={bulkDeleteMutation.isPending}
             editing={bulkEditMutation.isPending}
             merging={mergeMutation.isPending}
+            onBack={clearSelection}
             onMerge={() => setShowMerge(true)}
             onExport={() => {
               const byAb = new Map<string, string[]>();
@@ -651,7 +661,7 @@ export default function ContactsPage() {
           <>
             {panel.mode === 'create' && (
               <>
-                <PaneHeader title="New contact" />
+                <PaneHeader title="New contact" onBack={() => setPanel({ mode: 'empty' })} />
                 <div className="flex-1 overflow-hidden">
                   <ContactEditForm
                     initial={emptyContactJson()}
@@ -671,7 +681,7 @@ export default function ContactsPage() {
 
             {panel.mode === 'edit' && (
               <>
-                <PaneHeader title="Edit contact" />
+                <PaneHeader title="Edit contact" onBack={() => setPanel({ mode: 'detail', contact: panel.contact })} />
                 <div className="flex-1 overflow-hidden">
                   <ContactEditForm
                     initial={panel.contact.data}
@@ -695,7 +705,13 @@ export default function ContactsPage() {
 
             {panel.mode === 'detail' && selectedContact && (
               <>
-                <div className="flex items-center justify-end gap-1 px-4 py-2 border-b border-border shrink-0">
+                <div className="flex items-center gap-1 px-4 py-2 border-b border-border shrink-0">
+                  <button
+                    onClick={() => { setPanel({ mode: 'empty' }); setSelectedId(null); }}
+                    className="md:hidden flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted mr-auto"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" /> Back
+                  </button>
                   <button
                     onClick={() => {
                       const ab = addressBooks.find((a) => a.id === selectedContact.addressBookId);
@@ -928,9 +944,18 @@ function ContactListItem({
 
 // ── Supporting components ─────────────────────────────────────────────────────
 
-function PaneHeader({ title }: { title: string }) {
+function PaneHeader({ title, onBack }: { title: string; onBack?: () => void }) {
   return (
-    <div className="px-4 py-2.5 border-b border-border shrink-0">
+    <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="md:hidden -ml-1 rounded p-1 text-muted-foreground hover:bg-muted"
+          aria-label="Back"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+      )}
       <h2 className="text-sm font-semibold text-foreground">{title}</h2>
     </div>
   );
@@ -979,6 +1004,7 @@ function MultiContactPanel({
   onEdit,
   onMerge,
   onClickContact,
+  onBack,
 }: {
   contacts: Contact[];
   addressBooks: AddressBook[];
@@ -992,6 +1018,7 @@ function MultiContactPanel({
   onEdit: () => void;
   onMerge: () => void;
   onClickContact: (c: Contact) => void;
+  onBack: () => void;
 }) {
   const [moveOpen, setMoveOpen] = useState(false);
   const busy = moving || deleting || editing || merging;
@@ -1002,8 +1029,15 @@ function MultiContactPanel({
   return (
     <>
       {/* Action header — mirrors the single-contact detail toolbar */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-border shrink-0">
-        <span className="text-xs text-muted-foreground">
+      <div className="flex items-center px-4 py-2 border-b border-border shrink-0 gap-2">
+        <button
+          onClick={onBack}
+          className="md:hidden shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"
+          aria-label="Back"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <span className="text-xs text-muted-foreground flex-1">
           {contacts.length} contacts selected
         </span>
         <div className="flex items-center gap-1">

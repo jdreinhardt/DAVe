@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -16,9 +17,11 @@ import type { MeResponse } from '@dave/shared';
 
 interface SidebarProps {
   me: MeResponse;
+  isOpen: boolean;
+  onClose: () => void;
 }
 
-export default function Sidebar({ me }: SidebarProps) {
+export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
   const queryClient = useQueryClient();
   const [showSettings, setShowSettings] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -49,7 +52,23 @@ export default function Sidebar({ me }: SidebarProps) {
   const isLoading = (inContacts ? abQuery.isFetching : false) || (inCalendar ? calQuery.isFetching : false);
 
   return (
-    <aside className="flex flex-col w-64 shrink-0 border-r border-border bg-card h-full overflow-y-auto">
+    <>
+      {/* Mobile backdrop */}
+      {isOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+      <aside className={cn(
+        'flex flex-col w-64 shrink-0 border-r border-border bg-card overflow-y-auto h-full',
+        // Mobile: fixed overlay drawer with slide transition
+        'fixed inset-y-0 left-0 z-40 transition-transform duration-200 ease-in-out',
+        isOpen ? 'translate-x-0' : '-translate-x-full',
+        // Desktop: static in normal flow, always visible
+        'md:static md:translate-x-0',
+      )}>
       {/* App name + sync indicator */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <span className="font-semibold text-foreground">DAVe</span>
@@ -129,14 +148,17 @@ export default function Sidebar({ me }: SidebarProps) {
         </div>
       </div>
 
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      {showCreate && inContacts && (
-        <AddressBookModal mode="create" onClose={() => setShowCreate(false)} />
-      )}
-      {showCreate && inCalendar && (
-        <CalendarModal mode="create" onClose={() => setShowCreate(false)} />
-      )}
     </aside>
+    {/* Rendered outside <aside> so the slide transform doesn't create a new
+        containing block for these fixed-position modals. */}
+    {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+    {showCreate && inContacts && (
+      <AddressBookModal mode="create" onClose={() => setShowCreate(false)} />
+    )}
+    {showCreate && inCalendar && (
+      <CalendarModal mode="create" onClose={() => setShowCreate(false)} />
+    )}
+    </>
   );
 }
 
@@ -297,20 +319,22 @@ function CollectionSection({
         );
       })}
 
-      {/* Edit modals */}
-      {editingItem && kind === 'addressbook' && (
+      {/* Edit modals — portaled to body to escape the sidebar's CSS transform containment. */}
+      {editingItem && kind === 'addressbook' && createPortal(
         <AddressBookModal
           mode="edit"
           addressBook={editingItem as AddressBook}
           onClose={() => setEditingItem(null)}
-        />
+        />,
+        document.body,
       )}
-      {editingItem && kind === 'calendar' && (
+      {editingItem && kind === 'calendar' && createPortal(
         <CalendarModal
           mode="edit"
           calendar={editingItem as CalendarType}
           onClose={() => setEditingItem(null)}
-        />
+        />,
+        document.body,
       )}
     </div>
   );

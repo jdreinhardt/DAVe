@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -216,6 +217,7 @@ function errorMessage(e: unknown, is412Special = false): string {
 export default function CalendarPage() {
   const { hiddenCalendars } = useCollectionVisibility();
   const queryClient = useQueryClient();
+  const isMobile = useIsMobile();
 
   const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
   const [popup, setPopup] = useState<PopupData | null>(null);
@@ -545,7 +547,7 @@ export default function CalendarPage() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full flex flex-col p-4 relative">
+    <div className="h-full flex flex-col p-2 md:p-4 relative">
       {/* Sync indicator */}
       {isLoadingEvents && (
         <div className="absolute top-2 right-4 z-10 text-xs text-muted-foreground flex items-center gap-1.5">
@@ -558,7 +560,11 @@ export default function CalendarPage() {
         <FullCalendar
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
           initialView="dayGridMonth"
-          headerToolbar={{
+          headerToolbar={isMobile ? {
+            left: 'prev,next',
+            center: 'title',
+            right: 'dayGridMonth,timeGridDay',
+          } : {
             left: 'prev,next today',
             center: 'title',
             right: 'dayGridMonth,timeGridWeek,timeGridDay',
