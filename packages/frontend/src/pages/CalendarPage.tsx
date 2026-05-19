@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -20,6 +20,7 @@ import { useSettings } from '../contexts/Settings';
 import type { MapService } from '../contexts/Settings';
 import { cn } from '../lib/utils';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
+import { useHotkey } from '../hooks/useHotkey';
 
 // ── Map helpers ───────────────────────────────────────────────────────────────
 
@@ -492,6 +493,27 @@ export default function CalendarPage() {
   };
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
+
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+  const handleNewEvent = useCallback(() => {
+    const calId = visibleCalendars[0]?.id ?? (calQuery.data?.[0]?.id ?? '');
+    if (!calId) return;
+    const now = new Date();
+    const roundedMs = Math.ceil(now.getTime() / (30 * 60_000)) * (30 * 60_000);
+    const start = new Date(roundedMs).toISOString();
+    const end = new Date(roundedMs + 60 * 60_000).toISOString();
+    setEditModal({ calendarEvent: null, initialStart: start, initialEnd: end, allDay: false, calendarId: calId });
+  }, [visibleCalendars, calQuery.data]);
+
+  useHotkey('n', handleNewEvent);
+
+  useHotkey('Escape', () => {
+    if (editModal) { setEditModal(null); return; }
+    if (popup) { setPopup(null); return; }
+    if (deleteTarget) { setDeleteTarget(null); return; }
+    if (pendingScopeAction) { setPendingScopeAction(null); return; }
+  }, { skipWhenEditable: false });
 
   // ── Render ────────────────────────────────────────────────────────────────
 

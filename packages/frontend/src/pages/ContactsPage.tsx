@@ -24,6 +24,7 @@ import BulkDeleteDialog from '../components/BulkDeleteDialog';
 import BulkEditModal, { applyBulkEdit } from '../components/BulkEditModal';
 import type { BulkEditConfig } from '../components/BulkEditModal';
 import MergeContactsModal, { mergeContactData } from '../components/MergeContactsModal';
+import { useHotkey } from '../hooks/useHotkey';
 
 // ── Sort / group helpers ──────────────────────────────────────────────────────
 
@@ -95,6 +96,7 @@ export default function ContactsPage() {
   const [showBulkEdit, setShowBulkEdit] = useState(false);
   const [showMerge, setShowMerge] = useState(false);
   const importFileRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const { hiddenAddressBooks } = useCollectionVisibility();
 
   const isMultiSelect = selectedIds.size > 0;
@@ -436,6 +438,27 @@ export default function ContactsPage() {
     bulkEditMutation.mutate({ contacts, config });
   };
 
+  // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+  useHotkey('/', (e) => {
+    e.preventDefault();
+    searchRef.current?.focus();
+    searchRef.current?.select();
+  });
+
+  useHotkey('n', handleNewContact);
+
+  // Esc: collapse the right pane back to empty when not in a modal.
+  // Modals (delete dialog, bulk ops) handle their own Esc via useEffect.
+  useHotkey('Escape', () => {
+    if (panel.mode === 'create' || panel.mode === 'edit') {
+      setPanel(panel.mode === 'edit' ? { mode: 'detail', contact: panel.contact } : { mode: 'empty' });
+    } else if (panel.mode === 'detail') {
+      setPanel({ mode: 'empty' });
+      setSelectedId(null);
+    }
+  }, { skipWhenEditable: false });
+
   // ── Render helpers ────────────────────────────────────────────────────────
 
   const addressBooks = abQuery.data ?? [];
@@ -449,6 +472,7 @@ export default function ContactsPage() {
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <input
+              ref={searchRef}
               type="search"
               placeholder="Search contacts…"
               value={search}

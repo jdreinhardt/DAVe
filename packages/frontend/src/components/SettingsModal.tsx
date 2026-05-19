@@ -1,25 +1,27 @@
 import { useState } from 'react';
-import { X, ArrowUpAZ, ArrowDownAZ } from 'lucide-react';
+import { X, ArrowUpAZ, ArrowDownAZ, Sun, Moon, Monitor } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useSettings } from '../contexts/Settings';
-import type { SortBy, SortDir, ContactSubtitleField, MapService } from '../contexts/Settings';
+import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode } from '../contexts/Settings';
 
 interface SettingsModalProps {
   onClose: () => void;
 }
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService } =
+  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode } =
     useSettings();
   const [sortBy, setSortBy] = useState<SortBy>(contactSort.sortBy);
   const [sortDir, setSortDir] = useState<SortDir>(contactSort.sortDir);
   const [subtitleField, setSubtitleField] = useState<ContactSubtitleField>(contactSubtitleField);
   const [mapSvc, setMapSvc] = useState<MapService>(mapService);
+  const [dm, setDm] = useState<DarkMode>(darkMode);
 
   const handleSave = () => {
     updateContactSort({ sortBy, sortDir });
     updateContactSubtitleField(subtitleField);
     updateMapService(mapSvc);
+    updateDarkMode(dm);
     onClose();
   };
 
@@ -27,7 +29,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     sortBy !== contactSort.sortBy ||
     sortDir !== contactSort.sortDir ||
     subtitleField !== contactSubtitleField ||
-    mapSvc !== mapService;
+    mapSvc !== mapService ||
+    dm !== darkMode;
 
   return (
     <div
@@ -138,6 +141,38 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 <option value="google">Google Maps</option>
                 <option value="apple">Apple Maps</option>
               </select>
+            </div>
+          </section>
+
+          {/* Appearance */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Appearance
+            </h3>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium shrink-0">Theme</span>
+              <div className="flex flex-1 gap-1">
+                {([
+                  { value: 'light', label: 'Light', icon: <Sun className="h-3.5 w-3.5" /> },
+                  { value: 'system', label: 'System', icon: <Monitor className="h-3.5 w-3.5" /> },
+                  { value: 'dark',  label: 'Dark',   icon: <Moon className="h-3.5 w-3.5" /> },
+                ] as { value: DarkMode; label: string; icon: React.ReactNode }[]).map(({ value, label, icon }) => (
+                  <button
+                    key={value}
+                    onClick={() => setDm(value)}
+                    className={cn(
+                      'flex flex-1 items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs transition-colors',
+                      dm === value
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+                    )}
+                  >
+                    {icon}
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
         </div>
