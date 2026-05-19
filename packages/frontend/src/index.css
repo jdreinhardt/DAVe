@@ -60,6 +60,11 @@
   --radius-lg: calc(var(--radius) + 4px);
 }
 
+/* Tone down FullCalendar grid lines to match the app's border color. */
+:root {
+  --fc-border-color: var(--border);
+}
+
 *,
 *::before,
 *::after {
