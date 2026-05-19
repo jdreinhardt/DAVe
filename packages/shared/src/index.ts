@@ -242,6 +242,41 @@ export interface EventWriteResponse {
   continuation?: EventWriteResponse;
 }
 
+// ── Sync request / response shapes ───────────────────────────────────────────
+
+export interface SyncAddressBookRequest {
+  id: string;
+  syncToken: string;
+}
+
+export interface SyncCalendarRequest {
+  id: string;
+  syncToken: string;
+}
+
+export interface CollectionSyncRequest {
+  addressbooks: SyncAddressBookRequest[];
+  calendars: SyncCalendarRequest[];
+}
+
+export interface AddressBookSyncResult {
+  id: string;
+  syncToken: string;
+  changed: Contact[];  // added + modified contacts
+  deleted: string[];   // IDs of deleted contacts
+}
+
+export interface CalendarSyncResult {
+  id: string;
+  syncToken: string;
+  dirty: boolean;  // true if any events were added, modified, or deleted
+}
+
+export interface CollectionSyncResponse {
+  addressbooks: AddressBookSyncResult[];
+  calendars: CalendarSyncResult[];
+}
+
 // ── API error shape ───────────────────────────────────────────────────────────
 
 export interface ApiError {

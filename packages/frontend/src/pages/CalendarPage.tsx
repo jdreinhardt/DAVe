@@ -300,14 +300,41 @@ export default function CalendarPage() {
         ev.data.recurrenceId ?? undefined,
         ev.data.allDay,
       ),
-    onSuccess: (_, { ev }) => {
-      queryClient.invalidateQueries({ queryKey: ['events', ev.calendarId] });
-      setDeleteTarget(null);
-      setPopup(null);
-      setEditModal(null);
+    onMutate: async ({ ev, scope }) => {
+      // Only optimistically remove on scope=all (full delete). Scoped deletes
+      // modify the master ICS, so a refetch is needed to show the updated series.
+      if (!scope || scope === 'all') {
+        const queryFilter = { queryKey: ['events', ev.calendarId] };
+        await queryClient.cancelQueries(queryFilter);
+        // Snapshot all matching time-range buckets so we can roll back.
+        const snapshots = queryClient.getQueriesData<CalendarEvent[]>(queryFilter);
+        queryClient.setQueriesData<CalendarEvent[]>(
+          queryFilter,
+          (old) => (old ?? []).filter((e) => e.id !== ev.id),
+        );
+        setDeleteTarget(null);
+        setPopup(null);
+        setEditModal(null);
+        return { snapshots, calendarId: ev.calendarId };
+      }
+      return null;
+    },
+    onSuccess: (_, { ev, scope }) => {
+      if (scope && scope !== 'all') {
+        // Scoped deletes need a refetch to show the modified recurring series.
+        queryClient.invalidateQueries({ queryKey: ['events', ev.calendarId] });
+        setDeleteTarget(null);
+        setPopup(null);
+        setEditModal(null);
+      }
       showToast('Event deleted');
     },
-    onError: (e) => {
+    onError: (e, _, ctx) => {
+      if (ctx?.snapshots) {
+        for (const [key, data] of ctx.snapshots) {
+          queryClient.setQueryData(key, data);
+        }
+      }
       setDeleteTarget(null);
       showToast(errorMessage(e, true), 'err');
     },

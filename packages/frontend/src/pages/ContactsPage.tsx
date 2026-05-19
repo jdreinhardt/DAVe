@@ -181,23 +181,45 @@ export default function ContactsPage() {
   const createMutation = useMutation({
     mutationFn: ({ abId, data }: { abId: string; data: ContactJson }) =>
       createContact(abId, data),
-    onSuccess: (result) => {
+    onMutate: async ({ abId, data }) => {
+      await queryClient.cancelQueries({ queryKey: ['contacts', abId] });
+      const prev = queryClient.getQueryData<Contact[]>(['contacts', abId]);
+      const tempId = `__optimistic_${Date.now()}`;
+      const tempContact: Contact = { id: tempId, url: '', etag: '', addressBookId: abId, data };
+      queryClient.setQueryData<Contact[]>(['contacts', abId], (old) => [...(old ?? []), tempContact]);
+      return { prev, abId, tempId };
+    },
+    onSuccess: (result, _, ctx) => {
+      const created = writeResponseToContact(result);
       queryClient.setQueryData<Contact[]>(
-        ['contacts', result.addressBookId],
-        (old) => [...(old ?? []), writeResponseToContact(result)],
+        ['contacts', created.addressBookId],
+        (old) => (old ?? []).map((c) => (c.id === ctx?.tempId ? created : c)),
       );
-      setSelectedId(result.id);
-      setPanel({ mode: 'detail', contact: writeResponseToContact(result) });
+      setSelectedId(created.id);
+      setPanel({ mode: 'detail', contact: created });
       showToast('Contact created');
     },
-    onError: (e) => showToast(errorMessage(e), 'err'),
+    onError: (e, _, ctx) => {
+      if (ctx) queryClient.setQueryData(['contacts', ctx.abId], ctx.prev);
+      showToast(errorMessage(e), 'err');
+    },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ contact, data }: { contact: Contact; data: ContactJson }) =>
       updateContact(contact.addressBookId, contact.id, data, contact.etag),
+    onMutate: async ({ contact, data }) => {
+      await queryClient.cancelQueries({ queryKey: ['contacts', contact.addressBookId] });
+      const prev = queryClient.getQueryData<Contact[]>(['contacts', contact.addressBookId]);
+      queryClient.setQueryData<Contact[]>(
+        ['contacts', contact.addressBookId],
+        (old) => (old ?? []).map((c) => (c.id === contact.id ? { ...c, data } : c)),
+      );
+      return { prev, addressBookId: contact.addressBookId };
+    },
     onSuccess: (result, { contact }) => {
       const updated = writeResponseToContact(result);
+      // Reconcile with server response (gets the authoritative etag)
       queryClient.setQueryData<Contact[]>(
         ['contacts', contact.addressBookId],
         (old) => (old ?? []).map((c) => (c.id === updated.id ? updated : c)),
@@ -205,12 +227,17 @@ export default function ContactsPage() {
       setPanel({ mode: 'detail', contact: updated });
       showToast('Contact saved');
     },
-    onError: (e) => showToast(errorMessage(e, true), 'err'),
+    onError: (e, _, ctx) => {
+      if (ctx) queryClient.setQueryData(['contacts', ctx.addressBookId], ctx.prev);
+      showToast(errorMessage(e, true), 'err');
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (c: Contact) => deleteContact(c.addressBookId, c.id, c.etag),
-    onSuccess: (_, contact) => {
+    onMutate: async (contact) => {
+      await queryClient.cancelQueries({ queryKey: ['contacts', contact.addressBookId] });
+      const prev = queryClient.getQueryData<Contact[]>(['contacts', contact.addressBookId]);
       queryClient.setQueryData<Contact[]>(
         ['contacts', contact.addressBookId],
         (old) => (old ?? []).filter((c) => c.id !== contact.id),
@@ -218,9 +245,16 @@ export default function ContactsPage() {
       setDeleteTarget(null);
       setSelectedId(null);
       setPanel({ mode: 'empty' });
+      return { prev, addressBookId: contact.addressBookId };
+    },
+    onSuccess: () => {
       showToast('Contact deleted');
     },
-    onError: (e) => { setDeleteTarget(null); showToast(errorMessage(e, true), 'err'); },
+    onError: (e, _, ctx) => {
+      if (ctx) queryClient.setQueryData(['contacts', ctx.addressBookId], ctx.prev);
+      setDeleteTarget(null);
+      showToast(errorMessage(e, true), 'err');
+    },
   });
 
   // Single-contact move: create in new AB + delete from old AB

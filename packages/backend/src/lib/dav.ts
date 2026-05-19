@@ -18,6 +18,7 @@ const {
   fetchVCards: _fetchVCards,
   getBasicAuthHeaders: _getBasicAuthHeaders,
   propfind: _propfind,
+  syncCollection: _syncCollection,
   DAVNamespaceShort,
 } = _req('tsdav') as typeof TsdavTypes;
 
@@ -792,4 +793,97 @@ export async function deleteCalendar(
     const text = await res.text().catch(() => '');
     throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body: text });
   }
+}
+
+// ── Incremental sync via sync-collection REPORT ───────────────────────────────
+
+export interface AddressBookSyncResult {
+  syncToken: string;
+  changed: Contact[];
+  deleted: string[];
+}
+
+export interface CalendarSyncResult {
+  syncToken: string;
+  dirty: boolean;
+}
+
+// Extract the new sync-token from a tsdav sync-collection REPORT response.
+// tsdav puts it at result[n].raw.multistatus.syncToken for the response that
+// carries the root <D:multistatus> element.
+function extractSyncToken(results: TsdavTypes.DAVResponse[]): string | undefined {
+  for (const r of results) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const token = (r as any).raw?.multistatus?.syncToken;
+    if (token) return String(token);
+  }
+  return undefined;
+}
+
+export async function syncAddressBook(
+  session: SessionData,
+  abId: string,
+  currentSyncToken: string,
+  _config: Config,
+): Promise<AddressBookSyncResult> {
+  const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
+  const abUrl = `${homeUrl}/${abId}/`;
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+
+  const results = await _syncCollection({
+    url: abUrl,
+    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
+    syncLevel: 1,
+    syncToken: currentSyncToken,
+    headers: authHeaders,
+  });
+
+  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
+
+  const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
+  const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
+  const deleted = deletedHrefs.map(contactId);
+
+  let changed: Contact[] = [];
+  if (changedHrefs.length > 0) {
+    const vcards = await _fetchVCards({
+      addressBook: { url: abUrl },
+      objectUrls: changedHrefs,
+      headers: authHeaders,
+    });
+    changed = vcards
+      .filter((v) => v.data)
+      .map((v) => ({
+        id: contactId(v.url),
+        url: v.url,
+        etag: v.etag ?? '',
+        addressBookId: abId,
+        data: parseVCard(v.data as string),
+      }));
+  }
+
+  return { syncToken: newSyncToken, changed, deleted };
+}
+
+export async function syncCalendar(
+  session: SessionData,
+  calId: string,
+  currentSyncToken: string,
+  _config: Config,
+): Promise<CalendarSyncResult> {
+  const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${calId}/`;
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+
+  const results = await _syncCollection({
+    url: calUrl,
+    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
+    syncLevel: 1,
+    syncToken: currentSyncToken,
+    headers: authHeaders,
+  });
+
+  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
+  const dirty = results.some((r) => (r.ok && r.href) || r.status === 404);
+
+  return { syncToken: newSyncToken, dirty };
 }

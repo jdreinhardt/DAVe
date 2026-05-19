@@ -6,6 +6,12 @@ import Sidebar from '../components/Sidebar';
 import { CollectionVisibilityProvider } from '../contexts/CollectionVisibility';
 import { ContactDragProvider } from '../contexts/ContactDrag';
 import { SettingsProvider } from '../contexts/Settings';
+import { useSyncCollections } from '../hooks/useSyncCollections';
+
+function SyncPoller() {
+  useSyncCollections();
+  return null;
+}
 
 export default function AppLayout() {
   const meQuery = useQuery({
@@ -35,6 +41,7 @@ export default function AppLayout() {
     <SettingsProvider>
       <CollectionVisibilityProvider>
         <ContactDragProvider>
+          <SyncPoller />
           <div className="flex h-screen overflow-hidden bg-background">
             <Sidebar me={meQuery.data!} />
             <main className="flex-1 overflow-auto">

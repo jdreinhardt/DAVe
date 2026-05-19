@@ -14,6 +14,7 @@ import { meRoutes } from './routes/me.js';
 import { collectionsRoutes } from './routes/collections.js';
 import { contactsRoutes } from './routes/contacts.js';
 import { eventsRoutes } from './routes/events.js';
+import { syncRoutes } from './routes/sync.js';
 
 const config = loadConfig();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,6 +44,7 @@ await app.register(meRoutes);
 await app.register(collectionsRoutes, { config, db });
 await app.register(contactsRoutes, { config, db });
 await app.register(eventsRoutes, { config, db });
+await app.register(syncRoutes, { config, db });
 
 // ── Static frontend (production only) ────────────────────────────────────────
 
