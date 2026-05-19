@@ -124,6 +124,39 @@ docker compose -f docker-compose.dev.yml down -v  # Tear down + remove volumes
 
 ---
 
+## Testing
+
+### Unit tests
+
+```bash
+npm test                        # run all unit tests
+npm test -w packages/backend    # backend only (vCard, iCal, crypto, routes)
+npm test -w packages/frontend   # frontend only (API client, hooks)
+```
+
+### Integration tests
+
+Integration tests use Fastify's in-process `.inject()` against a real Baikal container. Start the test stack before running them:
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+# baikal-init seeds testuser/testpass automatically; wait for it to exit
+npm run test:integration -w packages/backend
+```
+
+The test stack runs on port 8801 (distinct from the dev stack's 8800).
+
+### E2E tests (Playwright)
+
+```bash
+npx playwright install --with-deps   # first run only
+npm run dev &                        # app must be running
+npm run test:e2e                     # headless
+npm run test:e2e:ui                  # interactive UI mode
+```
+
+---
+
 ## Project structure
 
 ```
