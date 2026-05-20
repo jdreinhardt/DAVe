@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   AlertCircle,
+  ArrowLeft,
   ChevronDown,
   ChevronRight,
   ClipboardList,
@@ -17,6 +18,7 @@ import type { Task, TasksQueryParams } from '@dave/shared';
 import { fetchTasks, triggerTasksSync } from '../api/tasks';
 import { getCalendars } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../lib/utils';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
@@ -31,7 +33,11 @@ function loadPref<T>(key: string, fallback: T): T {
 }
 
 function savePref(key: string, value: unknown): void {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* ignore */
+  }
 }
 
 // ── Priority helpers ──────────────────────────────────────────────────────────
@@ -85,9 +91,18 @@ function buildTree(tasks: Task[]): { roots: Task[]; childrenOf: Map<string, Task
   return { roots, childrenOf };
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const CATEGORY_CHIP_LIMIT = 3;
+
+const STATUS_LABELS: Record<string, string> = {
+  'NEEDS-ACTION': 'To do',
+  'IN-PROCESS': 'In progress',
+  COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
+};
+
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 function CategoryChips({ categories }: { categories: string[] }) {
   if (categories.length === 0) return null;
@@ -100,9 +115,7 @@ function CategoryChips({ categories }: { categories: string[] }) {
           {cat}
         </span>
       ))}
-      {extra > 0 && (
-        <span className="text-xs text-muted-foreground">+{extra} more</span>
-      )}
+      {extra > 0 && <span className="text-xs text-muted-foreground">+{extra} more</span>}
     </span>
   );
 }
@@ -114,6 +127,8 @@ function TaskRow({
   childrenOf,
   selectedUid,
   onSelect,
+  calendarName,
+  calendarColor,
 }: {
   task: Task;
   compact: boolean;
@@ -121,6 +136,8 @@ function TaskRow({
   childrenOf: Map<string, Task[]>;
   selectedUid: string | null;
   onSelect: (uid: string) => void;
+  calendarName?: string;
+  calendarColor?: string;
 }) {
   const [expanded, setExpanded] = useState(true);
   const children = childrenOf.get(task.uid) ?? [];
@@ -134,8 +151,8 @@ function TaskRow({
     <>
       <div
         className={cn(
-          'group flex items-start gap-2 px-3 rounded-md cursor-pointer transition-colors',
-          compact ? 'py-1' : 'py-2',
+          'group flex items-start gap-2 px-3 rounded-md cursor-pointer transition-colors mx-1 my-0.5',
+          compact ? 'py-1.5' : 'py-3',
           isSelected ? 'bg-primary/10' : 'hover:bg-muted',
         )}
         style={{ paddingLeft: `${12 + depth * 20}px` }}
@@ -145,13 +162,17 @@ function TaskRow({
         {hasChildren && !collapseDeep ? (
           <button
             className="shrink-0 mt-0.5 text-muted-foreground hover:text-foreground"
-            onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
             aria-label={expanded ? 'Collapse subtasks' : 'Expand subtasks'}
           >
-            {expanded
-              ? <ChevronDown className="h-3.5 w-3.5" />
-              : <ChevronRight className="h-3.5 w-3.5" />
-            }
+            {expanded ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" />
+            )}
           </button>
         ) : (
           <span className="shrink-0 w-3.5" />
@@ -175,63 +196,123 @@ function TaskRow({
         {/* Priority indicator */}
         {task.data.priority !== null && (
           <span
-            className={cn('shrink-0 w-1 rounded-full mt-1', compact ? 'h-3' : 'h-4', priorityColor(task.data.priority))}
+            className={cn(
+              'shrink-0 w-1 rounded-full mt-1',
+              compact ? 'h-3' : 'h-5',
+              priorityColor(task.data.priority),
+            )}
             title={`${priorityLabel(task.data.priority)} priority`}
           />
         )}
 
-        {/* Main content */}
-        <div className="flex-1 min-w-0">
-          <span className={cn(
-            'text-sm',
-            (task.data.status === 'COMPLETED' || task.data.status === 'CANCELLED') && 'line-through text-muted-foreground',
-          )}>
-            {task.data.summary || '(no title)'}
-          </span>
-          {!compact && <CategoryChips categories={task.data.categories} />}
-        </div>
+        {/* Main content — left column grows, right column is fixed-width meta */}
+        <div className="flex-1 min-w-0 flex gap-3">
+          {/* Left: title → categories → description */}
+          <div className="flex-1 min-w-0">
+            <span
+              className={cn(
+                'text-sm',
+                (task.data.status === 'COMPLETED' || task.data.status === 'CANCELLED') &&
+                  'line-through text-muted-foreground',
+              )}
+            >
+              {task.data.summary || '(no title)'}
+            </span>
 
-        {/* Due date */}
-        {due && (
-          <span className={cn('shrink-0 text-xs whitespace-nowrap', due.className)}>
-            {due.label}
-          </span>
-        )}
+            {/* Calendar / categories — list only, below title */}
+            {!compact && (calendarName || task.data.categories.length > 0) && (
+              <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                {calendarName && (
+                  <span
+                    className="px-1.5 py-0.5 rounded text-xs shrink-0 font-medium"
+                    style={
+                      calendarColor
+                        ? { backgroundColor: calendarColor + '33', color: calendarColor }
+                        : {
+                            backgroundColor: 'hsl(var(--muted))',
+                            color: 'hsl(var(--muted-foreground))',
+                          }
+                    }
+                  >
+                    {calendarName}
+                  </span>
+                )}
+                {calendarName && task.data.categories.length > 0 && (
+                  <span className="text-xs text-muted-foreground/50 shrink-0">|</span>
+                )}
+                <CategoryChips categories={task.data.categories} />
+              </div>
+            )}
+
+            {/* Description preview — list only, below categories */}
+            {!compact && task.data.description && (
+              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                {task.data.description}
+              </p>
+            )}
+          </div>
+
+          {/* Right: due date (top) + status (below) — both views show due date right-aligned */}
+          <div className="shrink-0 flex flex-col items-end gap-0.5">
+            {due && (
+              <span className={cn('text-xs whitespace-nowrap', due.className)}>{due.label}</span>
+            )}
+            {!compact && task.data.status === 'IN-PROCESS' && (
+              <span className="text-xs text-amber-600 dark:text-amber-400 whitespace-nowrap">
+                In progress
+              </span>
+            )}
+            {!compact && task.data.status === 'CANCELLED' && (
+              <span className="text-xs text-muted-foreground whitespace-nowrap">Cancelled</span>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Subtasks */}
-      {hasChildren && !collapseDeep && expanded && children.map((child) => (
-        <TaskRow
-          key={child.uid}
-          task={child}
-          compact={compact}
-          depth={depth + 1}
-          childrenOf={childrenOf}
-          selectedUid={selectedUid}
-          onSelect={onSelect}
-        />
-      ))}
+      {hasChildren &&
+        !collapseDeep &&
+        expanded &&
+        children.map((child) => (
+          <TaskRow
+            key={child.uid}
+            task={child}
+            compact={compact}
+            depth={depth + 1}
+            childrenOf={childrenOf}
+            selectedUid={selectedUid}
+            onSelect={onSelect}
+            calendarName={calendarName}
+            calendarColor={calendarColor}
+          />
+        ))}
 
       {/* Deep subtask expander (depth >= 3) */}
       {collapseDeep && (
         <div style={{ paddingLeft: `${12 + (depth + 1) * 20}px` }} className="py-0.5">
           <button
             className="text-xs text-muted-foreground hover:text-foreground"
-            onClick={(e) => { e.stopPropagation(); setDeepExpanded((v) => !v); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setDeepExpanded((v) => !v);
+            }}
           >
             {deepExpanded ? '…hide' : `…${children.length} more`}
           </button>
-          {deepExpanded && children.map((child) => (
-            <TaskRow
-              key={child.uid}
-              task={child}
-              compact={compact}
-              depth={depth + 1}
-              childrenOf={childrenOf}
-              selectedUid={selectedUid}
-              onSelect={onSelect}
-            />
-          ))}
+          {deepExpanded &&
+            children.map((child) => (
+              <TaskRow
+                key={child.uid}
+                task={child}
+                compact={compact}
+                depth={depth + 1}
+                childrenOf={childrenOf}
+                selectedUid={selectedUid}
+                onSelect={onSelect}
+                calendarName={calendarName}
+                calendarColor={calendarColor}
+              />
+            ))}
         </div>
       )}
     </>
@@ -253,7 +334,9 @@ function KanbanColumn({
 }) {
   return (
     <div className="flex flex-col min-w-56 w-64 shrink-0 rounded-lg border border-border bg-muted/30">
-      <div className={cn('px-3 py-2 rounded-t-lg font-medium text-sm flex items-center gap-2', color)}>
+      <div
+        className={cn('px-3 py-2 rounded-t-lg font-medium text-sm flex items-center gap-2', color)}
+      >
         {title}
         <span className="ml-auto text-xs font-normal opacity-70">{tasks.length}</span>
       </div>
@@ -272,9 +355,16 @@ function KanbanColumn({
                 selectedUid === task.uid && 'border-primary bg-primary/5',
               )}
             >
-              <p className="font-medium leading-snug mb-1 line-clamp-2">{task.data.summary || '(no title)'}</p>
+              <p className="font-medium leading-snug mb-1 line-clamp-2">
+                {task.data.summary || '(no title)'}
+              </p>
               {task.data.priority !== null && (
-                <span className={cn('inline-block w-2 h-2 rounded-full mr-1.5', priorityColor(task.data.priority))} />
+                <span
+                  className={cn(
+                    'inline-block w-2 h-2 rounded-full mr-1.5',
+                    priorityColor(task.data.priority),
+                  )}
+                />
               )}
               {due && <span className={cn('text-xs', due.className)}>{due.label}</span>}
               {task.data.categories.length > 0 && (
@@ -288,16 +378,30 @@ function KanbanColumn({
   );
 }
 
-function TaskDetailPanel({ task, onClose }: { task: Task; onClose: () => void }) {
+function TaskDetailPanel({
+  task,
+  onClose,
+  fullscreen = false,
+}: {
+  task: Task;
+  onClose: () => void;
+  fullscreen?: boolean;
+}) {
   const due = dueDateDisplay(task.data.due);
   const rows: { label: string; value: React.ReactNode }[] = [];
 
-  if (task.data.status) rows.push({ label: 'Status', value: task.data.status });
+  if (task.data.status)
+    rows.push({ label: 'Status', value: STATUS_LABELS[task.data.status] ?? task.data.status });
   if (task.data.priority !== null)
-    rows.push({ label: 'Priority', value: `${task.data.priority} — ${priorityLabel(task.data.priority)}` });
+    rows.push({
+      label: 'Priority',
+      value: `${priorityLabel(task.data.priority)} (${task.data.priority})`,
+    });
   if (due) rows.push({ label: 'Due', value: <span className={due.className}>{due.label}</span> });
-  if (task.data.dtstart) rows.push({ label: 'Start', value: new Date(task.data.dtstart).toLocaleDateString() });
-  if (task.data.completed) rows.push({ label: 'Completed', value: new Date(task.data.completed).toLocaleDateString() });
+  if (task.data.dtstart)
+    rows.push({ label: 'Start', value: new Date(task.data.dtstart).toLocaleDateString() });
+  if (task.data.completed)
+    rows.push({ label: 'Completed', value: new Date(task.data.completed).toLocaleDateString() });
   if (task.data.percentComplete !== null)
     rows.push({ label: 'Progress', value: `${task.data.percentComplete}%` });
   if (task.data.categories.length > 0)
@@ -305,21 +409,38 @@ function TaskDetailPanel({ task, onClose }: { task: Task; onClose: () => void })
   if (task.data.lastModified)
     rows.push({ label: 'Modified', value: new Date(task.data.lastModified).toLocaleString() });
 
-  return (
-    <div className="w-80 shrink-0 border-l border-border bg-card flex flex-col overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <h2 className="font-semibold text-sm truncate">{task.data.summary || '(no title)'}</h2>
-        <button
-          onClick={onClose}
-          className="text-muted-foreground hover:text-foreground shrink-0 ml-2"
-          aria-label="Close detail"
-        >
-          <X className="h-4 w-4" />
-        </button>
+  const panel = (
+    <div
+      className={cn(
+        'bg-card flex flex-col overflow-hidden',
+        fullscreen ? 'flex-1' : 'flex-1 border-l border-border',
+      )}
+    >
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
+        {fullscreen && (
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground shrink-0"
+            aria-label="Back to tasks"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+        )}
+        <h2 className="font-semibold text-sm flex-1 truncate">
+          {task.data.summary || '(no title)'}
+        </h2>
+        {!fullscreen && (
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground shrink-0"
+            aria-label="Close detail"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
-        {/* Metadata rows */}
         <dl className="space-y-2">
           {rows.map(({ label, value }) => (
             <div key={label} className="flex gap-2 text-sm">
@@ -329,16 +450,25 @@ function TaskDetailPanel({ task, onClose }: { task: Task; onClose: () => void })
           ))}
         </dl>
 
-        {/* Description */}
         {task.data.description && (
           <div>
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">Notes</p>
-            <p className="text-sm whitespace-pre-wrap text-foreground/80">{task.data.description}</p>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+              Notes
+            </p>
+            <p className="text-sm whitespace-pre-wrap text-foreground/80">
+              {task.data.description}
+            </p>
           </div>
         )}
       </div>
     </div>
   );
+
+  if (fullscreen) {
+    return <div className="fixed inset-0 z-50 flex flex-col bg-background">{panel}</div>;
+  }
+
+  return panel;
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
@@ -349,18 +479,23 @@ type FilterStatus = TasksQueryParams['status'];
 type FilterDue = TasksQueryParams['due'];
 type FilterPriority = TasksQueryParams['priority'];
 
-const STATUS_LABELS: Record<string, string> = {
-  'NEEDS-ACTION': 'To do',
-  'IN-PROCESS': 'In progress',
-  'COMPLETED': 'Completed',
-  'CANCELLED': 'Cancelled',
-};
-
 const KANBAN_COLUMNS: { status: string; title: string; headerColor: string }[] = [
-  { status: 'NEEDS-ACTION', title: 'To Do', headerColor: 'bg-blue-500/10 text-blue-700 dark:text-blue-300' },
-  { status: 'IN-PROCESS',   title: 'In Progress', headerColor: 'bg-amber-500/10 text-amber-700 dark:text-amber-300' },
-  { status: 'COMPLETED',    title: 'Completed', headerColor: 'bg-green-500/10 text-green-700 dark:text-green-300' },
-  { status: 'CANCELLED',    title: 'Cancelled', headerColor: 'bg-muted text-muted-foreground' },
+  {
+    status: 'NEEDS-ACTION',
+    title: 'To Do',
+    headerColor: 'bg-blue-500/10 text-blue-700 dark:text-blue-300',
+  },
+  {
+    status: 'IN-PROCESS',
+    title: 'In Progress',
+    headerColor: 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
+  },
+  {
+    status: 'COMPLETED',
+    title: 'Completed',
+    headerColor: 'bg-green-500/10 text-green-700 dark:text-green-300',
+  },
+  { status: 'CANCELLED', title: 'Cancelled', headerColor: 'bg-muted text-muted-foreground' },
 ];
 
 export default function TasksPage() {
@@ -368,9 +503,15 @@ export default function TasksPage() {
   const [layout, setLayout] = useState<Layout>(() => loadPref('dave:tasks:layout', 'list'));
   const [sort, setSort] = useState<SortField>(() => loadPref('dave:tasks:sort', undefined));
   const [order, setOrder] = useState<'asc' | 'desc'>(() => loadPref('dave:tasks:order', 'asc'));
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>(() => loadPref('dave:tasks:filter:status', undefined));
-  const [filterDue, setFilterDue] = useState<FilterDue>(() => loadPref('dave:tasks:filter:due', undefined));
-  const [filterPriority, setFilterPriority] = useState<FilterPriority>(() => loadPref('dave:tasks:filter:priority', undefined));
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>(() =>
+    loadPref('dave:tasks:filter:status', undefined),
+  );
+  const [filterDue, setFilterDue] = useState<FilterDue>(() =>
+    loadPref('dave:tasks:filter:due', undefined),
+  );
+  const [filterPriority, setFilterPriority] = useState<FilterPriority>(() =>
+    loadPref('dave:tasks:filter:priority', undefined),
+  );
 
   // ── Ephemeral UI state ────────────────────────────────────────────────────
   const [rawSearch, setRawSearch] = useState('');
@@ -379,12 +520,24 @@ export default function TasksPage() {
   const [showCompleted, setShowCompleted] = useState(false);
 
   // ── Persist on change ─────────────────────────────────────────────────────
-  useEffect(() => { savePref('dave:tasks:layout', layout); }, [layout]);
-  useEffect(() => { savePref('dave:tasks:sort', sort); }, [sort]);
-  useEffect(() => { savePref('dave:tasks:order', order); }, [order]);
-  useEffect(() => { savePref('dave:tasks:filter:status', filterStatus); }, [filterStatus]);
-  useEffect(() => { savePref('dave:tasks:filter:due', filterDue); }, [filterDue]);
-  useEffect(() => { savePref('dave:tasks:filter:priority', filterPriority); }, [filterPriority]);
+  useEffect(() => {
+    savePref('dave:tasks:layout', layout);
+  }, [layout]);
+  useEffect(() => {
+    savePref('dave:tasks:sort', sort);
+  }, [sort]);
+  useEffect(() => {
+    savePref('dave:tasks:order', order);
+  }, [order]);
+  useEffect(() => {
+    savePref('dave:tasks:filter:status', filterStatus);
+  }, [filterStatus]);
+  useEffect(() => {
+    savePref('dave:tasks:filter:due', filterDue);
+  }, [filterDue]);
+  useEffect(() => {
+    savePref('dave:tasks:filter:priority', filterPriority);
+  }, [filterPriority]);
 
   // ── Debounce search 150ms ─────────────────────────────────────────────────
   useEffect(() => {
@@ -393,7 +546,11 @@ export default function TasksPage() {
   }, [rawSearch]);
 
   // ── Collection data ───────────────────────────────────────────────────────
-  const calQuery = useQuery({ queryKey: ['calendars'], queryFn: getCalendars, staleTime: 5 * 60_000 });
+  const calQuery = useQuery({
+    queryKey: ['calendars'],
+    queryFn: getCalendars,
+    staleTime: 5 * 60_000,
+  });
   const { hiddenTaskCollections } = useCollectionVisibility();
 
   const taskCollections = useMemo(
@@ -413,15 +570,18 @@ export default function TasksPage() {
   }, []);
 
   // ── Fetch tasks ───────────────────────────────────────────────────────────
-  const params: TasksQueryParams = useMemo(() => ({
-    status: filterStatus ?? undefined,
-    due: filterDue ?? undefined,
-    priority: filterPriority ?? undefined,
-    q: search || undefined,
-    sort: sort ?? undefined,
-    order,
-    collections: visibleCollectionUrls.length > 0 ? visibleCollectionUrls.join(',') : undefined,
-  }), [filterStatus, filterDue, filterPriority, search, sort, order, visibleCollectionUrls]);
+  const params: TasksQueryParams = useMemo(
+    () => ({
+      status: filterStatus ?? undefined,
+      due: filterDue ?? undefined,
+      priority: filterPriority ?? undefined,
+      q: search || undefined,
+      sort: sort ?? undefined,
+      order,
+      collections: visibleCollectionUrls.length > 0 ? visibleCollectionUrls.join(',') : undefined,
+    }),
+    [filterStatus, filterDue, filterPriority, search, sort, order, visibleCollectionUrls],
+  );
 
   const tasksQuery = useQuery({
     queryKey: ['tasks', params],
@@ -449,6 +609,52 @@ export default function TasksPage() {
     () => allTasks.find((t) => t.uid === selectedUid) ?? null,
     [allTasks, selectedUid],
   );
+
+  const isMobile = useIsMobile();
+
+  // ── Panel resize ──────────────────────────────────────────────────────────
+  const PANEL_MIN = 240;
+  const PANEL_MAX = 700;
+  const [panelWidth, setPanelWidth] = useState<number>(() =>
+    loadPref('dave:tasks:panelWidth', 320),
+  );
+
+  useEffect(() => {
+    savePref('dave:tasks:panelWidth', panelWidth);
+  }, [panelWidth]);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = panelWidth;
+
+      const onMove = (ev: MouseEvent) => {
+        const delta = startX - ev.clientX;
+        setPanelWidth(Math.min(PANEL_MAX, Math.max(PANEL_MIN, startWidth + delta)));
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+    [panelWidth],
+  );
+
+  // ── Calendar name / color lookup ──────────────────────────────────────────
+  const collectionNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const cal of taskCollections) map.set(cal.url, cal.displayName);
+    return map;
+  }, [taskCollections]);
+
+  const collectionColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const cal of taskCollections) map.set(cal.url, cal.color);
+    return map;
+  }, [taskCollections]);
 
   const handleSelect = useCallback((uid: string) => {
     setSelectedUid((prev) => (prev === uid ? null : uid));
@@ -533,7 +739,7 @@ export default function TasksPage() {
 
           {sort && (
             <button
-              onClick={() => setOrder((o) => o === 'asc' ? 'desc' : 'asc')}
+              onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
               title={`Sort ${order === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
               className="text-muted-foreground hover:text-foreground"
             >
@@ -554,7 +760,9 @@ export default function TasksPage() {
               <option value="">All statuses</option>
               <option value="active">Active</option>
               {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>{v}</option>
+                <option key={k} value={k}>
+                  {v}
+                </option>
               ))}
             </select>
 
@@ -590,7 +798,11 @@ export default function TasksPage() {
 
             {activeFilters > 0 && (
               <button
-                onClick={() => { setFilterStatus(undefined); setFilterDue(undefined); setFilterPriority(undefined); }}
+                onClick={() => {
+                  setFilterStatus(undefined);
+                  setFilterDue(undefined);
+                  setFilterPriority(undefined);
+                }}
                 className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
                 title="Clear all filters"
               >
@@ -602,9 +814,24 @@ export default function TasksPage() {
 
           {/* Layout toggle */}
           <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
-            <LayoutToggleButton icon={<List className="h-4 w-4" />} active={layout === 'list'} title="List" onClick={() => setLayout('list')} />
-            <LayoutToggleButton icon={<LayoutGrid className="h-4 w-4" />} active={layout === 'compact'} title="Compact" onClick={() => setLayout('compact')} />
-            <LayoutToggleButton icon={<Columns3 className="h-4 w-4" />} active={layout === 'kanban'} title="Kanban" onClick={() => setLayout('kanban')} />
+            <LayoutToggleButton
+              icon={<List className="h-4 w-4" />}
+              active={layout === 'list'}
+              title="List"
+              onClick={() => setLayout('list')}
+            />
+            <LayoutToggleButton
+              icon={<LayoutGrid className="h-4 w-4" />}
+              active={layout === 'compact'}
+              title="Compact"
+              onClick={() => setLayout('compact')}
+            />
+            <LayoutToggleButton
+              icon={<Columns3 className="h-4 w-4" />}
+              active={layout === 'kanban'}
+              title="Kanban"
+              onClick={() => setLayout('kanban')}
+            />
           </div>
         </div>
 
@@ -629,15 +856,21 @@ export default function TasksPage() {
                   childrenOf={childrenOf}
                   selectedUid={selectedUid}
                   onSelect={handleSelect}
+                  calendarName={collectionNameMap.get(task.collectionUrl)}
+                  calendarColor={collectionColorMap.get(task.collectionUrl)}
                 />
               ))}
 
               {/* Empty state for matching set */}
-              {incompleteTasks.length === 0 && completedTasks.length === 0 && !tasksQuery.isLoading && (
-                <p className="px-4 py-6 text-sm text-muted-foreground text-center">
-                  {search || activeFilters > 0 ? 'No tasks match the current filters.' : 'No tasks yet.'}
-                </p>
-              )}
+              {incompleteTasks.length === 0 &&
+                completedTasks.length === 0 &&
+                !tasksQuery.isLoading && (
+                  <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                    {search || activeFilters > 0
+                      ? 'No tasks match the current filters.'
+                      : 'No tasks yet.'}
+                  </p>
+                )}
 
               {/* Completed disclosure */}
               {completedTasks.length > 0 && (
@@ -646,20 +879,27 @@ export default function TasksPage() {
                     onClick={() => setShowCompleted((v) => !v)}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground w-full"
                   >
-                    {showCompleted ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    {showCompleted ? (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    )}
                     Show {completedTasks.length} completed
                   </button>
-                  {showCompleted && completedTasks.map((task) => (
-                    <TaskRow
-                      key={task.uid}
-                      task={task}
-                      compact={layout === 'compact'}
-                      depth={0}
-                      childrenOf={childrenOf}
-                      selectedUid={selectedUid}
-                      onSelect={handleSelect}
-                    />
-                  ))}
+                  {showCompleted &&
+                    completedTasks.map((task) => (
+                      <TaskRow
+                        key={task.uid}
+                        task={task}
+                        compact={layout === 'compact'}
+                        depth={0}
+                        childrenOf={childrenOf}
+                        selectedUid={selectedUid}
+                        onSelect={handleSelect}
+                        calendarName={collectionNameMap.get(task.collectionUrl)}
+                        calendarColor={collectionColorMap.get(task.collectionUrl)}
+                      />
+                    ))}
                 </div>
               )}
             </div>
@@ -683,8 +923,27 @@ export default function TasksPage() {
       </div>
 
       {/* Detail panel */}
-      {selectedTask && (
-        <TaskDetailPanel task={selectedTask} onClose={() => setSelectedUid(null)} />
+      {selectedTask && !isMobile && (
+        <div className="flex shrink-0" style={{ width: panelWidth }}>
+          {/* Drag handle */}
+          <div
+            className="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
+            onMouseDown={startResize}
+            title="Drag to resize"
+          />
+          <TaskDetailPanel
+            task={selectedTask}
+            onClose={() => setSelectedUid(null)}
+            fullscreen={false}
+          />
+        </div>
+      )}
+      {selectedTask && isMobile && (
+        <TaskDetailPanel
+          task={selectedTask}
+          onClose={() => setSelectedUid(null)}
+          fullscreen={true}
+        />
       )}
     </div>
   );
@@ -707,7 +966,9 @@ function LayoutToggleButton({
       title={title}
       className={cn(
         'p-1 rounded transition-colors',
-        active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+        active
+          ? 'bg-primary text-primary-foreground'
+          : 'text-muted-foreground hover:text-foreground',
       )}
     >
       {icon}
