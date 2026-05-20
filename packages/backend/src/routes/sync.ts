@@ -1,10 +1,12 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { DbInstance as DatabaseSync } from '../db/index.js';
+import type { CacheDbInstance } from '../db/cache.js';
 import type { Config } from '../config.js';
-import type { CollectionSyncRequest, CollectionSyncResponse } from '@dave/shared';
+import type { CollectionSyncRequest, CollectionSyncResponse, SyncWorkerHealth } from '@dave/shared';
 import { syncAddressBook, syncCalendar } from '../lib/dav.js';
 import { deleteSession } from '../services/session.js';
 import { requireAuth, COOKIE_NAME } from '../plugins/session.js';
+import type { SyncWorker } from '../workers/syncWorker.js';
 
 async function handleDavError(
   e: unknown,
@@ -27,9 +29,11 @@ async function handleDavError(
 
 export async function syncRoutes(
   app: FastifyInstance,
-  opts: { config: Config; db: DatabaseSync },
+  opts: { config: Config; db: DatabaseSync; cacheDb: CacheDbInstance; syncWorker: SyncWorker },
 ) {
-  const { config, db } = opts;
+  const { config, db, syncWorker } = opts;
+
+  // ── Existing collection sync (events / contacts) ──────────────────────────
 
   app.post<{ Body: CollectionSyncRequest }>(
     '/api/sync',
@@ -66,7 +70,6 @@ export async function syncRoutes(
             .map((r) => (r as PromiseFulfilledResult<CollectionSyncResponse['calendars'][0]>).value),
         };
 
-        // Log partial failures at debug level — the client will retry on next poll.
         for (const r of [...abResults, ...calResults]) {
           if (r.status === 'rejected') {
             app.log.debug({ err: r.reason }, 'Sync of one collection failed');
@@ -77,6 +80,38 @@ export async function syncRoutes(
       } catch (e) {
         await handleDavError(e, req, reply, app, db);
       }
+    },
+  );
+
+  // ── Cache sync worker ─────────────────────────────────────────────────────
+
+  app.get<{ Reply: SyncWorkerHealth }>(
+    '/api/sync/cache/health',
+    { preHandler: requireAuth },
+    async (_req, reply) => {
+      return reply.send(syncWorker.health());
+    },
+  );
+
+  app.post(
+    '/api/sync/tasks',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const username = req.sessionData!.username;
+      // Fire-and-forget; the UI doesn't wait for full sync completion.
+      void syncWorker.triggerForUser(username);
+      return reply.status(202).send({ ok: true });
+    },
+  );
+
+  // Notes and Journals share VJOURNAL collections so one endpoint covers both.
+  app.post(
+    '/api/sync/notes',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const username = req.sessionData!.username;
+      void syncWorker.triggerForUser(username);
+      return reply.status(202).send({ ok: true });
     },
   );
 }

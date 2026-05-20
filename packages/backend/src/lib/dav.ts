@@ -887,3 +887,90 @@ export async function syncCalendar(
 
   return { syncToken: newSyncToken, dirty };
 }
+
+// ── Cache sync helpers ────────────────────────────────────────────────────────
+
+export interface CalendarObjectRaw {
+  url: string;
+  etag: string;
+  rawIcs: string;
+}
+
+export interface CalendarCacheSyncResult {
+  syncToken: string;
+  changed: CalendarObjectRaw[];
+  deleted: string[]; // resolved absolute URLs of deleted objects
+}
+
+/**
+ * Fetch every calendar object in a collection (no time-range filter).
+ * Used for the initial cache population of VTODO/VJOURNAL collections.
+ */
+export async function fetchAllCalendarObjects(
+  session: SessionData,
+  calUrl: string,
+  _config: Config,
+): Promise<CalendarObjectRaw[]> {
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const objects = await _fetchCalendarObjects({
+    calendar: { url: calUrl },
+    headers: authHeaders,
+  });
+  return objects
+    .filter((obj: TsdavTypes.DAVCalendarObject) => obj.data)
+    .map((obj: TsdavTypes.DAVCalendarObject) => ({
+      url: obj.url,
+      etag: obj.etag ?? '',
+      rawIcs: obj.data as string,
+    }));
+}
+
+/**
+ * Incremental sync via sync-collection REPORT.
+ * Unlike syncCalendar(), this also fetches the bodies of changed objects
+ * so the cache can be updated without a second round-trip.
+ */
+export async function syncCalendarForCache(
+  session: SessionData,
+  calUrl: string,
+  currentSyncToken: string,
+  _config: Config,
+): Promise<CalendarCacheSyncResult> {
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+
+  const results = await _syncCollection({
+    url: calUrl,
+    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
+    syncLevel: 1,
+    syncToken: currentSyncToken,
+    headers: authHeaders,
+  });
+
+  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
+  const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
+  const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
+
+  // Resolve relative hrefs to absolute URLs so they match what is stored in the cache.
+  const resolveHref = (href: string): string => {
+    try { return new URL(href, calUrl).href; } catch { return href; }
+  };
+  const deleted = deletedHrefs.map(resolveHref);
+
+  let changed: CalendarObjectRaw[] = [];
+  if (changedHrefs.length > 0) {
+    const objects = await _fetchCalendarObjects({
+      calendar: { url: calUrl },
+      objectUrls: changedHrefs,
+      headers: authHeaders,
+    });
+    changed = objects
+      .filter((obj: TsdavTypes.DAVCalendarObject) => obj.data)
+      .map((obj: TsdavTypes.DAVCalendarObject) => ({
+        url: obj.url,
+        etag: obj.etag ?? '',
+        rawIcs: obj.data as string,
+      }));
+  }
+
+  return { syncToken: newSyncToken, changed, deleted };
+}

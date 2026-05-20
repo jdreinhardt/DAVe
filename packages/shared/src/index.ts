@@ -277,6 +277,14 @@ export interface CollectionSyncResponse {
   calendars: CalendarSyncResult[];
 }
 
+// ── Sync cache ────────────────────────────────────────────────────────────────
+
+export interface SyncWorkerHealth {
+  running: boolean;
+  lastRunAt: string | null; // ISO timestamp or null
+  consecutiveErrors: number;
+}
+
 // ── API error shape ───────────────────────────────────────────────────────────
 
 export interface ApiError {

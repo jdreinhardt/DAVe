@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import path from 'path';
 
 const schema = z.object({
   BAIKAL_BASE_URL: z.string().url('BAIKAL_BASE_URL must be a valid URL'),
@@ -14,6 +15,13 @@ const schema = z.object({
   FRONTEND_DIST: z.string().optional(),
   // Directory for the SQLite session database.
   DATA_DIR: z.string().default('/data'),
+  // Sync cache settings
+  SYNC_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
+  // Explicit path for the cache DB; defaults to DATA_DIR/cache.db when absent.
+  CACHE_DB_PATH: z.string().optional(),
+  MAX_CACHED_ENTRIES_PER_USER: z.coerce.number().int().positive().default(10000),
+  COMPLETED_TASK_RETENTION_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+  BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: z.coerce.number().int().positive().default(365),
 });
 
 export type Config = z.infer<typeof schema>;
@@ -28,4 +36,8 @@ export function loadConfig(): Config {
     process.exit(1);
   }
   return result.data;
+}
+
+export function cacheDbPath(config: Config): string {
+  return config.CACHE_DB_PATH ?? path.join(config.DATA_DIR, 'cache.db');
 }

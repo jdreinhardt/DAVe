@@ -6,7 +6,9 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { loadConfig } from './config.js';
 import { getDb } from './db/index.js';
+import { getCacheDb } from './db/cache.js';
 import { sweepExpiredSessions } from './services/session.js';
+import { SyncWorker } from './workers/syncWorker.js';
 import sessionPlugin from './plugins/session.js';
 import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
@@ -19,6 +21,7 @@ import { syncRoutes } from './routes/sync.js';
 const config = loadConfig();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const db = getDb(config);
+const cacheDb = getCacheDb(config);
 
 const app = Fastify({
   logger: {
@@ -36,6 +39,10 @@ const app = Fastify({
 await app.register(fastifyCookie);
 await app.register(sessionPlugin, { config, db });
 
+// ── Sync worker (created before routes so routes can reference it) ─────────
+
+const syncWorker = new SyncWorker(db, cacheDb, config);
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 await app.register(healthRoutes);
@@ -44,7 +51,7 @@ await app.register(meRoutes);
 await app.register(collectionsRoutes, { config, db });
 await app.register(contactsRoutes, { config, db });
 await app.register(eventsRoutes, { config, db });
-await app.register(syncRoutes, { config, db });
+await app.register(syncRoutes, { config, db, cacheDb, syncWorker });
 
 // ── Static frontend (production only) ────────────────────────────────────────
 
@@ -72,7 +79,6 @@ if (config.NODE_ENV === 'production') {
 
 // ── Background tasks ──────────────────────────────────────────────────────────
 
-// Sweep expired sessions once an hour.
 setInterval(
   () => {
     const deleted = sweepExpiredSessions(config.SESSION_TTL_HOURS, db);
@@ -89,3 +95,16 @@ try {
   app.log.error(err);
   process.exit(1);
 }
+
+// Start the sync worker after the server is listening so app.log is fully set up.
+syncWorker.start(app.log);
+
+// ── Graceful shutdown ─────────────────────────────────────────────────────────
+
+const shutdown = async () => {
+  syncWorker.stop();
+  await app.close();
+  process.exit(0);
+};
+process.on('SIGTERM', () => void shutdown());
+process.on('SIGINT', () => void shutdown());

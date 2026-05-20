@@ -14,6 +14,9 @@ import { contactsRoutes } from '../../routes/contacts.js';
 import { eventsRoutes } from '../../routes/events.js';
 import { syncRoutes } from '../../routes/sync.js';
 import type { DbInstance } from '../../db/index.js';
+import { applySchema } from '../../db/cache.js';
+import type { CacheDbInstance } from '../../db/cache.js';
+import { SyncWorker } from '../../workers/syncWorker.js';
 import type { Config } from '../../config.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
@@ -32,9 +35,14 @@ export const integrationConfig: Config = {
   TRUST_PROXY: false,
   NODE_ENV: 'test',
   DATA_DIR: path.join(os.tmpdir(), 'dave-integration-test'),
+  SYNC_INTERVAL_SECONDS: 60,
+  MAX_CACHED_ENTRIES_PER_USER: 10000,
+  COMPLETED_TASK_RETENTION_DAYS: 7,
+  BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
 };
 
 let _db: DbInstance | null = null;
+let _cacheDb: CacheDbInstance | null = null;
 
 export function getTestDb(): DbInstance {
   if (_db) return _db;
@@ -54,8 +62,16 @@ export function getTestDb(): DbInstance {
   return _db;
 }
 
+export function getTestCacheDb(): CacheDbInstance {
+  if (_cacheDb) return _cacheDb;
+  _cacheDb = new DatabaseSync(':memory:');
+  applySchema(_cacheDb);
+  return _cacheDb;
+}
+
 export async function buildIntegrationApp(): Promise<FastifyInstance> {
   const db = getTestDb();
+  const cacheDb = getTestCacheDb();
   const app = Fastify({ logger: false });
   await app.register(fastifyCookie);
   await app.register(sessionPlugin, { config: integrationConfig, db });
@@ -65,7 +81,8 @@ export async function buildIntegrationApp(): Promise<FastifyInstance> {
   await app.register(collectionsRoutes, { config: integrationConfig, db });
   await app.register(contactsRoutes, { config: integrationConfig, db });
   await app.register(eventsRoutes, { config: integrationConfig, db });
-  await app.register(syncRoutes, { config: integrationConfig, db });
+  const syncWorker = new SyncWorker(db, cacheDb, integrationConfig);
+  await app.register(syncRoutes, { config: integrationConfig, db, cacheDb, syncWorker });
   await app.ready();
   return app;
 }

@@ -76,3 +76,30 @@ export function sweepExpiredSessions(ttlHours: number, db: DatabaseSync): number
     .run(cutoff) as { changes: number };
   return result.changes;
 }
+
+/**
+ * Return all non-expired sessions with their decrypted data.
+ * Used by the background sync worker to discover which users need syncing.
+ * Silently skips sessions with corrupted data.
+ */
+export function getAllActiveSessions(
+  db: DatabaseSync,
+  secret: string,
+  ttlHours: number,
+): Array<{ sessionId: string; data: SessionData }> {
+  const cutoff = Date.now() - ttlHours * 3_600_000;
+  const rows = db
+    .prepare('SELECT id, data FROM sessions WHERE last_activity_at >= ?')
+    .all(cutoff) as unknown as SessionRow[];
+
+  const results: Array<{ sessionId: string; data: SessionData }> = [];
+  for (const row of rows) {
+    try {
+      const data = JSON.parse(decrypt(row.data, secret)) as SessionData;
+      results.push({ sessionId: row.id, data });
+    } catch {
+      // Skip sessions that can't be decrypted.
+    }
+  }
+  return results;
+}
