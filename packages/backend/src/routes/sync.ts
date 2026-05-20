@@ -7,6 +7,7 @@ import { syncAddressBook, syncCalendar } from '../lib/dav.js';
 import { deleteSession } from '../services/session.js';
 import { requireAuth, COOKIE_NAME } from '../plugins/session.js';
 import type { SyncWorker } from '../workers/syncWorker.js';
+import { initialSyncForComponentType } from '../services/cacheSync.js';
 
 async function handleDavError(
   e: unknown,
@@ -31,7 +32,7 @@ export async function syncRoutes(
   app: FastifyInstance,
   opts: { config: Config; db: DatabaseSync; cacheDb: CacheDbInstance; syncWorker: SyncWorker },
 ) {
-  const { config, db, syncWorker } = opts;
+  const { config, db, cacheDb, syncWorker } = opts;
 
   // ── Existing collection sync (events / contacts) ──────────────────────────
 
@@ -97,9 +98,12 @@ export async function syncRoutes(
     '/api/sync/tasks',
     { preHandler: requireAuth },
     async (req, reply) => {
-      const username = req.sessionData!.username;
-      // Fire-and-forget; the UI doesn't wait for full sync completion.
-      void syncWorker.triggerForUser(username);
+      const session = req.sessionData!;
+      const username = session.username;
+      // Seed any VTODO collections not yet in the cache, then hand off to the worker.
+      void initialSyncForComponentType(session, username, 'VTODO', cacheDb, config, app.log)
+        .then(() => syncWorker.triggerForUser(username))
+        .catch((err) => app.log.warn({ err }, 'tasks initial sync failed'));
       return reply.status(202).send({ ok: true });
     },
   );
@@ -109,8 +113,11 @@ export async function syncRoutes(
     '/api/sync/notes',
     { preHandler: requireAuth },
     async (req, reply) => {
-      const username = req.sessionData!.username;
-      void syncWorker.triggerForUser(username);
+      const session = req.sessionData!;
+      const username = session.username;
+      void initialSyncForComponentType(session, username, 'VJOURNAL', cacheDb, config, app.log)
+        .then(() => syncWorker.triggerForUser(username))
+        .catch((err) => app.log.warn({ err }, 'notes initial sync failed'));
       return reply.status(202).send({ ok: true });
     },
   );

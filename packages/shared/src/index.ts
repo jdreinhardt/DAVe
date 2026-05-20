@@ -285,6 +285,53 @@ export interface SyncWorkerHealth {
   consecutiveErrors: number;
 }
 
+// ── Tasks ─────────────────────────────────────────────────────────────────────
+
+export interface TaskRelation {
+  relatedUid: string;
+  reltype: string; // 'PARENT' | 'CHILD' | 'UNKNOWN'
+}
+
+export interface TaskJson {
+  uid: string;
+  summary: string;
+  description: string;
+  status: string | null;        // NEEDS-ACTION | IN-PROCESS | COMPLETED | CANCELLED
+  priority: number | null;      // 1–9 per RFC 5545; null = no priority
+  dtstart: string | null;       // ISO datetime
+  due: string | null;
+  completed: string | null;
+  percentComplete: number | null;
+  lastModified: string | null;  // ISO datetime from LAST-MODIFIED
+  categories: string[];
+  relations: TaskRelation[];
+  collectionUrl: string;
+}
+
+export interface Task {
+  uid: string;
+  etag: string;
+  collectionUrl: string;
+  collectionId: string;  // last path segment of collectionUrl; matches Calendar.id
+  data: TaskJson;
+}
+
+export interface TasksResponse {
+  tasks: Task[];
+  total: number;
+}
+
+export interface TasksQueryParams {
+  status?: string;                                              // NEEDS-ACTION | IN-PROCESS | COMPLETED | CANCELLED | active
+  category?: string;
+  due?: 'overdue' | 'today' | 'this_week' | 'no_due_date';
+  priority?: 'high' | 'medium' | 'low' | 'none';
+  q?: string;
+  sort?: 'summary' | 'due' | 'priority' | 'category' | 'modified';
+  order?: 'asc' | 'desc';
+  collections?: string;  // comma-separated collection URLs
+}
+
 // ── API error shape ───────────────────────────────────────────────────────────
 
 export interface ApiError {

@@ -34,7 +34,11 @@ export default function AppLayout() {
     setSidebarOpen(false);
   }, [pathname]);
 
-  const pageTitle = pathname.startsWith('/contacts') ? 'Contacts' : 'Calendar';
+  const pageTitle = pathname.startsWith('/contacts')
+    ? 'Contacts'
+    : pathname.startsWith('/tasks')
+      ? 'Tasks'
+      : 'Calendar';
 
   if (meQuery.isLoading) {
     return (

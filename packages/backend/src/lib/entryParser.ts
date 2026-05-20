@@ -24,6 +24,7 @@ export interface ParsedEntry {
   due: number | null;          // Unix ms; VTODO only
   completed: number | null;    // Unix ms
   percentComplete: number | null;
+  lastModified: number | null; // Unix ms; from LAST-MODIFIED
   dtstart_present: boolean;
   rawIcs: string;
   categories: string[];
@@ -146,6 +147,7 @@ export function parseEntry(
     due: componentType === 'VTODO' ? icalDateToMs(comp.getFirstProperty('due')) : null,
     completed: icalDateToMs(comp.getFirstProperty('completed')),
     percentComplete: coerceInt(comp.getFirstPropertyValue('percent-complete')),
+    lastModified: icalDateToMs(comp.getFirstProperty('last-modified')),
     dtstart_present: dtstart !== null,
     rawIcs,
     categories: extractCategories(comp),

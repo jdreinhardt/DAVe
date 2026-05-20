@@ -32,6 +32,7 @@ function makeEntry(overrides: Partial<ParsedEntry> = {}): ParsedEntry {
     completed: null,
     percentComplete: null,
     dtstart_present: false,
+    lastModified: null,
     rawIcs: 'BEGIN:VCALENDAR\nEND:VCALENDAR',
     categories: [],
     relations: [],

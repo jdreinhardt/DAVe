@@ -10,8 +10,8 @@ export function upsertEntry(cacheDb: CacheDbInstance, entry: ParsedEntry): numbe
     INSERT INTO entries
       (user_id, collection_url, object_url, component_type, uid, etag,
        summary, description, status, priority, dtstart, due, completed,
-       percent_complete, dtstart_present, raw_ics, last_synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       percent_complete, dtstart_present, last_modified, raw_ics, last_synced_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(uid, user_id) DO UPDATE SET
       collection_url   = excluded.collection_url,
       object_url       = excluded.object_url,
@@ -26,6 +26,7 @@ export function upsertEntry(cacheDb: CacheDbInstance, entry: ParsedEntry): numbe
       completed        = excluded.completed,
       percent_complete = excluded.percent_complete,
       dtstart_present  = excluded.dtstart_present,
+      last_modified    = excluded.last_modified,
       raw_ics          = excluded.raw_ics,
       last_synced_at   = excluded.last_synced_at
   `).run(
@@ -44,6 +45,7 @@ export function upsertEntry(cacheDb: CacheDbInstance, entry: ParsedEntry): numbe
     entry.completed,
     entry.percentComplete,
     entry.dtstart_present ? 1 : 0,
+    entry.lastModified,
     entry.rawIcs,
     entry.lastSyncedAt,
   );

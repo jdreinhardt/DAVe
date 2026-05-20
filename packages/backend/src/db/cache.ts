@@ -47,6 +47,7 @@ export function applySchema(db: CacheDbInstance): void {
       completed        INTEGER,
       percent_complete INTEGER,
       dtstart_present  INTEGER NOT NULL DEFAULT 0,
+      last_modified    INTEGER,
       raw_ics          TEXT    NOT NULL,
       last_synced_at   INTEGER NOT NULL,
       UNIQUE(uid, user_id),
@@ -109,4 +110,12 @@ export function applySchema(db: CacheDbInstance): void {
         VALUES (new.id, new.summary, new.description);
     END;
   `);
+
+  // Migration: add last_modified column if it doesn't exist yet (existing databases).
+  // The index is always created here (IF NOT EXISTS) so both fresh and migrated DBs get it.
+  const cols = db.prepare("PRAGMA table_info(entries)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'last_modified')) {
+    db.exec('ALTER TABLE entries ADD COLUMN last_modified INTEGER');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_entries_user_last_modified ON entries(user_id, last_modified)');
 }

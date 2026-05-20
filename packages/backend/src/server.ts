@@ -17,6 +17,7 @@ import { collectionsRoutes } from './routes/collections.js';
 import { contactsRoutes } from './routes/contacts.js';
 import { eventsRoutes } from './routes/events.js';
 import { syncRoutes } from './routes/sync.js';
+import { tasksRoutes } from './routes/tasks.js';
 
 const config = loadConfig();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +53,7 @@ await app.register(collectionsRoutes, { config, db });
 await app.register(contactsRoutes, { config, db });
 await app.register(eventsRoutes, { config, db });
 await app.register(syncRoutes, { config, db, cacheDb, syncWorker });
+await app.register(tasksRoutes, { cacheDb });
 
 // ── Static frontend (production only) ────────────────────────────────────────
 

@@ -4,6 +4,7 @@ import type { SessionData } from './session.js';
 import {
   fetchAllCalendarObjects,
   syncCalendarForCache,
+  listCalendars,
 } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import {
@@ -104,6 +105,31 @@ export async function incrementalSyncCollection(
 
   upsertCollectionSync(cacheDb, userId, collectionUrl, newToken);
   return newToken;
+}
+
+/**
+ * Discover all calendar collections supporting a given component type and run
+ * initialSyncCollection for any that are not yet seeded in the cache.
+ * Called on first navigation to Tasks / Notes / Journals.
+ */
+export async function initialSyncForComponentType(
+  session: SessionData,
+  userId: string,
+  componentType: 'VTODO' | 'VJOURNAL',
+  cacheDb: CacheDbInstance,
+  config: Config,
+  logger?: Logger,
+): Promise<void> {
+  const calendars = await listCalendars(session, config);
+  const matching = calendars.filter((cal) => cal.components.includes(componentType));
+
+  for (const cal of matching) {
+    const already = getCollectionSync(cacheDb, userId, cal.url);
+    if (already) continue; // incremental sync will keep it current
+
+    logger?.info({ collectionUrl: cal.url, componentType }, 'Running initial sync for new collection');
+    await initialSyncCollection(session, cal.url, cal.syncToken, userId, cacheDb, config, logger);
+  }
 }
 
 /**

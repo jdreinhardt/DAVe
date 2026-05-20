@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BookUser, Calendar, Check, LogOut, Pencil, Plus, RefreshCw, Settings } from 'lucide-react';
+import { BookUser, Calendar, Check, CheckSquare, LogOut, Pencil, Plus, RefreshCw, Settings } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import AddressBookModal from './AddressBookModal';
 import CalendarModal from './CalendarModal';
@@ -49,7 +49,10 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
   const { pathname } = useLocation();
   const inContacts = pathname.startsWith('/contacts');
   const inCalendar = pathname.startsWith('/calendar');
-  const isLoading = (inContacts ? abQuery.isFetching : false) || (inCalendar ? calQuery.isFetching : false);
+  const inTasks = pathname.startsWith('/tasks');
+  const isLoading =
+    (inContacts ? abQuery.isFetching : false) ||
+    (inCalendar || inTasks ? calQuery.isFetching : false);
 
   return (
     <>
@@ -85,6 +88,9 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
         <SidebarNavLink to="/calendar" icon={<Calendar className="h-4 w-4" />}>
           Calendar
         </SidebarNavLink>
+        <SidebarNavLink to="/tasks" icon={<CheckSquare className="h-4 w-4" />}>
+          Tasks
+        </SidebarNavLink>
       </nav>
 
       <div className="mx-4 my-1 border-t border-border" />
@@ -106,6 +112,13 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
           items={calQuery.data}
           isError={calQuery.isError}
           defaultColor="#0082C9"
+        />
+      )}
+
+      {inTasks && (
+        <TaskCollectionSection
+          allCalendars={calQuery.data}
+          isError={calQuery.isError}
         />
       )}
 
@@ -186,6 +199,100 @@ function SidebarNavLink({
       {icon}
       {children}
     </NavLink>
+  );
+}
+
+function TaskCollectionSection({
+  allCalendars,
+  isError,
+}: {
+  allCalendars: CalendarType[] | undefined;
+  isError: boolean;
+}) {
+  const { hiddenTaskCollections, toggleTaskCollection, showAllTaskCollections, hideAllTaskCollections } =
+    useCollectionVisibility();
+
+  const taskCollections = (allCalendars ?? []).filter((cal) =>
+    cal.components.includes('VTODO'),
+  );
+
+  const allVisible = taskCollections.every((c) => !hiddenTaskCollections.has(c.id));
+  const noneVisible =
+    taskCollections.length > 0 && taskCollections.every((c) => hiddenTaskCollections.has(c.id));
+
+  return (
+    <div className="px-2 py-2">
+      <div className="group flex items-center justify-between px-3 mb-1">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Task Lists
+        </p>
+        {taskCollections.length > 1 && (
+          <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={showAllTaskCollections}
+              disabled={allVisible}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors"
+            >
+              All
+            </button>
+            <span className="text-muted-foreground/40 text-xs">·</span>
+            <button
+              onClick={() => hideAllTaskCollections(taskCollections.map((c) => c.id))}
+              disabled={noneVisible}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors"
+            >
+              None
+            </button>
+          </div>
+        )}
+      </div>
+
+      {isError && (
+        <p className="px-3 text-xs text-destructive">Failed to load</p>
+      )}
+
+      {/* Skeleton while loading */}
+      {allCalendars === undefined && !isError && (
+        <div className="px-3 space-y-2">
+          {[1, 2].map((i) => (
+            <div key={i} className="h-5 rounded bg-muted animate-pulse" />
+          ))}
+        </div>
+      )}
+
+      {/* Empty state per §3.1 — no spinner, no polling */}
+      {allCalendars !== undefined && taskCollections.length === 0 && (
+        <p className="px-3 text-xs text-muted-foreground">No collections available</p>
+      )}
+
+      {taskCollections.map((cal) => (
+        <label
+          key={cal.id}
+          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors"
+        >
+          <input
+            type="checkbox"
+            className="sr-only"
+            checked={!hiddenTaskCollections.has(cal.id)}
+            onChange={() => toggleTaskCollection(cal.id)}
+          />
+          <span
+            className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+            style={{
+              backgroundColor: hiddenTaskCollections.has(cal.id) ? 'transparent' : (cal.color || '#0082C9'),
+              borderColor: cal.color || '#0082C9',
+            }}
+          >
+            {!hiddenTaskCollections.has(cal.id) && (
+              <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+            )}
+          </span>
+          <span className={cn('truncate', hiddenTaskCollections.has(cal.id) && 'text-muted-foreground line-through')}>
+            {cal.displayName}
+          </span>
+        </label>
+      ))}
+    </div>
   );
 }
 
