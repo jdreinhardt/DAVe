@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   AlertCircle,
   ArrowLeft,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ClipboardList,
   ExternalLink,
@@ -325,15 +326,19 @@ function KanbanColumn({
   selectedUid,
   onSelect,
   color,
+  collectionColorMap,
+  className,
 }: {
   title: string;
   tasks: Task[];
   selectedUid: string | null;
   onSelect: (uid: string) => void;
   color: string;
+  collectionColorMap: Map<string, string>;
+  className?: string;
 }) {
   return (
-    <div className="flex flex-col min-w-56 w-64 shrink-0 rounded-lg border border-border bg-muted/30">
+    <div className={cn('flex flex-col rounded-lg border border-border bg-muted/30', className)}>
       <div
         className={cn('px-3 py-2 rounded-t-lg font-medium text-sm flex items-center gap-2', color)}
       >
@@ -346,30 +351,36 @@ function KanbanColumn({
         )}
         {tasks.map((task) => {
           const due = dueDateDisplay(task.data.due);
+          const calColor = collectionColorMap.get(task.collectionUrl);
           return (
             <div
               key={task.uid}
               onClick={() => onSelect(task.uid)}
               className={cn(
-                'rounded-md border bg-card p-2.5 cursor-pointer hover:border-primary/50 transition-colors text-sm',
+                'rounded-md border border-border bg-card cursor-pointer hover:border-primary/50 transition-colors text-sm overflow-hidden',
                 selectedUid === task.uid && 'border-primary bg-primary/5',
               )}
             >
-              <p className="font-medium leading-snug mb-1 line-clamp-2">
-                {task.data.summary || '(no title)'}
-              </p>
-              {task.data.priority !== null && (
-                <span
-                  className={cn(
-                    'inline-block w-2 h-2 rounded-full mr-1.5',
-                    priorityColor(task.data.priority),
+              <div className="flex">
+                <div className="w-1 shrink-0" style={{ backgroundColor: calColor }} />
+                <div className="p-2.5 flex-1 min-w-0">
+                  <p className="font-medium leading-snug mb-1 line-clamp-2">
+                    {task.data.summary || '(no title)'}
+                  </p>
+                  {task.data.priority !== null && (
+                    <span
+                      className={cn(
+                        'inline-block w-2 h-2 rounded-full mr-1.5',
+                        priorityColor(task.data.priority),
+                      )}
+                    />
                   )}
-                />
-              )}
-              {due && <span className={cn('text-xs', due.className)}>{due.label}</span>}
-              {task.data.categories.length > 0 && (
-                <CategoryChips categories={task.data.categories} />
-              )}
+                  {due && <span className={cn('text-xs', due.className)}>{due.label}</span>}
+                  {task.data.categories.length > 0 && (
+                    <CategoryChips categories={task.data.categories} />
+                  )}
+                </div>
+              </div>
             </div>
           );
         })}
@@ -482,7 +493,7 @@ type FilterPriority = TasksQueryParams['priority'];
 const KANBAN_COLUMNS: { status: string; title: string; headerColor: string }[] = [
   {
     status: 'NEEDS-ACTION',
-    title: 'To Do',
+    title: 'Pending',
     headerColor: 'bg-blue-500/10 text-blue-700 dark:text-blue-300',
   },
   {
@@ -642,6 +653,49 @@ export default function TasksPage() {
     },
     [panelWidth],
   );
+
+  // ── Kanban board width (for responsive column layout) ────────────────────
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [boardWidth, setBoardWidth] = useState(0);
+
+  useEffect(() => {
+    const el = boardRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setBoardWidth(entry.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // fill: columns stretch equally; scroll: fixed-width + horizontal scroll; swipe: one column at a time
+  const FILL_THRESHOLD = KANBAN_COLUMNS.length * 280;
+  const kanbanMode =
+    boardWidth === 0
+      ? 'scroll'
+      : boardWidth < 480
+        ? 'swipe'
+        : boardWidth < FILL_THRESHOLD
+          ? 'scroll'
+          : 'fill';
+
+  // ── Kanban swipe navigation ───────────────────────────────────────────────
+  const swipeScrollRef = useRef<HTMLDivElement>(null);
+  const [activeColumn, setActiveColumn] = useState(0);
+
+  const scrollToColumn = useCallback((index: number) => {
+    const el = swipeScrollRef.current;
+    if (!el) return;
+    el.scrollTo({ left: index * el.clientWidth, behavior: 'smooth' });
+    setActiveColumn(index);
+  }, []);
+
+  const handleSwipeScroll = useCallback(() => {
+    const el = swipeScrollRef.current;
+    if (!el) return;
+    setActiveColumn(Math.round(el.scrollLeft / el.clientWidth));
+  }, []);
 
   // ── Calendar name / color lookup ──────────────────────────────────────────
   const collectionNameMap = useMemo(() => {
@@ -836,7 +890,7 @@ export default function TasksPage() {
         </div>
 
         {/* Task content */}
-        <div className="flex-1 overflow-auto">
+        <div ref={boardRef} className="flex-1 overflow-auto">
           {tasksQuery.isError && (
             <div className="flex items-center gap-2 p-4 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
@@ -906,17 +960,100 @@ export default function TasksPage() {
           )}
 
           {!tasksQuery.isError && layout === 'kanban' && (
-            <div className="flex gap-3 p-4 h-full overflow-x-auto">
-              {KANBAN_COLUMNS.map(({ status, title, headerColor }) => (
-                <KanbanColumn
-                  key={status}
-                  title={title}
-                  tasks={kanbanColumns.get(status) ?? []}
-                  selectedUid={selectedUid}
-                  onSelect={handleSelect}
-                  color={headerColor}
-                />
-              ))}
+            <div className="flex flex-col h-full overflow-hidden">
+              {kanbanMode !== 'swipe' && (
+                <div
+                  className={cn(
+                    'flex gap-3 p-4 h-full',
+                    kanbanMode === 'fill' ? 'overflow-hidden' : 'overflow-x-auto',
+                  )}
+                >
+                  {KANBAN_COLUMNS.map(({ status, title, headerColor }) => (
+                    <KanbanColumn
+                      key={status}
+                      title={title}
+                      tasks={kanbanColumns.get(status) ?? []}
+                      selectedUid={selectedUid}
+                      onSelect={handleSelect}
+                      color={headerColor}
+                      collectionColorMap={collectionColorMap}
+                      className={
+                        kanbanMode === 'fill' ? 'flex-1 min-w-0' : 'min-w-56 w-64 shrink-0'
+                      }
+                    />
+                  ))}
+                </div>
+              )}
+
+              {kanbanMode === 'swipe' && (
+                <div className="flex flex-col h-full">
+                  {/* Column nav bar */}
+                  <div className="flex items-center justify-between px-4 py-2 shrink-0 border-b border-border">
+                    <button
+                      onClick={() => scrollToColumn(Math.max(0, activeColumn - 1))}
+                      disabled={activeColumn === 0}
+                      className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      aria-label="Previous column"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <div className="text-sm font-medium">
+                      {KANBAN_COLUMNS[activeColumn]?.title}
+                      <span className="ml-2 text-xs font-normal text-muted-foreground">
+                        {kanbanColumns.get(KANBAN_COLUMNS[activeColumn]?.status ?? '')?.length ?? 0}{' '}
+                        tasks
+                      </span>
+                    </div>
+                    <button
+                      onClick={() =>
+                        scrollToColumn(Math.min(KANBAN_COLUMNS.length - 1, activeColumn + 1))
+                      }
+                      disabled={activeColumn === KANBAN_COLUMNS.length - 1}
+                      className="p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      aria-label="Next column"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {/* Snap-scroll columns */}
+                  <div
+                    ref={swipeScrollRef}
+                    onScroll={handleSwipeScroll}
+                    className="flex flex-1 overflow-x-auto snap-x snap-mandatory [&::-webkit-scrollbar]:hidden"
+                    style={{ scrollbarWidth: 'none' }}
+                  >
+                    {KANBAN_COLUMNS.map(({ status, title, headerColor }) => (
+                      <div key={status} className="w-full shrink-0 snap-start flex flex-col p-3">
+                        <KanbanColumn
+                          title={title}
+                          tasks={kanbanColumns.get(status) ?? []}
+                          selectedUid={selectedUid}
+                          onSelect={handleSelect}
+                          color={headerColor}
+                          collectionColorMap={collectionColorMap}
+                          className="flex-1"
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Column indicator dots */}
+                  <div className="flex justify-center gap-2 py-2 shrink-0">
+                    {KANBAN_COLUMNS.map((col, i) => (
+                      <button
+                        key={col.status}
+                        onClick={() => scrollToColumn(i)}
+                        className={cn(
+                          'w-2 h-2 rounded-full transition-colors',
+                          i === activeColumn ? 'bg-primary' : 'bg-muted-foreground/30',
+                        )}
+                        aria-label={`Go to ${col.title}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
