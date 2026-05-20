@@ -15,6 +15,11 @@ import {
   evictOldCompleted,
 } from '../db/cacheOps.js';
 
+interface CollectionSyncRow {
+  collection_url: string;
+  sync_token: string;
+}
+
 type Logger = {
   info: (obj: object | string, msg?: string) => void;
   debug: (obj: object | string, msg?: string) => void;
@@ -102,8 +107,14 @@ export async function incrementalSyncCollection(
 }
 
 /**
- * Sync all calendar collections for one user.
- * Falls back to initialSyncCollection for collections not yet in the cache.
+ * Incremental sync for all collections already known in the cache for one user.
+ *
+ * The worker only calls this function. Initial sync (populating the cache for
+ * the first time) is triggered by user navigation via the /api/sync/tasks and
+ * /api/sync/notes endpoints, not by the background worker. This means the worker
+ * never issues a PROPFIND/listCalendars call — it only processes collections
+ * already recorded in collection_sync, which avoids spurious Baikal traffic for
+ * users who haven't visited Tasks/Notes/Journals yet (including stale sessions).
  */
 export async function syncAllCollectionsForUser(
   session: SessionData,
@@ -112,23 +123,19 @@ export async function syncAllCollectionsForUser(
   config: Config,
   logger?: Logger,
 ): Promise<void> {
-  const { listCalendars } = await import('../lib/dav.js');
-  const calendars = await listCalendars(session, config);
+  const known = cacheDb
+    .prepare('SELECT collection_url, sync_token FROM collection_sync WHERE user_id = ?')
+    .all(userId) as unknown as CollectionSyncRow[];
 
-  for (const cal of calendars) {
-    const state = getCollectionSync(cacheDb, userId, cal.url);
+  if (known.length === 0) return;
+
+  for (const { collection_url, sync_token } of known) {
     try {
-      if (!state) {
-        await initialSyncCollection(
-          session, cal.url, cal.syncToken, userId, cacheDb, config, logger,
-        );
-      } else {
-        await incrementalSyncCollection(
-          session, cal.url, userId, state.syncToken, cacheDb, config, logger,
-        );
-      }
+      await incrementalSyncCollection(
+        session, collection_url, userId, sync_token, cacheDb, config, logger,
+      );
     } catch (err) {
-      logger?.warn({ err, collectionUrl: cal.url }, 'Sync failed for collection; will retry next tick');
+      logger?.warn({ err, collectionUrl: collection_url }, 'Sync failed for collection; will retry next tick');
     }
   }
 
