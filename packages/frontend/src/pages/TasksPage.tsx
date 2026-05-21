@@ -60,7 +60,7 @@ function priorityColor(p: number | null): string {
   if (p === null) return '';
   if (p <= 3) return 'bg-destructive';
   if (p <= 6) return 'bg-amber-500';
-  return 'bg-muted-foreground/40';
+  return 'bg-green-500';
 }
 
 // ── Due date helpers ──────────────────────────────────────────────────────────
