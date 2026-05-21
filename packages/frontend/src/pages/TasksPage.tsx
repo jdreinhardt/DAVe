@@ -23,6 +23,7 @@ import type { Task, TaskJson, TasksQueryParams } from '@dave/shared';
 import { fetchTasks, fetchTask, createTask, updateTask, deleteTask, applyCompletion, applyStatusChange, triggerTasksSync } from '../api/tasks';
 import { getCalendars } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
+import { useSettings } from '../contexts/Settings';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../lib/utils';
 import TaskEditForm, { emptyTaskJson } from '../components/TaskEditForm';
@@ -663,9 +664,10 @@ const KANBAN_COLUMNS: { status: string; title: string; headerColor: string }[] =
 
 export default function TasksPage() {
   const queryClient = useQueryClient();
+  const { taskDefaultLayout } = useSettings();
 
   // ── Persisted UI state ────────────────────────────────────────────────────
-  const [layout, setLayout] = useState<Layout>(() => loadPref('dave:tasks:layout', 'list'));
+  const [layout, setLayout] = useState<Layout>(() => loadPref('dave:tasks:layout', taskDefaultLayout));
   const [sort, setSort] = useState<SortField>(() => loadPref('dave:tasks:sort', undefined));
   const [order, setOrder] = useState<'asc' | 'desc'>(() => loadPref('dave:tasks:order', 'asc'));
   const [filterStatus, setFilterStatus] = useState<FilterStatus>(() =>

@@ -5,6 +5,7 @@ export type SortDir = 'asc' | 'desc';
 export type ContactSubtitleField = 'nickname' | 'email' | 'phone' | 'organization' | 'title' | '';
 export type MapService = 'osm' | 'google' | 'apple';
 export type DarkMode = 'light' | 'dark' | 'system';
+export type TaskLayout = 'list' | 'compact' | 'kanban';
 
 export interface ContactSortSettings {
   sortBy: SortBy;
@@ -20,16 +21,20 @@ interface SettingsContextValue {
   updateMapService: (s: MapService) => void;
   darkMode: DarkMode;
   updateDarkMode: (m: DarkMode) => void;
+  taskDefaultLayout: TaskLayout;
+  updateTaskDefaultLayout: (l: TaskLayout) => void;
 }
 
 const SORT_KEY = 'dave:settings:contactSort';
 const SUBTITLE_KEY = 'dave:settings:contactSubtitleField';
 const MAP_SERVICE_KEY = 'dave:settings:mapService';
 const DARK_MODE_KEY = 'dave:settings:darkMode';
+const TASK_LAYOUT_KEY = 'dave:settings:taskDefaultLayout';
 
 const VALID_SUBTITLE_FIELDS: ContactSubtitleField[] = ['nickname', 'email', 'phone', 'organization', 'title', ''];
 const VALID_MAP_SERVICES: MapService[] = ['osm', 'google', 'apple'];
 const VALID_DARK_MODES: DarkMode[] = ['light', 'dark', 'system'];
+const VALID_TASK_LAYOUTS: TaskLayout[] = ['list', 'compact', 'kanban'];
 
 function loadDarkMode(): DarkMode {
   try {
@@ -82,6 +87,18 @@ function loadContactSubtitleField(): ContactSubtitleField {
   return '';
 }
 
+function loadTaskDefaultLayout(): TaskLayout {
+  try {
+    const raw = localStorage.getItem(TASK_LAYOUT_KEY);
+    if (raw !== null && VALID_TASK_LAYOUTS.includes(raw as TaskLayout)) {
+      return raw as TaskLayout;
+    }
+  } catch {
+    // ignore corrupt storage
+  }
+  return 'list';
+}
+
 const SettingsContext = createContext<SettingsContextValue | null>(null);
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
@@ -89,6 +106,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [contactSubtitleField, setContactSubtitleField] = useState<ContactSubtitleField>(loadContactSubtitleField);
   const [mapService, setMapService] = useState<MapService>(loadMapService);
   const [darkMode, setDarkMode] = useState<DarkMode>(loadDarkMode);
+  const [taskDefaultLayout, setTaskDefaultLayout] = useState<TaskLayout>(loadTaskDefaultLayout);
 
   const updateContactSort = useCallback((s: ContactSortSettings) => {
     setContactSort(s);
@@ -126,6 +144,15 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const updateTaskDefaultLayout = useCallback((l: TaskLayout) => {
+    setTaskDefaultLayout(l);
+    try {
+      localStorage.setItem(TASK_LAYOUT_KEY, l);
+    } catch {
+      // ignore write failures (private browsing quota)
+    }
+  }, []);
+
   // Apply .dark class to <html> and keep it in sync with system preference.
   useEffect(() => {
     const apply = () => {
@@ -146,7 +173,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [darkMode]);
 
   return (
-    <SettingsContext.Provider value={{ contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode }}>
+    <SettingsContext.Provider value={{ contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout }}>
       {children}
     </SettingsContext.Provider>
   );
