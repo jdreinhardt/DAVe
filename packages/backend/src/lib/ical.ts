@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import type { EventJson, AlarmJson, AttendeeJson, RecurrenceRule } from '@dave/shared';
+import type { EventJson, AlarmJson, AttendeeJson, RecurrenceRule, TaskJson } from '@dave/shared';
 // crypto is available as a global in Node 19+; the import keeps older Node happy.
 import { randomUUID } from 'node:crypto';
 
@@ -745,3 +745,183 @@ function parseRRule(vevent: any): RecurrenceRule | null {
     return null;
   }
 }
+
+// ── Task helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Enforce the three-property coherence rule for task completion (spec §5.6):
+ * STATUS=COMPLETED ↔ PERCENT-COMPLETE=100 ↔ COMPLETED timestamp.
+ * STATUS=CANCELLED clears COMPLETED but leaves PERCENT-COMPLETE alone.
+ * Setting PERCENT-COMPLETE=100 on an otherwise non-complete task triggers completion.
+ */
+export function applyCompletion(data: TaskJson): TaskJson {
+  const result = { ...data };
+
+  // Percent-complete=100 implies completion regardless of status field.
+  if (result.percentComplete === 100 && result.status !== 'CANCELLED') {
+    result.status = 'COMPLETED';
+  }
+
+  if (result.status === 'COMPLETED') {
+    result.percentComplete = 100;
+    if (!result.completed) result.completed = new Date().toISOString();
+  } else if (result.status === 'CANCELLED') {
+    result.completed = null;
+    // percent-complete left as-is per spec
+  } else {
+    // Any active status — clear completed timestamp and percent if they signal completion.
+    if (result.percentComplete === 100) result.percentComplete = 0;
+    result.completed = null;
+  }
+
+  return result;
+}
+
+/**
+ * Serialize a TaskJson into a VCALENDAR > VTODO ICS string.
+ *
+ * When rawIcs is provided (update path), the existing ICS is parsed and only
+ * the managed properties are replaced — unknown X- properties and any other
+ * fields we don't render are preserved verbatim (round-trip fidelity).
+ *
+ * When rawIcs is absent (create path), a fresh VCALENDAR is built.
+ */
+export function serializeIcalTask(task: TaskJson, rawIcs?: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vcal: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vtodo: any;
+
+  if (rawIcs) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jcal: any = ICAL.parse(rawIcs);
+      vcal = new ICAL.Component(jcal);
+      vtodo = vcal.getFirstSubcomponent('vtodo');
+    } catch {
+      rawIcs = undefined; // fall through to create path
+    }
+  }
+
+  if (!vtodo) {
+    // Create path.
+    vcal = new ICAL.Component(['vcalendar', [], []]);
+    vcal.addPropertyWithValue('version', '2.0');
+    vcal.addPropertyWithValue('prodid', '-//dave//EN');
+    vcal.addPropertyWithValue('calscale', 'GREGORIAN');
+    vtodo = new ICAL.Component('vtodo');
+    vcal.addSubcomponent(vtodo);
+  }
+
+  const uid = task.uid || randomUUID();
+
+  vtodo.removeAllProperties('uid');
+  vtodo.addPropertyWithValue('uid', uid);
+
+  // DTSTAMP — always refresh
+  vtodo.removeAllProperties('dtstamp');
+  vtodo.addPropertyWithValue('dtstamp', ICAL.Time.fromJSDate(new Date(), true));
+
+  // LAST-MODIFIED — always refresh
+  vtodo.removeAllProperties('last-modified');
+  vtodo.addPropertyWithValue('last-modified', ICAL.Time.fromJSDate(new Date(), true));
+
+  setPropText(vtodo, 'summary', task.summary);
+  setPropText(vtodo, 'description', task.description || null);
+
+  if (task.status) {
+    setPropText(vtodo, 'status', task.status.toUpperCase());
+  } else {
+    vtodo.removeAllProperties('status');
+  }
+
+  if (task.priority != null) {
+    vtodo.removeAllProperties('priority');
+    vtodo.addPropertyWithValue('priority', task.priority);
+  } else {
+    vtodo.removeAllProperties('priority');
+  }
+
+  if (task.percentComplete != null) {
+    vtodo.removeAllProperties('percent-complete');
+    vtodo.addPropertyWithValue('percent-complete', task.percentComplete);
+  } else {
+    vtodo.removeAllProperties('percent-complete');
+  }
+
+  // DTSTART — date-only if the value is a date string (no T), otherwise datetime
+  setDateOrDatetime(vtodo, 'dtstart', task.dtstart);
+  setDateOrDatetime(vtodo, 'due', task.due);
+  setDateOrDatetime(vtodo, 'completed', task.completed);
+
+  // CATEGORIES — one CATEGORIES property with all values
+  vtodo.removeAllProperties('categories');
+  if (task.categories.length > 0) {
+    const catProp = new ICAL.Property('categories');
+    catProp.setValues(task.categories);
+    vtodo.addProperty(catProp);
+  }
+
+  // RELATED-TO — one property per relation
+  vtodo.removeAllProperties('related-to');
+  for (const rel of task.relations) {
+    const relProp = new ICAL.Property('related-to');
+    if (rel.reltype && rel.reltype !== 'UNKNOWN') {
+      relProp.setParameter('reltype', rel.reltype);
+    }
+    relProp.setValue(rel.relatedUid);
+    vtodo.addProperty(relProp);
+  }
+
+  // RRULE — preserve existing if task.rrule is null (we don't edit it in M3),
+  // or update if a value is explicitly provided.
+  if (task.rrule !== null && task.rrule !== undefined) {
+    vtodo.removeAllProperties('rrule');
+    if (task.rrule) {
+      const rruleProp = new ICAL.Property('rrule');
+      rruleProp.setValue(ICAL.Recur.fromString(task.rrule));
+      vtodo.addProperty(rruleProp);
+    }
+  }
+  // If task.rrule is null/undefined (not sent by client), leave any existing RRULE alone.
+
+  // VALARMs: replace only when the caller provides alarms data (non-empty).
+  // An empty array on an update path means "alarms weren't included in this
+  // request" (e.g. a list-response status toggle), so we leave existing
+  // VALARMs intact to avoid silent data loss. The full edit form always sends
+  // the real alarm list fetched from the single-task endpoint.
+  if (!rawIcs || (task.alarms && task.alarms.length > 0)) {
+    for (const sub of vtodo.getAllSubcomponents('valarm')) {
+      vtodo.removeSubcomponent(sub);
+    }
+    for (const alarm of task.alarms ?? []) {
+      serializeAlarm(vtodo, alarm, task.summary);
+    }
+  }
+
+  return vcal.toString();
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function setPropText(comp: any, propName: string, value: string | null): void {
+  comp.removeAllProperties(propName);
+  if (value != null && value !== '') {
+    comp.addPropertyWithValue(propName, value);
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function setDateOrDatetime(comp: any, propName: string, isoStr: string | null): void {
+  comp.removeAllProperties(propName);
+  if (!isoStr) return;
+  const prop = new ICAL.Property(propName);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoStr)) {
+    prop.resetType('date');
+    prop.setValue(ICAL.Time.fromDateString(isoStr));
+  } else {
+    prop.resetType('date-time');
+    prop.setValue(ICAL.Time.fromJSDate(new Date(isoStr), true));
+  }
+  comp.addProperty(prop);
+}
+

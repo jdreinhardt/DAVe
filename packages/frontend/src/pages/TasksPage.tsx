@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
   ArrowLeft,
@@ -7,20 +7,24 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  Edit2,
   ExternalLink,
   List,
   LayoutGrid,
   Columns3,
+  Plus,
   Search,
+  Trash2,
   X,
   ArrowUpDown,
 } from 'lucide-react';
-import type { Task, TasksQueryParams } from '@dave/shared';
-import { fetchTasks, triggerTasksSync } from '../api/tasks';
+import type { Task, TaskJson, TasksQueryParams } from '@dave/shared';
+import { fetchTasks, fetchTask, createTask, updateTask, deleteTask, applyCompletion, triggerTasksSync } from '../api/tasks';
 import { getCalendars } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../lib/utils';
+import TaskEditForm, { emptyTaskJson } from '../components/TaskEditForm';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -128,6 +132,7 @@ function TaskRow({
   childrenOf,
   selectedUid,
   onSelect,
+  onToggleComplete,
   calendarName,
   calendarColor,
 }: {
@@ -137,6 +142,7 @@ function TaskRow({
   childrenOf: Map<string, Task[]>;
   selectedUid: string | null;
   onSelect: (uid: string) => void;
+  onToggleComplete: (task: Task) => void;
   calendarName?: string;
   calendarColor?: string;
 }) {
@@ -179,19 +185,21 @@ function TaskRow({
           <span className="shrink-0 w-3.5" />
         )}
 
-        {/* Disabled status checkbox */}
+        {/* Completion checkbox */}
         <button
-          disabled
-          aria-label="Toggle complete (not available yet)"
+          aria-label={task.data.status === 'COMPLETED' ? 'Mark incomplete' : 'Mark complete'}
           className={cn(
-            'shrink-0 mt-0.5 w-4 h-4 rounded-full border-2 cursor-not-allowed opacity-50 transition-colors',
+            'shrink-0 mt-0.5 w-4 h-4 rounded-full border-2 transition-colors hover:opacity-80',
             task.data.status === 'COMPLETED'
               ? 'bg-primary border-primary'
               : task.data.status === 'CANCELLED'
-                ? 'border-muted-foreground bg-muted'
-                : 'border-muted-foreground',
+                ? 'border-muted-foreground bg-muted cursor-not-allowed opacity-50'
+                : 'border-muted-foreground hover:border-primary',
           )}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (task.data.status !== 'CANCELLED') onToggleComplete(task);
+          }}
         />
 
         {/* Priority indicator */}
@@ -283,6 +291,7 @@ function TaskRow({
             childrenOf={childrenOf}
             selectedUid={selectedUid}
             onSelect={onSelect}
+            onToggleComplete={onToggleComplete}
             calendarName={calendarName}
             calendarColor={calendarColor}
           />
@@ -310,6 +319,7 @@ function TaskRow({
                 childrenOf={childrenOf}
                 selectedUid={selectedUid}
                 onSelect={onSelect}
+                onToggleComplete={onToggleComplete}
                 calendarName={calendarName}
                 calendarColor={calendarColor}
               />
@@ -392,10 +402,16 @@ function KanbanColumn({
 function TaskDetailPanel({
   task,
   onClose,
+  onEdit,
+  onDelete,
+  onToggleComplete,
   fullscreen = false,
 }: {
   task: Task;
   onClose: () => void;
+  onEdit: (task: Task) => void;
+  onDelete: (task: Task) => void;
+  onToggleComplete: (task: Task) => void;
   fullscreen?: boolean;
 }) {
   const due = dueDateDisplay(task.data.due);
@@ -427,7 +443,7 @@ function TaskDetailPanel({
         fullscreen ? 'flex-1' : 'flex-1 border-l border-border',
       )}
     >
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         {fullscreen && (
           <button
             onClick={onClose}
@@ -437,9 +453,37 @@ function TaskDetailPanel({
             <ArrowLeft className="h-4 w-4" />
           </button>
         )}
-        <h2 className="font-semibold text-sm flex-1 truncate">
+        <h2 className="font-semibold text-sm flex-1 truncate min-w-0">
           {task.data.summary || '(no title)'}
         </h2>
+        <button
+          onClick={() => onToggleComplete(task)}
+          disabled={task.data.status === 'CANCELLED'}
+          title={task.data.status === 'COMPLETED' ? 'Mark incomplete' : 'Mark complete'}
+          className={cn(
+            'shrink-0 text-xs px-2 py-1 rounded border transition-colors',
+            task.data.status === 'COMPLETED'
+              ? 'border-primary text-primary hover:bg-primary/10'
+              : 'border-muted-foreground/50 text-muted-foreground hover:border-primary hover:text-primary',
+            'disabled:opacity-40 disabled:cursor-not-allowed',
+          )}
+        >
+          {task.data.status === 'COMPLETED' ? 'Completed' : 'Mark done'}
+        </button>
+        <button
+          onClick={() => onEdit(task)}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          aria-label="Edit task"
+        >
+          <Edit2 className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => onDelete(task)}
+          className="shrink-0 text-destructive/60 hover:text-destructive"
+          aria-label="Delete task"
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
         {!fullscreen && (
           <button
             onClick={onClose}
@@ -510,6 +554,8 @@ const KANBAN_COLUMNS: { status: string; title: string; headerColor: string }[] =
 ];
 
 export default function TasksPage() {
+  const queryClient = useQueryClient();
+
   // ── Persisted UI state ────────────────────────────────────────────────────
   const [layout, setLayout] = useState<Layout>(() => loadPref('dave:tasks:layout', 'list'));
   const [sort, setSort] = useState<SortField>(() => loadPref('dave:tasks:sort', undefined));
@@ -529,6 +575,14 @@ export default function TasksPage() {
   const [search, setSearch] = useState('');
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
+
+  // ── Edit / create / delete state ──────────────────────────────────────────
+  const [editingTaskData, setEditingTaskData] = useState<{ task: Task; fullData: TaskJson } | null>(null);
+  const [createMode, setCreateMode] = useState(false);
+  const [defaultCreateCollectionUrl, setDefaultCreateCollectionUrl] = useState<string>('');
+  const [deleteConfirmTask, setDeleteConfirmTask] = useState<Task | null>(null);
+  const [conflictMessage, setConflictMessage] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // ── Persist on change ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -574,6 +628,86 @@ export default function TasksPage() {
     () => taskCollections.filter((c) => !hiddenTaskCollections.has(c.id)).map((c) => c.url),
     [taskCollections, hiddenTaskCollections],
   );
+
+  // ── Mutations ─────────────────────────────────────────────────────────────
+
+  const invalidateTasks = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['tasks'] });
+  }, [queryClient]);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3500);
+  }, []);
+
+  const createMutation = useMutation({
+    mutationFn: (data: TaskJson) => createTask(data),
+    onSuccess: (result) => {
+      savePref('dave:tasks:lastCollectionUrl', result.collectionUrl);
+      setCreateMode(false);
+      setSelectedUid(result.uid);
+      invalidateTasks();
+    },
+    onError: () => showToast('Failed to create task. Please try again.'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ data, etag }: { data: TaskJson; etag: string }) =>
+      updateTask(data.uid, data, etag),
+    onSuccess: () => {
+      setEditingTaskData(null);
+      invalidateTasks();
+    },
+    onError: (err: unknown) => {
+      const e = err as { status?: number; message?: string };
+      if (e.status === 412) {
+        setConflictMessage('This task was modified elsewhere. Reload to see the latest version.');
+      } else {
+        showToast('Failed to save task. Please try again.');
+      }
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: ({ uid, etag }: { uid: string; etag: string }) => deleteTask(uid, etag),
+    onSuccess: () => {
+      setDeleteConfirmTask(null);
+      setSelectedUid(null);
+      invalidateTasks();
+    },
+    onError: (err: unknown) => {
+      const e = err as { status?: number };
+      if (e.status === 412) {
+        setConflictMessage('This task was modified elsewhere. Reload before deleting.');
+      } else {
+        showToast('Failed to delete task. Please try again.');
+      }
+      setDeleteConfirmTask(null);
+    },
+  });
+
+  const handleToggleComplete = useCallback((task: Task) => {
+    const completed = task.data.status !== 'COMPLETED';
+    const updated = applyCompletion(task.data, completed);
+    updateMutation.mutate({ data: updated, etag: task.etag });
+  }, [updateMutation]);
+
+  const handleEdit = useCallback(async (task: Task) => {
+    // Fetch full task data (including alarms) before opening the edit form.
+    try {
+      const full = await fetchTask(task.uid);
+      setEditingTaskData({ task, fullData: full.data });
+    } catch {
+      showToast('Failed to load task details.');
+    }
+  }, [showToast]);
+
+  const handleCreate = useCallback(() => {
+    const url = loadPref<string>('dave:tasks:lastCollectionUrl', '') ||
+      (taskCollections[0]?.url ?? '');
+    setDefaultCreateCollectionUrl(url);
+    setCreateMode(true);
+  }, [taskCollections]);
 
   // ── Trigger initial sync once on mount ───────────────────────────────────
   useEffect(() => {
@@ -757,6 +891,16 @@ export default function TasksPage() {
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Toolbar */}
         <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0 flex-wrap">
+          {/* New task button */}
+          <button
+            onClick={handleCreate}
+            disabled={!hasTaskCollections || visibleCollectionUrls.length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 shrink-0"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New task
+          </button>
+
           {/* Search */}
           <div className="relative flex-1 min-w-40 max-w-72">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
@@ -910,6 +1054,7 @@ export default function TasksPage() {
                   childrenOf={childrenOf}
                   selectedUid={selectedUid}
                   onSelect={handleSelect}
+                  onToggleComplete={handleToggleComplete}
                   calendarName={collectionNameMap.get(task.collectionUrl)}
                   calendarColor={collectionColorMap.get(task.collectionUrl)}
                 />
@@ -950,6 +1095,7 @@ export default function TasksPage() {
                         childrenOf={childrenOf}
                         selectedUid={selectedUid}
                         onSelect={handleSelect}
+                        onToggleComplete={handleToggleComplete}
                         calendarName={collectionNameMap.get(task.collectionUrl)}
                         calendarColor={collectionColorMap.get(task.collectionUrl)}
                       />
@@ -1060,7 +1206,7 @@ export default function TasksPage() {
       </div>
 
       {/* Detail panel */}
-      {selectedTask && !isMobile && (
+      {selectedTask && !editingTaskData && !isMobile && (
         <div className="flex shrink-0" style={{ width: panelWidth }}>
           {/* Drag handle */}
           <div
@@ -1071,16 +1217,139 @@ export default function TasksPage() {
           <TaskDetailPanel
             task={selectedTask}
             onClose={() => setSelectedUid(null)}
+            onEdit={handleEdit}
+            onDelete={setDeleteConfirmTask}
+            onToggleComplete={handleToggleComplete}
             fullscreen={false}
           />
         </div>
       )}
-      {selectedTask && isMobile && (
+      {selectedTask && !editingTaskData && isMobile && (
         <TaskDetailPanel
           task={selectedTask}
           onClose={() => setSelectedUid(null)}
+          onEdit={handleEdit}
+          onDelete={setDeleteConfirmTask}
+          onToggleComplete={handleToggleComplete}
           fullscreen={true}
         />
+      )}
+
+      {/* Edit form panel */}
+      {editingTaskData && (
+        <div
+          className={cn(
+            'flex flex-col bg-card border-l border-border overflow-y-auto',
+            isMobile ? 'fixed inset-0 z-50' : 'shrink-0',
+          )}
+          style={!isMobile ? { width: panelWidth } : undefined}
+        >
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
+            <h2 className="text-sm font-semibold flex-1">Edit task</h2>
+            <button
+              onClick={() => setEditingTaskData(null)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <TaskEditForm
+            initial={editingTaskData.fullData}
+            calendars={taskCollections}
+            isNew={false}
+            saving={updateMutation.isPending}
+            onSave={(data) => updateMutation.mutate({ data, etag: editingTaskData.task.etag })}
+            onDelete={() => setDeleteConfirmTask(editingTaskData.task)}
+            onCancel={() => setEditingTaskData(null)}
+          />
+        </div>
+      )}
+
+      {/* Create task modal */}
+      {createMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-card rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+              <h2 className="text-sm font-semibold flex-1">New task</h2>
+              <button
+                onClick={() => setCreateMode(false)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <TaskEditForm
+              initial={emptyTaskJson(
+                defaultCreateCollectionUrl || taskCollections[0]?.url || '',
+              )}
+              calendars={taskCollections}
+              isNew={true}
+              saving={createMutation.isPending}
+              onSave={(data) => createMutation.mutate(data)}
+              onCancel={() => setCreateMode(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Delete confirmation dialog */}
+      {deleteConfirmTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-card rounded-lg shadow-xl w-full max-w-sm p-6">
+            <h2 className="font-semibold mb-2">Delete task?</h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              &ldquo;{deleteConfirmTask.data.summary || '(no title)'}&rdquo; will be permanently deleted.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setDeleteConfirmTask(null)}
+                className="px-3 py-1.5 text-sm rounded-md border border-input hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() =>
+                  deleteMutation.mutate({ uid: deleteConfirmTask.uid, etag: deleteConfirmTask.etag })
+                }
+                disabled={deleteMutation.isPending}
+                className="px-3 py-1.5 text-sm rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+              >
+                {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ETag conflict dialog */}
+      {conflictMessage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-card rounded-lg shadow-xl w-full max-w-sm p-6">
+            <h2 className="font-semibold mb-2">Conflict</h2>
+            <p className="text-sm text-muted-foreground mb-4">{conflictMessage}</p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => { setConflictMessage(null); setEditingTaskData(null); invalidateTasks(); }}
+                className="px-3 py-1.5 text-sm rounded-md border border-input hover:bg-muted"
+              >
+                Discard my changes
+              </button>
+              <button
+                onClick={() => setConflictMessage(null)}
+                className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                Keep editing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toastMessage && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-foreground text-background text-sm shadow-lg">
+          {toastMessage}
+        </div>
       )}
     </div>
   );

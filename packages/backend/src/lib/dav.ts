@@ -3,10 +3,10 @@ import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
-import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson } from '@dave/shared';
+import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson, TaskJson } from '@dave/shared';
 import type { RecurrenceScope, CreateAddressBookRequest, UpdateAddressBookRequest, CreateCalendarRequest, UpdateCalendarRequest } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
-import { parseIcalEvents, serializeIcalEvent, injectException, addExdate, truncateRrule, updateMasterVevent } from './ical.js';
+import { parseIcalEvents, serializeIcalEvent, serializeIcalTask, injectException, addExdate, truncateRrule, updateMasterVevent } from './ical.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
@@ -973,4 +973,91 @@ export async function syncCalendarForCache(
   }
 
   return { syncToken: newSyncToken, changed, deleted };
+}
+
+// ── Task write operations ─────────────────────────────────────────────────────
+
+export interface TaskWriteResult {
+  uid: string;
+  url: string;
+  etag: string;
+  collectionUrl: string;
+  rawIcs: string;
+}
+
+export async function createTask(
+  session: SessionData,
+  collectionUrl: string,
+  data: TaskJson,
+): Promise<TaskWriteResult> {
+  const uid = data.uid || crypto.randomUUID();
+  const taskData: TaskJson = { ...data, uid };
+  const icsStr = serializeIcalTask(taskData);
+  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: icsStr,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const etag = res.headers.get('ETag') ?? `"${uid}"`;
+  return { uid, url, etag, collectionUrl, rawIcs: icsStr };
+}
+
+export async function updateTask(
+  session: SessionData,
+  objectUrl: string,
+  collectionUrl: string,
+  data: TaskJson,
+  etag: string,
+  rawIcs: string,
+): Promise<TaskWriteResult> {
+  const updatedIcs = serializeIcalTask(data, rawIcs);
+
+  const res = await fetch(objectUrl, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-Match': etag,
+    },
+    body: updatedIcs,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const newEtag = res.headers.get('ETag') ?? etag;
+  return { uid: data.uid, url: objectUrl, etag: newEtag, collectionUrl, rawIcs: updatedIcs };
+}
+
+export async function deleteTask(
+  session: SessionData,
+  objectUrl: string,
+  etag: string,
+): Promise<void> {
+  const res = await fetch(objectUrl, {
+    method: 'DELETE',
+    headers: {
+      ...basicAuthHeader(session),
+      'If-Match': etag,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
+  }
 }

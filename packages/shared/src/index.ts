@@ -306,6 +306,8 @@ export interface TaskJson {
   categories: string[];
   relations: TaskRelation[];
   collectionUrl: string;
+  alarms: AlarmJson[];          // VALARM components; empty array in list responses
+  rrule: string | null;         // raw RRULE string, read-only in M3 UI
 }
 
 export interface Task {
@@ -330,6 +332,26 @@ export interface TasksQueryParams {
   sort?: 'summary' | 'due' | 'priority' | 'category' | 'modified';
   order?: 'asc' | 'desc';
   collections?: string;  // comma-separated collection URLs
+}
+
+// ── Task write request/response shapes ───────────────────────────────────────
+
+export interface CreateTaskRequest {
+  data: TaskJson;
+}
+
+export interface UpdateTaskRequest {
+  data: TaskJson;
+  etag: string;
+}
+
+export interface TaskWriteResponse {
+  uid: string;
+  url: string;
+  etag: string;
+  collectionId: string;
+  collectionUrl: string;
+  data: TaskJson;
 }
 
 // ── API error shape ───────────────────────────────────────────────────────────

@@ -53,7 +53,7 @@ await app.register(collectionsRoutes, { config, db });
 await app.register(contactsRoutes, { config, db });
 await app.register(eventsRoutes, { config, db });
 await app.register(syncRoutes, { config, db, cacheDb, syncWorker });
-await app.register(tasksRoutes, { cacheDb });
+await app.register(tasksRoutes, { cacheDb, config });
 
 // ── Static frontend (production only) ────────────────────────────────────────
 

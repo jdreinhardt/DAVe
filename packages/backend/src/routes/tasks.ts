@@ -1,13 +1,25 @@
+import { createRequire } from 'node:module';
 import type { FastifyInstance } from 'fastify';
 import type { CacheDbInstance } from '../db/cache.js';
-import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams } from '@dave/shared';
+import type { SessionData } from '../services/session.js';
+import type { Config } from '../config.js';
+import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
+import { applyCompletion, serializeIcalTask } from '../lib/ical.js';
+import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask } from '../lib/dav.js';
+import { parseEntry } from '../lib/entryParser.js';
+import { upsertEntry, deleteEntryByUid } from '../db/cacheOps.js';
+
+const _req = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ICAL = _req('ical.js') as any;
 
 interface EntryRow {
   id: number;
   uid: string;
   etag: string;
   collection_url: string;
+  object_url: string;
   summary: string;
   description: string;
   status: string | null;
@@ -17,6 +29,8 @@ interface EntryRow {
   completed: number | null;
   percent_complete: number | null;
   last_modified: number | null;
+  raw_ics: string | null;
+  rrule: string | null;
 }
 
 interface CategoryRow {
@@ -53,10 +67,61 @@ function buildFtsQuery(q: string): string {
     .join(' ');
 }
 
+function parseAlarmsFromIcs(rawIcs: string | null): AlarmJson[] {
+  if (!rawIcs) return [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const valarms: any[] = vtodo.getAllSubcomponents('valarm');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return valarms.flatMap((valarm: any) => {
+      try {
+        const rawAction = String(valarm.getFirstPropertyValue('action') ?? 'DISPLAY').toUpperCase();
+        const action: 'DISPLAY' | 'EMAIL' = rawAction === 'EMAIL' ? 'EMAIL' : 'DISPLAY';
+        const triggerProp = valarm.getFirstProperty('trigger');
+        const triggerVal = triggerProp?.getFirstValue();
+        let trigger = '';
+        if (triggerVal != null && typeof triggerVal.toICALString === 'function') {
+          trigger = String(triggerVal.toICALString());
+        } else if (triggerVal != null) {
+          trigger = String(triggerVal);
+        }
+        const description = String(valarm.getFirstPropertyValue('description') ?? '');
+        return [{ action, trigger, description }];
+      } catch { return []; }
+    });
+  } catch { return []; }
+}
+
+function parseRruleFromIcs(rawIcs: string | null): string | null {
+  if (!rawIcs) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return null;
+    const rruleProp = vtodo.getFirstProperty('rrule');
+    if (!rruleProp) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const val: any = rruleProp.getFirstValue();
+    return val ? String(val.toString()) : null;
+  } catch { return null; }
+}
+
 function rowToTask(
   row: EntryRow,
   categories: string[],
   relations: TaskRelation[],
+  alarms: AlarmJson[] = [],
 ): Task {
   const data: TaskJson = {
     uid: row.uid,
@@ -72,6 +137,8 @@ function rowToTask(
     categories,
     relations,
     collectionUrl: row.collection_url,
+    alarms,
+    rrule: parseRruleFromIcs(row.raw_ics ?? null),
   };
   return {
     uid: row.uid,
@@ -197,10 +264,10 @@ function buildTasksQuery(
   }
 
   const sql = `
-    SELECT e.id, e.uid, e.etag, e.collection_url,
+    SELECT e.id, e.uid, e.etag, e.collection_url, e.object_url,
            e.summary, e.description, e.status, e.priority,
            e.dtstart, e.due, e.completed, e.percent_complete,
-           e.last_modified
+           e.last_modified, e.raw_ics
     FROM entries e
     WHERE ${where}
     ORDER BY ${orderBy}
@@ -211,9 +278,9 @@ function buildTasksQuery(
 
 export async function tasksRoutes(
   app: FastifyInstance,
-  opts: { cacheDb: CacheDbInstance },
+  opts: { cacheDb: CacheDbInstance; config: Config },
 ) {
-  const { cacheDb } = opts;
+  const { cacheDb, config } = opts;
 
   app.get<{ Querystring: TasksQueryParams }>(
     '/api/tasks',
@@ -279,8 +346,8 @@ export async function tasksRoutes(
       const { uid } = req.params;
 
       const row = cacheDb.prepare(`
-        SELECT id, uid, etag, collection_url, summary, description, status, priority,
-               dtstart, due, completed, percent_complete, last_modified
+        SELECT id, uid, etag, collection_url, object_url, summary, description, status, priority,
+               dtstart, due, completed, percent_complete, last_modified, raw_ics
         FROM entries
         WHERE uid = ? AND user_id = ? AND component_type = 'VTODO'
       `).get(uid, userId) as EntryRow | undefined;
@@ -297,13 +364,184 @@ export async function tasksRoutes(
         'SELECT related_uid, reltype FROM entry_relations WHERE entry_id = ?',
       ).all(row.id) as { related_uid: string; reltype: string }[];
 
+      const alarms = parseAlarmsFromIcs(row.raw_ics ?? null);
+
       const task = rowToTask(
         row,
         catRows.map((c) => c.category),
         relRows.map((r) => ({ relatedUid: r.related_uid, reltype: r.reltype })),
+        alarms,
       );
 
       return reply.send(task);
     },
   );
+
+  // ── POST /api/tasks — create ────────────────────────────────────────────────
+
+  app.post<{ Body: CreateTaskRequest }>(
+    '/api/tasks',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const session = req.sessionData as SessionData;
+      const { data } = req.body;
+
+      if (!data?.collectionUrl) {
+        return reply.status(400).send({ error: 'collectionUrl is required', statusCode: 400 });
+      }
+      if (!data.summary?.trim()) {
+        return reply.status(400).send({ error: 'summary is required', statusCode: 400 });
+      }
+
+      const taskData = applyCompletion(data);
+
+      let result;
+      try {
+        result = await davCreateTask(session, data.collectionUrl, taskData);
+      } catch (err: unknown) {
+        const e = err as { statusCode?: number };
+        if (e.statusCode === 409) {
+          return reply.status(409).send({ error: 'A task with this UID already exists', statusCode: 409 });
+        }
+        app.log.error({ err }, 'createTask DAV PUT failed');
+        return reply.status(502).send({ error: 'Failed to create task on server', statusCode: 502 });
+      }
+
+      const parsed = parseEntry(result.rawIcs, result.url, result.collectionUrl, session.username, result.etag);
+      if (parsed) {
+        try { upsertEntry(cacheDb, parsed); } catch (e) { app.log.warn({ e }, 'cache upsert failed after create'); }
+      }
+
+      const response: TaskWriteResponse = {
+        uid: result.uid,
+        url: result.url,
+        etag: result.etag,
+        collectionId: collectionIdFromUrl(result.collectionUrl),
+        collectionUrl: result.collectionUrl,
+        data: { ...taskData, uid: result.uid, alarms: taskData.alarms ?? [], rrule: taskData.rrule ?? null },
+      };
+      return reply.status(201).send(response);
+    },
+  );
+
+  // ── PUT /api/tasks/:uid — update ────────────────────────────────────────────
+
+  app.put<{ Params: { uid: string }; Body: UpdateTaskRequest }>(
+    '/api/tasks/:uid',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const session = req.sessionData as SessionData;
+      const { uid } = req.params;
+      const { data, etag } = req.body;
+
+      if (!data?.summary?.trim()) {
+        return reply.status(400).send({ error: 'summary is required', statusCode: 400 });
+      }
+
+      // Look up existing entry from cache for object_url and raw_ics.
+      const existing = cacheDb.prepare(`
+        SELECT object_url, collection_url, raw_ics
+        FROM entries
+        WHERE uid = ? AND user_id = ? AND component_type = 'VTODO'
+      `).get(uid, session.username) as { object_url: string; collection_url: string; raw_ics: string | null } | undefined;
+
+      if (!existing) {
+        return reply.status(404).send({ error: 'Task not found', statusCode: 404 });
+      }
+
+      const taskData = applyCompletion({ ...data, uid });
+
+      const isMove = data.collectionUrl && data.collectionUrl !== existing.collection_url;
+
+      let result;
+      try {
+        if (isMove) {
+          // Move = delete from old collection + create in new.
+          await davDeleteTask(session, existing.object_url, etag);
+          result = await davCreateTask(session, data.collectionUrl, taskData);
+        } else {
+          result = await davUpdateTask(
+            session,
+            existing.object_url,
+            existing.collection_url,
+            taskData,
+            etag,
+            existing.raw_ics ?? serializeIcalTask(taskData),
+          );
+        }
+      } catch (err: unknown) {
+        const e = err as { statusCode?: number };
+        if (e.statusCode === 412) {
+          return reply.status(412).send({
+            error: 'conflict',
+            message: 'This task was modified elsewhere. Reload to see the latest version.',
+            statusCode: 412,
+          });
+        }
+        app.log.error({ err }, 'updateTask DAV PUT failed');
+        return reply.status(502).send({ error: 'Failed to update task on server', statusCode: 502 });
+      }
+
+      const parsed = parseEntry(result.rawIcs, result.url, result.collectionUrl, session.username, result.etag);
+      if (parsed) {
+        try { upsertEntry(cacheDb, parsed); } catch (e) { app.log.warn({ e }, 'cache upsert failed after update'); }
+      }
+
+      const response: TaskWriteResponse = {
+        uid: result.uid,
+        url: result.url,
+        etag: result.etag,
+        collectionId: collectionIdFromUrl(result.collectionUrl),
+        collectionUrl: result.collectionUrl,
+        data: { ...taskData, alarms: taskData.alarms ?? [], rrule: taskData.rrule ?? null },
+      };
+      return reply.send(response);
+    },
+  );
+
+  // ── DELETE /api/tasks/:uid — delete ────────────────────────────────────────
+
+  app.delete<{ Params: { uid: string }; Querystring: { etag: string } }>(
+    '/api/tasks/:uid',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const session = req.sessionData as SessionData;
+      const { uid } = req.params;
+      const { etag } = req.query;
+
+      if (!etag) {
+        return reply.status(400).send({ error: 'etag query parameter is required', statusCode: 400 });
+      }
+
+      const existing = cacheDb.prepare(`
+        SELECT object_url
+        FROM entries
+        WHERE uid = ? AND user_id = ? AND component_type = 'VTODO'
+      `).get(uid, session.username) as { object_url: string } | undefined;
+
+      if (!existing) {
+        return reply.status(404).send({ error: 'Task not found', statusCode: 404 });
+      }
+
+      try {
+        await davDeleteTask(session, existing.object_url, etag);
+      } catch (err: unknown) {
+        const e = err as { statusCode?: number };
+        if (e.statusCode === 412) {
+          return reply.status(412).send({
+            error: 'conflict',
+            message: 'This task was modified elsewhere. Reload before deleting.',
+            statusCode: 412,
+          });
+        }
+        app.log.error({ err }, 'deleteTask DAV DELETE failed');
+        return reply.status(502).send({ error: 'Failed to delete task on server', statusCode: 502 });
+      }
+
+      deleteEntryByUid(cacheDb, uid, session.username);
+      return reply.status(204).send();
+    },
+  );
+
+  void config; // consumed only by write handlers above
 }
