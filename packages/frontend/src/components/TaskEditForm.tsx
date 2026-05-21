@@ -115,15 +115,27 @@ function priorityColor(p: number): string {
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
+function isDatetime(iso: string | null): boolean {
+  return iso !== null && iso.includes('T');
+}
+
 function isoToDateInput(iso: string | null): string {
   if (!iso) return '';
-  // Support both "YYYY-MM-DD" and full ISO datetime strings.
   return iso.substring(0, 10);
 }
 
-function dateInputToIso(dateStr: string): string | null {
-  if (!dateStr) return null;
-  return dateStr; // store as YYYY-MM-DD; backend treats date-only as all-day
+function isoToDatetimeInput(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  // Format as YYYY-MM-DDTHH:MM in local time for datetime-local input.
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function datetimeInputToIso(localStr: string): string | null {
+  if (!localStr) return null;
+  // datetime-local gives "YYYY-MM-DDTHH:MM"; new Date() parses as local time.
+  return new Date(localStr).toISOString();
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -144,7 +156,11 @@ export default function TaskEditForm({
   const [hasPriority, setHasPriority] = useState(initial.priority != null);
   const [priority, setPriority] = useState<number>(initial.priority ?? 5);
   const [dtstartStr, setDtstartStr] = useState(isoToDateInput(initial.dtstart));
-  const [dueStr, setDueStr] = useState(isoToDateInput(initial.due));
+  const [dueAllDay, setDueAllDay] = useState(!isDatetime(initial.due));
+  const [dueDateStr, setDueDateStr] = useState(isoToDateInput(initial.due));
+  const [dueDatetimeStr, setDueDatetimeStr] = useState(
+    isDatetime(initial.due) ? isoToDatetimeInput(initial.due) : '',
+  );
   const [percentComplete, setPercentComplete] = useState<number>(initial.percentComplete ?? 0);
   const [categoryStr, setCategoryStr] = useState(initial.categories.join(', '));
   const [collectionUrl, setCollectionUrl] = useState(initial.collectionUrl);
@@ -175,8 +191,8 @@ export default function TaskEditForm({
       description: description.trim(),
       status: status || 'NEEDS-ACTION',
       priority: hasPriority ? priority : null,
-      dtstart: dateInputToIso(dtstartStr),
-      due: dateInputToIso(dueStr),
+      dtstart: dtstartStr || null,
+      due: dueAllDay ? (dueDateStr || null) : datetimeInputToIso(dueDatetimeStr),
       completed: initial.completed, // completion timestamp managed by backend applyCompletion
       percentComplete: percentComplete || null,
       categories: parseCategoryInput(categoryStr),
@@ -242,13 +258,42 @@ export default function TaskEditForm({
 
       {/* Due date */}
       <div>
-        <label className="block text-sm font-medium mb-1">Due date</label>
-        <input
-          type="date"
-          value={dueStr}
-          onChange={(e) => setDueStr(e.target.value)}
-          className="w-full rounded-md border border-input px-3 py-2 text-sm bg-background"
-        />
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-sm font-medium">Due date</label>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={dueAllDay}
+              onChange={(e) => {
+                setDueAllDay(e.target.checked);
+                if (e.target.checked && dueDatetimeStr) {
+                  // Switching to all-day — keep the date portion.
+                  setDueDateStr(dueDatetimeStr.substring(0, 10));
+                } else if (!e.target.checked && dueDateStr) {
+                  // Switching to timed — pre-fill with date + noon.
+                  setDueDatetimeStr(dueDateStr + 'T12:00');
+                }
+              }}
+              className="rounded"
+            />
+            All day
+          </label>
+        </div>
+        {dueAllDay ? (
+          <input
+            type="date"
+            value={dueDateStr}
+            onChange={(e) => setDueDateStr(e.target.value)}
+            className="w-full rounded-md border border-input px-3 py-2 text-sm bg-background"
+          />
+        ) : (
+          <input
+            type="datetime-local"
+            value={dueDatetimeStr}
+            onChange={(e) => setDueDatetimeStr(e.target.value)}
+            className="w-full rounded-md border border-input px-3 py-2 text-sm bg-background"
+          />
+        )}
       </div>
 
       {/* Categories */}

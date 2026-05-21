@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
   ArrowLeft,
+  Bell,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -19,7 +20,7 @@ import {
   ArrowUpDown,
 } from 'lucide-react';
 import type { Task, TaskJson, TasksQueryParams } from '@dave/shared';
-import { fetchTasks, fetchTask, createTask, updateTask, deleteTask, applyCompletion, triggerTasksSync } from '../api/tasks';
+import { fetchTasks, fetchTask, createTask, updateTask, deleteTask, applyCompletion, applyStatusChange, triggerTasksSync } from '../api/tasks';
 import { getCalendars } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -65,13 +66,37 @@ function priorityColor(p: number | null): string {
 
 function dueDateDisplay(due: string | null): { label: string; className: string } | null {
   if (!due) return null;
-  const d = new Date(due);
+  const isDateOnly = /^\d{4}-\d{2}-\d{2}$/.test(due);
+  // Parse date-only as local midnight (appending T00:00:00 avoids UTC-offset
+  // issues where new Date("2024-01-01") would be Dec 31 in UTC-N zones).
+  const d = isDateOnly ? new Date(due + 'T00:00:00') : new Date(due);
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const todayEnd = new Date(todayStart.getTime() + 86_400_000);
-  if (d < todayStart) return { label: d.toLocaleDateString(), className: 'text-destructive' };
-  if (d < todayEnd) return { label: 'Today', className: 'text-amber-500 font-medium' };
-  return { label: d.toLocaleDateString(), className: 'text-muted-foreground' };
+
+  const overdue = isDateOnly ? d < todayStart : d < now;
+  const isToday = !overdue && d < todayEnd;
+
+  let label: string;
+  if (isDateOnly) {
+    label = isToday ? 'Today' : d.toLocaleDateString();
+  } else {
+    const timeStr = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    if (isToday) {
+      label = timeStr;
+    } else {
+      const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      label = `${dateStr} ${timeStr}`;
+    }
+  }
+
+  const className = overdue
+    ? 'text-destructive'
+    : isToday
+      ? 'text-amber-500 font-medium'
+      : 'text-muted-foreground';
+
+  return { label, className };
 }
 
 // ── Task tree building ────────────────────────────────────────────────────────
@@ -332,23 +357,69 @@ function TaskRow({
 
 function KanbanColumn({
   title,
+  status,
   tasks,
   selectedUid,
   onSelect,
+  onDropTask,
   color,
   collectionColorMap,
   className,
 }: {
   title: string;
+  status: string;
   tasks: Task[];
   selectedUid: string | null;
   onSelect: (uid: string) => void;
+  onDropTask: (task: Task, targetStatus: string) => void;
   color: string;
   collectionColorMap: Map<string, string>;
   className?: string;
 }) {
+  const [isDragOver, setIsDragOver] = useState(false);
+  // Counter-based approach avoids false negatives from child enter/leave events.
+  const dragCounterRef = useRef(0);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current += 1;
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => {
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current === 0) setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setIsDragOver(false);
+    const raw = e.dataTransfer.getData('application/dave-task');
+    if (!raw) return;
+    try {
+      const task = JSON.parse(raw) as Task;
+      if (task.data.status !== status) onDropTask(task, status);
+    } catch { /* ignore malformed */ }
+  };
+
   return (
-    <div className={cn('flex flex-col rounded-lg border border-border bg-muted/30', className)}>
+    <div
+      className={cn(
+        'flex flex-col rounded-lg border transition-colors bg-muted/30',
+        isDragOver ? 'border-primary bg-primary/5' : 'border-border',
+        className,
+      )}
+      onDragOver={handleDragOver}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <div
         className={cn('px-3 py-2 rounded-t-lg font-medium text-sm flex items-center gap-2', color)}
       >
@@ -357,40 +428,77 @@ function KanbanColumn({
       </div>
       <div className="flex flex-col gap-1 p-2 overflow-y-auto flex-1">
         {tasks.length === 0 && (
-          <p className="text-xs text-muted-foreground text-center py-4">No tasks</p>
+          <p className={cn('text-xs text-center py-4', isDragOver ? 'text-primary' : 'text-muted-foreground')}>
+            {isDragOver ? 'Drop here' : 'No tasks'}
+          </p>
         )}
         {tasks.map((task) => {
           const due = dueDateDisplay(task.data.due);
           const calColor = collectionColorMap.get(task.collectionUrl);
+          const hasAlarms = task.data.alarms.length > 0;
+          const pct = task.data.percentComplete ?? 0;
           return (
             <div
               key={task.uid}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('application/dave-task', JSON.stringify(task));
+                e.dataTransfer.effectAllowed = 'move';
+              }}
               onClick={() => onSelect(task.uid)}
               className={cn(
-                'rounded-md border border-border bg-card cursor-pointer hover:border-primary/50 transition-colors text-sm overflow-hidden',
+                'rounded-md border border-border bg-card cursor-grab active:cursor-grabbing hover:border-primary/50 transition-colors text-sm overflow-hidden select-none',
                 selectedUid === task.uid && 'border-primary bg-primary/5',
               )}
             >
               <div className="flex">
                 <div className="w-1 shrink-0" style={{ backgroundColor: calColor }} />
-                <div className="p-2.5 flex-1 min-w-0">
-                  <p className="font-medium leading-snug mb-1 line-clamp-2">
-                    {task.data.summary || '(no title)'}
-                  </p>
-                  {task.data.priority !== null && (
-                    <span
-                      className={cn(
-                        'inline-block w-2 h-2 rounded-full mr-1.5',
-                        priorityColor(task.data.priority),
+                <div className="px-2.5 pt-2.5 pb-2 flex-1 min-w-0">
+
+                  {/* Title row: priority dot · title · due date */}
+                  <div className="flex items-start gap-1.5">
+                    {task.data.priority !== null && (
+                      <span
+                        className={cn(
+                          'shrink-0 w-2 h-2 rounded-full mt-1.5',
+                          priorityColor(task.data.priority),
+                        )}
+                        title={`${priorityLabel(task.data.priority)} priority`}
+                      />
+                    )}
+                    <p className="font-medium leading-snug flex-1 min-w-0 line-clamp-2">
+                      {task.data.summary || '(no title)'}
+                    </p>
+                    {due && (
+                      <span className={cn('text-xs whitespace-nowrap shrink-0 mt-0.5', due.className)}>
+                        {due.label}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Meta row: categories · bell */}
+                  {(task.data.categories.length > 0 || hasAlarms) && (
+                    <div className="flex items-center gap-1 mt-1.5">
+                      <div className="flex-1 min-w-0">
+                        <CategoryChips categories={task.data.categories} />
+                      </div>
+                      {hasAlarms && (
+                        <Bell className="shrink-0 h-3 w-3 text-muted-foreground" aria-label="Has reminders" />
                       )}
-                    />
-                  )}
-                  {due && <span className={cn('text-xs', due.className)}>{due.label}</span>}
-                  {task.data.categories.length > 0 && (
-                    <CategoryChips categories={task.data.categories} />
+                    </div>
                   )}
                 </div>
               </div>
+
+              {/* Progress bar */}
+              {pct > 0 && (
+                <div className="h-1 bg-muted">
+                  <div
+                    className="h-full bg-primary/60 transition-all"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              )}
             </div>
           );
         })}
@@ -689,6 +797,11 @@ export default function TasksPage() {
   const handleToggleComplete = useCallback((task: Task) => {
     const completed = task.data.status !== 'COMPLETED';
     const updated = applyCompletion(task.data, completed);
+    updateMutation.mutate({ data: updated, etag: task.etag });
+  }, [updateMutation]);
+
+  const handleKanbanDrop = useCallback((task: Task, targetStatus: string) => {
+    const updated = applyStatusChange(task.data, targetStatus);
     updateMutation.mutate({ data: updated, etag: task.etag });
   }, [updateMutation]);
 
@@ -1117,10 +1230,12 @@ export default function TasksPage() {
                   {KANBAN_COLUMNS.map(({ status, title, headerColor }) => (
                     <KanbanColumn
                       key={status}
+                      status={status}
                       title={title}
                       tasks={kanbanColumns.get(status) ?? []}
                       selectedUid={selectedUid}
                       onSelect={handleSelect}
+                      onDropTask={handleKanbanDrop}
                       color={headerColor}
                       collectionColorMap={collectionColorMap}
                       className={
@@ -1172,10 +1287,12 @@ export default function TasksPage() {
                     {KANBAN_COLUMNS.map(({ status, title, headerColor }) => (
                       <div key={status} className="w-full shrink-0 snap-start flex flex-col p-3">
                         <KanbanColumn
+                          status={status}
                           title={title}
                           tasks={kanbanColumns.get(status) ?? []}
                           selectedUid={selectedUid}
                           onSelect={handleSelect}
+                          onDropTask={handleKanbanDrop}
                           color={headerColor}
                           collectionColorMap={collectionColorMap}
                           className="flex-1"

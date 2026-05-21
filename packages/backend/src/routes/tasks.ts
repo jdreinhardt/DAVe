@@ -58,6 +58,43 @@ function msToIso(ms: number | null | undefined): string | null {
   return new Date(ms).toISOString();
 }
 
+// Re-parse dtstart/due directly from the ICS so we preserve DATE vs DATE-TIME.
+// Storing only Unix ms in the cache loses the all-day distinction; reading val.isDate
+// from the original ICS is the same approach the calendar section uses.
+function parseDateStringsFromIcs(rawIcs: string | null): { dtstart: string | null; due: string | null } {
+  if (!rawIcs) return { dtstart: null, due: null };
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return { dtstart: null, due: null };
+
+    function propToStr(propName: string): string | null {
+      const prop = vtodo.getFirstProperty(propName);
+      if (!prop) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const val: any = prop.getFirstValue();
+      if (!val) return null;
+      if (val.isDate) {
+        // DATE (all-day): format as "YYYY-MM-DD" with no time component
+        const y = String(val.year as number).padStart(4, '0');
+        const mo = String(val.month as number).padStart(2, '0');
+        const d = String(val.day as number).padStart(2, '0');
+        return `${y}-${mo}-${d}`;
+      }
+      // DATE-TIME: convert to UTC ISO string
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jsDate: Date | undefined = (val as any).toJSDate?.();
+      return jsDate ? jsDate.toISOString() : null;
+    }
+
+    return { dtstart: propToStr('dtstart'), due: propToStr('due') };
+  } catch { return { dtstart: null, due: null }; }
+}
+
 // Escape a user query string for FTS5 MATCH: wrap each word as a phrase-prefix term.
 function buildFtsQuery(q: string): string {
   const words = q.trim().split(/\s+/).filter(Boolean);
@@ -123,14 +160,15 @@ function rowToTask(
   relations: TaskRelation[],
   alarms: AlarmJson[] = [],
 ): Task {
+  const dateDates = parseDateStringsFromIcs(row.raw_ics ?? null);
   const data: TaskJson = {
     uid: row.uid,
     summary: row.summary,
     description: row.description,
     status: row.status,
     priority: row.priority,
-    dtstart: msToIso(row.dtstart),
-    due: msToIso(row.due),
+    dtstart: dateDates.dtstart ?? msToIso(row.dtstart),
+    due: dateDates.due ?? msToIso(row.due),
     completed: msToIso(row.completed),
     percentComplete: row.percent_complete,
     lastModified: msToIso(row.last_modified),
@@ -330,7 +368,12 @@ export async function tasksRoutes(
       }
 
       const tasks = rows.map((row) =>
-        rowToTask(row, catMap.get(row.id) ?? [], relMap.get(row.id) ?? []),
+        rowToTask(
+          row,
+          catMap.get(row.id) ?? [],
+          relMap.get(row.id) ?? [],
+          parseAlarmsFromIcs(row.raw_ics ?? null),
+        ),
       );
 
       const response: TasksResponse = { tasks, total: tasks.length };

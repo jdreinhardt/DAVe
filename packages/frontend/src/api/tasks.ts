@@ -39,6 +39,25 @@ export async function triggerTasksSync(): Promise<void> {
 }
 
 /**
+ * Apply an arbitrary status change, keeping STATUS/PERCENT-COMPLETE/COMPLETED coherent.
+ * Used when dragging a card to a different kanban column.
+ */
+export function applyStatusChange(data: TaskJson, newStatus: string): TaskJson {
+  const result = { ...data, status: newStatus };
+  if (newStatus === 'COMPLETED') {
+    result.percentComplete = 100;
+    if (!result.completed) result.completed = new Date().toISOString();
+  } else if (newStatus === 'CANCELLED') {
+    result.completed = null;
+  } else {
+    // NEEDS-ACTION or IN-PROCESS — clear completion state
+    if (result.percentComplete === 100) result.percentComplete = 0;
+    result.completed = null;
+  }
+  return result;
+}
+
+/**
  * Enforce the three-property coherence rule for task completion.
  * Client-side copy of the backend's applyCompletion, used for optimistic UI updates.
  */
