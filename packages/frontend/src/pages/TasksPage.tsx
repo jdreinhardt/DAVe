@@ -16,6 +16,7 @@ import {
   LayoutGrid,
   Columns3,
   Plus,
+  Repeat,
   Search,
   Trash2,
   X,
@@ -100,6 +101,32 @@ function dueDateDisplay(due: string | null): { label: string; className: string 
       : 'text-muted-foreground';
 
   return { label, className };
+}
+
+// ── Recurrence helpers ────────────────────────────────────────────────────────
+
+function rruleToText(rrule: string | null): string | null {
+  if (!rrule) return null;
+  const freq = rrule.match(/FREQ=(\w+)/)?.[1];
+  if (!freq) return null;
+  const interval = parseInt(rrule.match(/INTERVAL=(\d+)/)?.[1] ?? '1', 10);
+  const count = rrule.match(/COUNT=(\d+)/)?.[1];
+  const until = rrule.match(/UNTIL=(\d{8})/)?.[1];
+
+  let base: string;
+  if (freq === 'DAILY') base = interval === 1 ? 'Daily' : `Every ${interval} days`;
+  else if (freq === 'WEEKLY') base = interval === 1 ? 'Weekly' : `Every ${interval} weeks`;
+  else if (freq === 'MONTHLY') base = interval === 1 ? 'Monthly' : `Every ${interval} months`;
+  else if (freq === 'YEARLY') base = interval === 1 ? 'Yearly' : `Every ${interval} years`;
+  else base = freq.charAt(0) + freq.slice(1).toLowerCase();
+
+  if (count) return `${base}, ${count} time${parseInt(count) !== 1 ? 's' : ''} remaining`;
+  if (until) {
+    const y = until.slice(0, 4), m = until.slice(4, 6), d = until.slice(6, 8);
+    const label = new Date(`${y}-${m}-${d}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    return `${base}, until ${label}`;
+  }
+  return base;
 }
 
 // ── Task tree building ────────────────────────────────────────────────────────
@@ -268,6 +295,9 @@ function TaskRow({
               )}
             >
               {task.data.summary || '(no title)'}
+              {task.data.rrule && (
+                <Repeat className="inline h-3 w-3 text-muted-foreground ml-1.5 shrink-0 align-middle" />
+              )}
             </span>
             {orphanedParentUid.has(task.uid) && (
               <span className="ml-1.5 text-xs text-muted-foreground/60 italic">(parent deleted)</span>
@@ -686,6 +716,8 @@ function TaskDetailPanel({
     rows.push({ label: 'Progress', value: `${task.data.percentComplete}%` });
   if (task.data.categories.length > 0)
     rows.push({ label: 'Categories', value: <CategoryChips categories={task.data.categories} /> });
+  const repeatText = rruleToText(task.data.rrule);
+  if (repeatText) rows.push({ label: 'Repeat', value: repeatText });
   if (task.data.lastModified)
     rows.push({ label: 'Modified', value: new Date(task.data.lastModified).toLocaleString() });
 
@@ -970,11 +1002,23 @@ export default function TasksPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ data, etag }: { data: TaskJson; etag: string }) =>
+    mutationFn: ({ data, etag }: { data: TaskJson; etag: string; _isCompletion?: boolean }) =>
       updateTask(data.uid, data, etag),
-    onSuccess: (result) => {
+    onSuccess: (result, variables) => {
       if (result.childMoveErrors && result.childMoveErrors.length > 0) {
         showToast(`Task moved, but ${result.childMoveErrors.length} subtask(s) could not be moved.`);
+      }
+      if (variables._isCompletion && variables.data.rrule) {
+        const d = result.data;
+        if (d.status !== 'COMPLETED') {
+          const nextDate = d.due ?? d.dtstart;
+          const label = nextDate
+            ? new Date(nextDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+            : 'next occurrence';
+          showToast(`Task advanced to ${label}`);
+        } else {
+          showToast('All recurring instances complete');
+        }
       }
       setEditingTaskData(null);
       setPendingMoveWithChildren(null);
@@ -1015,12 +1059,12 @@ export default function TasksPage() {
   const handleToggleComplete = useCallback((task: Task) => {
     const completed = task.data.status !== 'COMPLETED';
     const updated = applyCompletion(task.data, completed);
-    updateMutation.mutate({ data: updated, etag: task.etag });
+    updateMutation.mutate({ data: updated, etag: task.etag, _isCompletion: completed });
   }, [updateMutation]);
 
   const handleKanbanDrop = useCallback((task: Task, targetStatus: string) => {
     const updated = applyStatusChange(task.data, targetStatus);
-    updateMutation.mutate({ data: updated, etag: task.etag });
+    updateMutation.mutate({ data: updated, etag: task.etag, _isCompletion: targetStatus === 'COMPLETED' });
   }, [updateMutation]);
 
   const handleEdit = useCallback(async (task: Task) => {

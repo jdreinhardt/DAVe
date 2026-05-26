@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { Plus, Trash2, ChevronDown, ChevronUp, Repeat } from 'lucide-react';
-import type { Calendar, Task, TaskJson, AlarmJson } from '@dave/shared';
+import { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import type { Calendar, Task, TaskJson, AlarmJson, RecurrenceRule } from '@dave/shared';
 import { cn } from '../lib/utils';
+import { RecurrenceEditor } from './RecurrenceEditor.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,24 @@ function datetimeInputToIso(localStr: string): string | null {
   return new Date(localStr).toISOString();
 }
 
+// ── Recurrence helpers ────────────────────────────────────────────────────────
+
+function rruleStringToRule(raw: string | null): RecurrenceRule | null {
+  if (!raw) return null;
+  const freq = raw.match(/FREQ=(\w+)/)?.[1]?.toUpperCase();
+  if (!freq || !['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(freq)) return null;
+  const rule: RecurrenceRule = { freq: freq as RecurrenceRule['freq'], raw };
+  const interval = raw.match(/INTERVAL=(\d+)/)?.[1];
+  if (interval) rule.interval = parseInt(interval);
+  const count = raw.match(/COUNT=(\d+)/)?.[1];
+  if (count) rule.count = parseInt(count);
+  const untilMatch = raw.match(/UNTIL=(\d{8})/)?.[1];
+  if (untilMatch) rule.until = `${untilMatch.slice(0, 4)}-${untilMatch.slice(4, 6)}-${untilMatch.slice(6, 8)}`;
+  const byday = raw.match(/BYDAY=([^;]+)/)?.[1];
+  if (byday) rule.byDay = byday.split(',');
+  return rule;
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function TaskEditForm({
@@ -172,6 +191,21 @@ export default function TaskEditForm({
   const [parentUid, setParentUid] = useState<string>(
     () => initial.relations.find((r) => r.reltype === 'PARENT')?.relatedUid ?? '',
   );
+  const [rruleState, setRruleState] = useState<RecurrenceRule | null>(
+    () => rruleStringToRule(initial.rrule),
+  );
+  // Track previous rruleState to detect when recurrence is first enabled
+  const prevRruleRef = useRef(rruleState);
+
+  useEffect(() => {
+    const wasNull = prevRruleRef.current === null;
+    const isNowSet = rruleState !== null;
+    prevRruleRef.current = rruleState;
+    // Auto-populate due from dtstart when recurrence is first enabled and due is empty
+    if (wasNull && isNowSet && !dueDateStr && dtstartStr) {
+      setDueDateStr(dtstartStr);
+    }
+  }, [rruleState, dueDateStr, dtstartStr]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -211,7 +245,7 @@ export default function TaskEditForm({
       relations,
       collectionUrl,
       alarms: alarms.map(alarmDraftToAlarmJson),
-      rrule: initial.rrule, // pass through unchanged; M3 doesn't edit RRULE
+      rrule: rruleState?.raw ?? null,
     };
 
     onSave(data);
@@ -426,13 +460,15 @@ export default function TaskEditForm({
             />
           </div>
 
-          {/* Recurring notice */}
-          {initial.rrule && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Repeat size={14} />
-              Recurring task — recurrence editing coming soon
-            </div>
-          )}
+          {/* Recurrence */}
+          <div>
+            <label className="block text-sm font-medium mb-1">Repeat</label>
+            <RecurrenceEditor
+              value={rruleState}
+              onChange={setRruleState}
+              dtstart={dtstartStr || dueDateStr || new Date().toISOString().substring(0, 10)}
+            />
+          </div>
 
           {/* Alarms */}
           <div>

@@ -307,7 +307,7 @@ export interface TaskJson {
   relations: TaskRelation[];
   collectionUrl: string;
   alarms: AlarmJson[];          // VALARM components; empty array in list responses
-  rrule: string | null;         // raw RRULE string, read-only in M3 UI
+  rrule: string | null;         // raw RRULE string; editable via the recurrence editor
 }
 
 export interface Task {

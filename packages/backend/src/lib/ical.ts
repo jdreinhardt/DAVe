@@ -778,6 +778,149 @@ export function applyCompletion(data: TaskJson): TaskJson {
 }
 
 /**
+ * Compute the next occurrence of a recurring VTODO after its current DTSTART.
+ *
+ * Returns { nextDtstart, nextDue } where nextDue preserves the original
+ * DTSTART→DUE duration. Returns null when no further occurrences exist
+ * (COUNT exhausted or UNTIL passed).
+ *
+ * When the VTODO has no DTSTART (DUE-only), DUE is used as the expansion
+ * anchor and nextDtstart is null in the return value.
+ */
+export function computeNextOccurrence(
+  rawIcs: string,
+  currentDtstart: string | null,
+  currentDue: string | null,
+): { nextDtstart: string | null; nextDue: string | null } | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vtodo: any;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(ICAL.parse(rawIcs) as any);
+    vtodo = vcal.getFirstSubcomponent('vtodo');
+  } catch {
+    return null;
+  }
+  if (!vtodo) return null;
+
+  const rruleProp = vtodo.getFirstProperty('rrule');
+  if (!rruleProp) return null;
+
+  // Prefer DTSTART from the parsed ICS; fall back to the TaskJson value (handles
+  // tasks created without an explicit DTSTART in the ICS).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let anchorTime: any = vtodo.getFirstPropertyValue('dtstart');
+  if (!anchorTime && currentDtstart) {
+    anchorTime = /^\d{4}-\d{2}-\d{2}$/.test(currentDtstart)
+      ? ICAL.Time.fromDateString(currentDtstart)
+      : ICAL.Time.fromJSDate(new Date(currentDtstart), true);
+  }
+  const usingDue = !anchorTime;
+
+  if (usingDue) {
+    if (!currentDue) return null;
+    anchorTime = /^\d{4}-\d{2}-\d{2}$/.test(currentDue)
+      ? ICAL.Time.fromDateString(currentDue)
+      : ICAL.Time.fromJSDate(new Date(currentDue), true);
+  }
+
+  // Build an expansion component. For DUE-only tasks, create a minimal one
+  // with an injected DTSTART so RecurExpansion has an anchor.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let expansionComp: any = vtodo;
+  if (usingDue) {
+    expansionComp = new ICAL.Component('vtodo');
+    const dp = new ICAL.Property('dtstart');
+    dp.resetType(anchorTime.isDate ? 'date' : 'date-time');
+    dp.setValue(anchorTime);
+    expansionComp.addProperty(dp);
+    const newRruleProp = new ICAL.Property('rrule');
+    newRruleProp.setValue(rruleProp.getFirstValue());
+    expansionComp.addProperty(newRruleProp);
+  }
+
+  const expansion = new ICAL.RecurExpansion({
+    component: expansionComp,
+    dtstart: anchorTime,
+  });
+
+  // Step past the current occurrence (anchorTime) to find the next one.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let next: any = expansion.next();
+  while (next) {
+    if ((next.compare(anchorTime) as number) > 0) break;
+    next = expansion.next();
+  }
+
+  if (!next) return null;
+
+  const nextStr: string = next.isDate
+    ? (next.toString() as string).substring(0, 10)
+    : (next.toJSDate() as Date).toISOString();
+
+  if (!usingDue) {
+    const origDtstart: string = anchorTime.isDate
+      ? (anchorTime.toString() as string).substring(0, 10)
+      : (anchorTime.toJSDate() as Date).toISOString();
+    const nextDue = currentDue ? applyDueDelta(nextStr, origDtstart, currentDue) : null;
+    return { nextDtstart: nextStr, nextDue };
+  }
+
+  return { nextDtstart: null, nextDue: nextStr };
+}
+
+// Shift origDue by the same delta that separates nextDtstart from origDtstart.
+function applyDueDelta(nextDtstart: string, origDtstart: string, origDue: string): string {
+  const isAllDay = /^\d{4}-\d{2}-\d{2}$/.test(origDtstart);
+  if (isAllDay) {
+    const startMs = new Date(origDtstart + 'T00:00:00Z').getTime();
+    const dueMs = new Date(origDue + 'T00:00:00Z').getTime();
+    const nextStartMs = new Date(nextDtstart + 'T00:00:00Z').getTime();
+    return new Date(nextStartMs + (dueMs - startMs)).toISOString().substring(0, 10);
+  }
+  const deltaMs = new Date(origDue).getTime() - new Date(origDtstart).getTime();
+  return new Date(new Date(nextDtstart).getTime() + deltaMs).toISOString();
+}
+
+// Decrement the COUNT in a raw RRULE string by 1 (floor 1).
+// When no COUNT is present the string is returned unchanged.
+function decrementCount(rrule: string): string {
+  return rrule.replace(/COUNT=(\d+)/, (_, n) => `COUNT=${Math.max(1, parseInt(n) - 1)}`);
+}
+
+/**
+ * If task has an RRULE and there is a next occurrence, return a copy of the
+ * task rolled forward to that occurrence (per spec §5.5):
+ * - DTSTART and DUE advanced to next occurrence
+ * - STATUS reset to NEEDS-ACTION
+ * - PERCENT-COMPLETE reset to 0, COMPLETED cleared
+ * - COUNT decremented so future expansions don't over-count
+ *
+ * Returns null when there are no further occurrences; the caller should then
+ * proceed with normal completion.
+ */
+export function rollForwardTask(task: TaskJson, rawIcs: string): TaskJson | null {
+  if (!task.rrule) return null;
+
+  const result = computeNextOccurrence(rawIcs, task.dtstart, task.due);
+  if (!result) return null;
+
+  // When there is no explicit DUE, set it equal to the next DTSTART so the task
+  // always shows a visible due date in the list after roll-forward.
+  const nextDue = result.nextDue ?? result.nextDtstart;
+
+  return {
+    ...task,
+    dtstart: result.nextDtstart,
+    due: nextDue,
+    rrule: decrementCount(task.rrule),
+    status: 'NEEDS-ACTION',
+    percentComplete: 0,
+    completed: null,
+  };
+}
+
+/**
  * Serialize a TaskJson into a VCALENDAR > VTODO ICS string.
  *
  * When rawIcs is provided (update path), the existing ICS is parsed and only

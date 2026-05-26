@@ -5,7 +5,7 @@ import type { SessionData } from '../services/session.js';
 import type { Config } from '../config.js';
 import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
-import { applyCompletion, serializeIcalTask } from '../lib/ical.js';
+import { applyCompletion, rollForwardTask, serializeIcalTask } from '../lib/ical.js';
 import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask, createTaskRaw } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import { upsertEntry, deleteEntryByUid } from '../db/cacheOps.js';
@@ -521,7 +521,14 @@ export async function tasksRoutes(
         return reply.status(404).send({ error: 'Task not found', statusCode: 404 });
       }
 
-      const taskData = applyCompletion({ ...data, uid });
+      let taskData = applyCompletion({ ...data, uid });
+
+      // Recurring roll-forward: completing a recurring task advances it to the
+      // next occurrence instead of marking it done (spec §5.5).
+      if (taskData.status === 'COMPLETED' && taskData.rrule && existing.raw_ics) {
+        const rolled = rollForwardTask(taskData, existing.raw_ics);
+        if (rolled !== null) taskData = rolled;
+      }
 
       const isMove = data.collectionUrl && data.collectionUrl !== existing.collection_url;
 
