@@ -308,6 +308,7 @@ export interface TaskJson {
   collectionUrl: string;
   alarms: AlarmJson[];          // VALARM components; empty array in list responses
   rrule: string | null;         // raw RRULE string; editable via the recurrence editor
+  recurringInstance?: boolean;  // true when this task is a completed history copy of a recurring task
 }
 
 export interface Task {

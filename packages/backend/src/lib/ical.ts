@@ -786,11 +786,16 @@ export function applyCompletion(data: TaskJson): TaskJson {
  *
  * When the VTODO has no DTSTART (DUE-only), DUE is used as the expansion
  * anchor and nextDtstart is null in the return value.
+ *
+ * afterDate (optional): when provided, the result is the first occurrence
+ * strictly after max(anchor, afterDate). Pass today's date when completing
+ * an overdue task so the next due always lands in the future.
  */
 export function computeNextOccurrence(
   rawIcs: string,
   currentDtstart: string | null,
   currentDue: string | null,
+  afterDate?: string | null,
 ): { nextDtstart: string | null; nextDue: string | null } | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let vtodo: any;
@@ -844,11 +849,23 @@ export function computeNextOccurrence(
     dtstart: anchorTime,
   });
 
-  // Step past the current occurrence (anchorTime) to find the next one.
+  // Find the first occurrence strictly after max(anchorTime, afterDate).
+  // When afterDate is later than the anchor (e.g. today for an overdue task),
+  // we keep iterating until we clear that date so the result is always future.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stopAfter: any = anchorTime;
+  if (afterDate) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const afterTime: any = /^\d{4}-\d{2}-\d{2}$/.test(afterDate)
+      ? ICAL.Time.fromDateString(afterDate)
+      : ICAL.Time.fromJSDate(new Date(afterDate), true);
+    if ((afterTime.compare(anchorTime) as number) > 0) stopAfter = afterTime;
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let next: any = expansion.next();
   while (next) {
-    if ((next.compare(anchorTime) as number) > 0) break;
+    if ((next.compare(stopAfter) as number) > 0) break;
     next = expansion.next();
   }
 
@@ -899,10 +916,14 @@ function decrementCount(rrule: string): string {
  * Returns null when there are no further occurrences; the caller should then
  * proceed with normal completion.
  */
-export function rollForwardTask(task: TaskJson, rawIcs: string): TaskJson | null {
+export function rollForwardTask(
+  task: TaskJson,
+  rawIcs: string,
+  completionDate?: string | null,
+): TaskJson | null {
   if (!task.rrule) return null;
 
-  const result = computeNextOccurrence(rawIcs, task.dtstart, task.due);
+  const result = computeNextOccurrence(rawIcs, task.dtstart, task.due, completionDate);
   if (!result) return null;
 
   // When there is no explicit DUE, set it equal to the next DTSTART so the task
@@ -1040,6 +1061,13 @@ export function serializeIcalTask(task: TaskJson, rawIcs?: string): string {
     for (const alarm of task.alarms ?? []) {
       serializeAlarm(vtodo, alarm, task.summary);
     }
+  }
+
+  // Mark completed history copies of recurring tasks so they can be identified
+  // in list views without ambiguity.
+  vtodo.removeAllProperties('x-dave-recurring-instance');
+  if (task.recurringInstance) {
+    vtodo.addPropertyWithValue('x-dave-recurring-instance', 'TRUE');
   }
 
   return vcal.toString();

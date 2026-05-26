@@ -301,4 +301,72 @@ describe('rollForwardTask', () => {
     expect(rolled.categories).toEqual(['health']);
     expect(rolled.rrule).toBe('FREQ=DAILY');
   });
+
+  it('skips past overdue occurrences when completionDate = today', () => {
+    // Daily task anchored 3 days ago; completing it today should land tomorrow.
+    const ics = makeIcs([
+      'UID:test-uid',
+      'DTSTART;VALUE=DATE:20240101',
+      'RRULE:FREQ=DAILY',
+    ]);
+    const task = baseTask({ dtstart: '2024-01-01', rrule: 'FREQ=DAILY' });
+    // Completing on 2024-01-04 (3 days after anchor): next should be 2024-01-05.
+    const rolled = rollForwardTask(task, ics, '2024-01-04');
+    expect(rolled).not.toBeNull();
+    expect(rolled!.dtstart).toBe('2024-01-05');
+  });
+
+  it('still advances by one when completionDate equals DTSTART (normal case)', () => {
+    // Completing a task on its due date: next should still be +1 period.
+    const ics = makeIcs([
+      'UID:test-uid',
+      'DTSTART;VALUE=DATE:20240101',
+      'RRULE:FREQ=DAILY',
+    ]);
+    const task = baseTask({ dtstart: '2024-01-01', rrule: 'FREQ=DAILY' });
+    const rolled = rollForwardTask(task, ics, '2024-01-01');
+    expect(rolled).not.toBeNull();
+    expect(rolled!.dtstart).toBe('2024-01-02');
+  });
+});
+
+// ── computeNextOccurrence afterDate ──────────────────────────────────────────
+
+describe('computeNextOccurrence with afterDate', () => {
+  it('advances past afterDate when it is later than the anchor', () => {
+    // Daily task anchored 2024-01-01; afterDate = 2024-01-05 → next = 2024-01-06.
+    const ics = makeIcs([
+      'UID:test-uid',
+      'DTSTART;VALUE=DATE:20240101',
+      'RRULE:FREQ=DAILY',
+    ]);
+    const result = computeNextOccurrence(ics, null, null, '2024-01-05');
+    expect(result).not.toBeNull();
+    expect(result!.nextDtstart).toBe('2024-01-06');
+  });
+
+  it('behaves the same as no afterDate when afterDate <= anchor', () => {
+    // afterDate before anchor: should just advance one step from anchor.
+    const ics = makeIcs([
+      'UID:test-uid',
+      'DTSTART;VALUE=DATE:20240105',
+      'RRULE:FREQ=DAILY',
+    ]);
+    const result = computeNextOccurrence(ics, null, null, '2024-01-01');
+    expect(result).not.toBeNull();
+    expect(result!.nextDtstart).toBe('2024-01-06');
+  });
+
+  it('yesterday trick yields first occurrence >= today', () => {
+    // Weekly task anchored on 2024-01-01 (Monday). Passing yesterday=2024-01-07
+    // (Sunday) → first > Sunday = 2024-01-08 (the next Monday).
+    const ics = makeIcs([
+      'UID:test-uid',
+      'DTSTART;VALUE=DATE:20240101',
+      'RRULE:FREQ=WEEKLY',
+    ]);
+    const result = computeNextOccurrence(ics, null, null, '2024-01-07');
+    expect(result).not.toBeNull();
+    expect(result!.nextDtstart).toBe('2024-01-08');
+  });
 });

@@ -302,6 +302,12 @@ function TaskRow({
             {orphanedParentUid.has(task.uid) && (
               <span className="ml-1.5 text-xs text-muted-foreground/60 italic">(parent deleted)</span>
             )}
+            {task.data.recurringInstance && !compact && (
+              <span className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
+                <Repeat className="h-3 w-3 shrink-0" />
+                <span>Recurring instance</span>
+              </span>
+            )}
 
             {/* Calendar / categories — list only, below title */}
             {!compact && (calendarName || task.data.categories.length > 0) && (
@@ -524,6 +530,9 @@ function KanbanColumn({
                     )}
                     <p className="font-medium leading-snug flex-1 min-w-0 line-clamp-2">
                       {task.data.summary || '(no title)'}
+                      {task.data.rrule && (
+                        <Repeat className="inline h-3 w-3 text-muted-foreground ml-1.5 shrink-0 align-middle" />
+                      )}
                     </p>
                     {due && (
                       <span className={cn('text-xs whitespace-nowrap shrink-0 mt-0.5', due.className)}>
@@ -541,6 +550,14 @@ function KanbanColumn({
                       {hasAlarms && (
                         <Bell className="shrink-0 h-3 w-3 text-muted-foreground" aria-label="Has reminders" />
                       )}
+                    </div>
+                  )}
+
+                  {/* Recurring-instance badge */}
+                  {task.data.recurringInstance && (
+                    <div className="flex items-center gap-1 mt-1.5 text-xs text-muted-foreground">
+                      <Repeat className="h-3 w-3 shrink-0" />
+                      <span>Recurring instance</span>
                     </div>
                   )}
 
@@ -718,6 +735,16 @@ function TaskDetailPanel({
     rows.push({ label: 'Categories', value: <CategoryChips categories={task.data.categories} /> });
   const repeatText = rruleToText(task.data.rrule);
   if (repeatText) rows.push({ label: 'Repeat', value: repeatText });
+  if (task.data.recurringInstance)
+    rows.push({
+      label: 'Type',
+      value: (
+        <span className="flex items-center gap-1 text-muted-foreground">
+          <Repeat className="h-3 w-3 shrink-0" />
+          Recurring instance
+        </span>
+      ),
+    });
   if (task.data.lastModified)
     rows.push({ label: 'Modified', value: new Date(task.data.lastModified).toLocaleString() });
 

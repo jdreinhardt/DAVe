@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { CacheDbInstance } from '../db/cache.js';
 import type { SessionData } from '../services/session.js';
@@ -154,6 +155,21 @@ function parseRruleFromIcs(rawIcs: string | null): string | null {
   } catch { return null; }
 }
 
+function parseRecurringInstanceFromIcs(rawIcs: string | null): boolean {
+  if (!rawIcs) return false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return false;
+    const val = vtodo.getFirstPropertyValue('x-dave-recurring-instance');
+    return String(val ?? '').toUpperCase() === 'TRUE';
+  } catch { return false; }
+}
+
 function rowToTask(
   row: EntryRow,
   categories: string[],
@@ -161,7 +177,7 @@ function rowToTask(
   alarms: AlarmJson[] = [],
 ): Task {
   const dateDates = parseDateStringsFromIcs(row.raw_ics ?? null);
-  const data: TaskJson = {
+  let data: TaskJson = {
     uid: row.uid,
     summary: row.summary,
     description: row.description,
@@ -177,7 +193,24 @@ function rowToTask(
     collectionUrl: row.collection_url,
     alarms,
     rrule: parseRruleFromIcs(row.raw_ics ?? null),
+    recurringInstance: parseRecurringInstanceFromIcs(row.raw_ics ?? null) || undefined,
   };
+
+  // For active recurring tasks with no due date: fill one in so the task
+  // always has a visible anchor. A user-supplied due (even in the past) is
+  // preserved as-is — it serves as the seed for future roll-forward math.
+  if (
+    data.rrule &&
+    data.status !== 'COMPLETED' &&
+    data.status !== 'CANCELLED' &&
+    !data.due
+  ) {
+    const todayStr = new Date().toISOString().substring(0, 10);
+    const dtstartDate = data.dtstart?.substring(0, 10) ?? null;
+    // Mirror DTSTART when present; fall back to today for completely dateless tasks.
+    data = { ...data, due: dtstartDate ?? todayStr };
+  }
+
   return {
     uid: row.uid,
     etag: row.etag,
@@ -465,7 +498,18 @@ export async function tasksRoutes(
         return reply.status(400).send({ error: 'summary is required', statusCode: 400 });
       }
 
-      const taskData = applyCompletion(data);
+      let taskData = applyCompletion(data);
+
+      // Auto-set due to today (or dtstart if it's future) when rrule is set
+      // and the user didn't provide an explicit due date.
+      if (taskData.rrule && !taskData.due) {
+        const todayStr = new Date().toISOString().substring(0, 10);
+        const dtstartDate = taskData.dtstart?.substring(0, 10) ?? null;
+        taskData = {
+          ...taskData,
+          due: dtstartDate && dtstartDate >= todayStr ? dtstartDate : todayStr,
+        };
+      }
 
       let result;
       try {
@@ -526,8 +570,40 @@ export async function tasksRoutes(
       // Recurring roll-forward: completing a recurring task advances it to the
       // next occurrence instead of marking it done (spec §5.5).
       if (taskData.status === 'COMPLETED' && taskData.rrule && existing.raw_ics) {
-        const rolled = rollForwardTask(taskData, existing.raw_ics);
-        if (rolled !== null) taskData = rolled;
+        const today = new Date().toISOString().substring(0, 10);
+        const rolled = rollForwardTask(taskData, existing.raw_ics, today);
+        if (rolled !== null) {
+          // Persist the just-completed occurrence as a history record before
+          // advancing the main task. Non-fatal if the copy fails.
+          const completedCopy: TaskJson = {
+            ...taskData,
+            uid: randomUUID(),
+            rrule: null,            // one-time completed instance
+            recurringInstance: true, // marks this as a history copy
+            relations: [],          // don't inherit parent/child hierarchy
+            alarms: [],             // no alarms needed on a completed copy
+          };
+          try {
+            const copyResult = await davCreateTask(session, completedCopy.collectionUrl, completedCopy);
+            // Upsert into local cache immediately so the copy appears in the
+            // next GET without waiting for a background sync.
+            const copyParsed = parseEntry(
+              copyResult.rawIcs,
+              copyResult.url,
+              copyResult.collectionUrl,
+              session.username,
+              copyResult.etag,
+            );
+            if (copyParsed) {
+              try { upsertEntry(cacheDb, copyParsed); } catch (e) {
+                app.log.warn({ e }, 'cache upsert failed after completed copy');
+              }
+            }
+          } catch (err) {
+            app.log.warn({ err }, 'Failed to create completed-instance copy for recurring task');
+          }
+          taskData = rolled;
+        }
       }
 
       const isMove = data.collectionUrl && data.collectionUrl !== existing.collection_url;
