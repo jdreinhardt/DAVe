@@ -100,11 +100,16 @@ export async function syncRoutes(
     async (req, reply) => {
       const session = req.sessionData!;
       const username = session.username;
-      // Seed any VTODO collections not yet in the cache, then hand off to the worker.
-      void initialSyncForComponentType(session, username, 'VTODO', cacheDb, config, app.log)
-        .then(() => syncWorker.triggerForUser(username))
-        .catch((err) => app.log.warn({ err }, 'tasks initial sync failed'));
-      return reply.status(202).send({ ok: true });
+      // Await initial sync so the caller can re-query the cache once it returns.
+      // If the collection is already seeded this is a fast no-op; only the first
+      // call per user (or after cache clear) does a full fetch.
+      try {
+        await initialSyncForComponentType(session, username, 'VTODO', cacheDb, config, app.log);
+      } catch (err) {
+        app.log.warn({ err }, 'tasks initial sync failed');
+      }
+      void syncWorker.triggerForUser(username);
+      return reply.status(200).send({ ok: true });
     },
   );
 

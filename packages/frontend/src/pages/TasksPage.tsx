@@ -8,8 +8,10 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  CornerUpLeft,
   Edit2,
   ExternalLink,
+  GitBranch,
   List,
   LayoutGrid,
   Columns3,
@@ -102,24 +104,36 @@ function dueDateDisplay(due: string | null): { label: string; className: string 
 
 // ── Task tree building ────────────────────────────────────────────────────────
 
-function buildTree(tasks: Task[]): { roots: Task[]; childrenOf: Map<string, Task[]> } {
+function buildTree(tasks: Task[]): {
+  roots: Task[];
+  childrenOf: Map<string, Task[]>;
+  orphanedParentUid: Map<string, string>; // task.uid → missing parent uid
+  parentOf: Map<string, Task>; // task.uid → parent Task
+} {
   const taskByUid = new Map(tasks.map((t) => [t.uid, t]));
   const isChild = new Set<string>();
   const childrenOf = new Map<string, Task[]>();
+  const orphanedParentUid = new Map<string, string>();
+  const parentOf = new Map<string, Task>();
 
   for (const task of tasks) {
     for (const rel of task.data.relations) {
-      if (rel.reltype === 'PARENT' && taskByUid.has(rel.relatedUid)) {
-        isChild.add(task.uid);
-        const arr = childrenOf.get(rel.relatedUid) ?? [];
-        arr.push(task);
-        childrenOf.set(rel.relatedUid, arr);
+      if (rel.reltype === 'PARENT') {
+        if (taskByUid.has(rel.relatedUid)) {
+          isChild.add(task.uid);
+          const arr = childrenOf.get(rel.relatedUid) ?? [];
+          arr.push(task);
+          childrenOf.set(rel.relatedUid, arr);
+          parentOf.set(task.uid, taskByUid.get(rel.relatedUid)!);
+        } else {
+          orphanedParentUid.set(task.uid, rel.relatedUid);
+        }
       }
     }
   }
 
   const roots = tasks.filter((t) => !isChild.has(t.uid));
-  return { roots, childrenOf };
+  return { roots, childrenOf, orphanedParentUid, parentOf };
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -156,6 +170,7 @@ function TaskRow({
   compact,
   depth,
   childrenOf,
+  orphanedParentUid,
   selectedUid,
   onSelect,
   onToggleComplete,
@@ -166,6 +181,7 @@ function TaskRow({
   compact: boolean;
   depth: number;
   childrenOf: Map<string, Task[]>;
+  orphanedParentUid: Map<string, string>;
   selectedUid: string | null;
   onSelect: (uid: string) => void;
   onToggleComplete: (task: Task) => void;
@@ -253,6 +269,9 @@ function TaskRow({
             >
               {task.data.summary || '(no title)'}
             </span>
+            {orphanedParentUid.has(task.uid) && (
+              <span className="ml-1.5 text-xs text-muted-foreground/60 italic">(parent deleted)</span>
+            )}
 
             {/* Calendar / categories — list only, below title */}
             {!compact && (calendarName || task.data.categories.length > 0) && (
@@ -315,6 +334,7 @@ function TaskRow({
             compact={compact}
             depth={depth + 1}
             childrenOf={childrenOf}
+            orphanedParentUid={orphanedParentUid}
             selectedUid={selectedUid}
             onSelect={onSelect}
             onToggleComplete={onToggleComplete}
@@ -343,6 +363,7 @@ function TaskRow({
                 compact={compact}
                 depth={depth + 1}
                 childrenOf={childrenOf}
+                orphanedParentUid={orphanedParentUid}
                 selectedUid={selectedUid}
                 onSelect={onSelect}
                 onToggleComplete={onToggleComplete}
@@ -365,6 +386,8 @@ function KanbanColumn({
   onDropTask,
   color,
   collectionColorMap,
+  childrenOf,
+  parentOf,
   className,
 }: {
   title: string;
@@ -375,6 +398,8 @@ function KanbanColumn({
   onDropTask: (task: Task, targetStatus: string) => void;
   color: string;
   collectionColorMap: Map<string, string>;
+  childrenOf: Map<string, Task[]>;
+  parentOf: Map<string, Task>;
   className?: string;
 }) {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -488,6 +513,31 @@ function KanbanColumn({
                       )}
                     </div>
                   )}
+
+                  {/* Relationship indicators: parent name · subtask count */}
+                  {(() => {
+                    const taskChildren = childrenOf.get(task.uid) ?? [];
+                    const parent = parentOf.get(task.uid);
+                    if (!parent && taskChildren.length === 0) return null;
+                    return (
+                      <div className="flex items-center gap-2 mt-1.5">
+                        {parent && (
+                          <span className="flex items-center gap-1 text-xs text-muted-foreground min-w-0">
+                            <CornerUpLeft className="h-3 w-3 shrink-0" />
+                            <span className="truncate max-w-[110px]">
+                              {parent.data.summary || '(no title)'}
+                            </span>
+                          </span>
+                        )}
+                        {taskChildren.length > 0 && (
+                          <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0 ml-auto">
+                            <GitBranch className="h-3 w-3" />
+                            {taskChildren.length}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -508,12 +558,102 @@ function KanbanColumn({
   );
 }
 
+function SubtaskItem({
+  task,
+  depth,
+  childrenOf,
+  onSelectTask,
+  onToggleComplete,
+}: {
+  task: Task;
+  depth: number;
+  childrenOf: Map<string, Task[]>;
+  onSelectTask: (uid: string) => void;
+  onToggleComplete: (task: Task) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const children = childrenOf.get(task.uid) ?? [];
+  const hasChildren = children.length > 0;
+
+  return (
+    <li>
+      <div
+        className="flex items-center gap-1.5 py-1.5 rounded hover:bg-muted"
+        style={{ paddingLeft: `${8 + depth * 16}px`, paddingRight: '8px' }}
+      >
+        {hasChildren ? (
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label={expanded ? 'Collapse subtasks' : 'Expand subtasks'}
+          >
+            {expanded ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+          </button>
+        ) : (
+          <span className="shrink-0 w-3" />
+        )}
+        <button
+          aria-label={task.data.status === 'COMPLETED' ? 'Mark incomplete' : 'Mark complete'}
+          onClick={() => onToggleComplete(task)}
+          disabled={task.data.status === 'CANCELLED'}
+          className={cn(
+            'shrink-0 w-3.5 h-3.5 rounded-full border-2 transition-colors hover:opacity-80',
+            task.data.status === 'COMPLETED'
+              ? 'bg-primary border-primary'
+              : task.data.status === 'CANCELLED'
+                ? 'border-muted-foreground opacity-40 cursor-not-allowed'
+                : 'border-muted-foreground hover:border-primary',
+          )}
+        />
+        <button
+          onClick={() => onSelectTask(task.uid)}
+          className="flex-1 text-left text-sm truncate"
+        >
+          <span
+            className={cn(
+              (task.data.status === 'COMPLETED' || task.data.status === 'CANCELLED') &&
+                'line-through text-muted-foreground',
+            )}
+          >
+            {task.data.summary || '(no title)'}
+          </span>
+        </button>
+        {hasChildren && (
+          <span className="shrink-0 text-xs text-muted-foreground">{children.length}</span>
+        )}
+      </div>
+      {hasChildren && expanded && (
+        <ul>
+          {children.map((child) => (
+            <SubtaskItem
+              key={child.uid}
+              task={child}
+              depth={depth + 1}
+              childrenOf={childrenOf}
+              onSelectTask={onSelectTask}
+              onToggleComplete={onToggleComplete}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 function TaskDetailPanel({
   task,
   onClose,
   onEdit,
   onDelete,
   onToggleComplete,
+  onAddSubtask,
+  onSelectTask,
+  childrenOf,
+  parentOf,
   fullscreen = false,
 }: {
   task: Task;
@@ -521,6 +661,10 @@ function TaskDetailPanel({
   onEdit: (task: Task) => void;
   onDelete: (task: Task) => void;
   onToggleComplete: (task: Task) => void;
+  onAddSubtask: (parent: Task) => void;
+  onSelectTask: (uid: string) => void;
+  childrenOf: Map<string, Task[]>;
+  parentOf: Map<string, Task>;
   fullscreen?: boolean;
 }) {
   const due = dueDateDisplay(task.data.due);
@@ -624,6 +768,67 @@ function TaskDetailPanel({
             </p>
           </div>
         )}
+
+        {/* Parent task indicator — shown when this is a subtask */}
+        {(() => {
+          const parentTask = parentOf.get(task.uid);
+          const hasParentRelation = task.data.relations.some((r) => r.reltype === 'PARENT');
+          if (!hasParentRelation) return null;
+          return (
+            <div className="flex items-center gap-1.5 text-xs">
+              <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="text-muted-foreground shrink-0">Subtask of</span>
+              {parentTask ? (
+                <button
+                  onClick={() => onSelectTask(parentTask.uid)}
+                  className="text-primary hover:underline truncate font-medium text-left"
+                >
+                  {parentTask.data.summary || '(no title)'}
+                </button>
+              ) : (
+                <span className="italic text-muted-foreground/60">(parent deleted)</span>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Subtasks section */}
+        {(() => {
+          const subtasks = childrenOf.get(task.uid) ?? [];
+          return (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Subtasks{subtasks.length > 0 ? ` (${subtasks.length})` : ''}
+                </p>
+                <button
+                  onClick={() => onAddSubtask(task)}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add subtask
+                </button>
+              </div>
+              {subtasks.length > 0 && (
+                <ul>
+                  {subtasks.map((child) => (
+                    <SubtaskItem
+                      key={child.uid}
+                      task={child}
+                      depth={0}
+                      childrenOf={childrenOf}
+                      onSelectTask={onSelectTask}
+                      onToggleComplete={onToggleComplete}
+                    />
+                  ))}
+                </ul>
+              )}
+              {subtasks.length === 0 && (
+                <p className="text-xs text-muted-foreground">No subtasks yet.</p>
+              )}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -690,7 +895,9 @@ export default function TasksPage() {
   const [editingTaskData, setEditingTaskData] = useState<{ task: Task; fullData: TaskJson } | null>(null);
   const [createMode, setCreateMode] = useState(false);
   const [defaultCreateCollectionUrl, setDefaultCreateCollectionUrl] = useState<string>('');
+  const [subtaskParent, setSubtaskParent] = useState<Task | null>(null);
   const [deleteConfirmTask, setDeleteConfirmTask] = useState<Task | null>(null);
+  const [pendingMoveWithChildren, setPendingMoveWithChildren] = useState<{ data: TaskJson; etag: string; childCount: number } | null>(null);
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -755,6 +962,7 @@ export default function TasksPage() {
     onSuccess: (result) => {
       savePref('dave:tasks:lastCollectionUrl', result.collectionUrl);
       setCreateMode(false);
+      setSubtaskParent(null);
       setSelectedUid(result.uid);
       invalidateTasks();
     },
@@ -764,8 +972,12 @@ export default function TasksPage() {
   const updateMutation = useMutation({
     mutationFn: ({ data, etag }: { data: TaskJson; etag: string }) =>
       updateTask(data.uid, data, etag),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.childMoveErrors && result.childMoveErrors.length > 0) {
+        showToast(`Task moved, but ${result.childMoveErrors.length} subtask(s) could not be moved.`);
+      }
       setEditingTaskData(null);
+      setPendingMoveWithChildren(null);
       invalidateTasks();
     },
     onError: (err: unknown) => {
@@ -779,8 +991,12 @@ export default function TasksPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: ({ uid, etag }: { uid: string; etag: string }) => deleteTask(uid, etag),
-    onSuccess: () => {
+    mutationFn: ({ uid, etag, deleteChildren }: { uid: string; etag: string; deleteChildren?: boolean }) =>
+      deleteTask(uid, etag, deleteChildren),
+    onSuccess: (result) => {
+      if (result?.childErrors && result.childErrors.length > 0) {
+        showToast(`Task deleted, but ${result.childErrors.length} subtask(s) could not be deleted.`);
+      }
       setDeleteConfirmTask(null);
       setSelectedUid(null);
       invalidateTasks();
@@ -821,12 +1037,24 @@ export default function TasksPage() {
     const url = loadPref<string>('dave:tasks:lastCollectionUrl', '') ||
       (taskCollections[0]?.url ?? '');
     setDefaultCreateCollectionUrl(url);
+    setSubtaskParent(null);
     setCreateMode(true);
   }, [taskCollections]);
 
+  const handleAddSubtask = useCallback((parentTask: Task) => {
+    setSubtaskParent(parentTask);
+    setCreateMode(true);
+  }, []);
+
   // ── Trigger initial sync once on mount ───────────────────────────────────
+  // The route now awaits the initial Baikal fetch, so invalidating after it
+  // resolves ensures the UI reflects tasks that were already on Baikal before
+  // the cache was seeded (e.g., after a cache clear or first login).
   useEffect(() => {
-    void triggerTasksSync();
+    triggerTasksSync()
+      .then(() => invalidateTasks())
+      .catch(() => { /* errors logged server-side */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Fetch tasks ───────────────────────────────────────────────────────────
@@ -853,7 +1081,18 @@ export default function TasksPage() {
   const allTasks = useMemo(() => tasksQuery.data?.tasks ?? [], [tasksQuery.data]);
 
   // ── Build tree ────────────────────────────────────────────────────────────
-  const { roots, childrenOf } = useMemo(() => buildTree(allTasks), [allTasks]);
+  const { roots, childrenOf, orphanedParentUid, parentOf } = useMemo(() => buildTree(allTasks), [allTasks]);
+
+  const handleEditSave = useCallback((data: TaskJson) => {
+    if (!editingTaskData) return;
+    const children = childrenOf.get(editingTaskData.task.uid) ?? [];
+    const isMove = data.collectionUrl !== editingTaskData.task.collectionUrl;
+    if (isMove && children.length > 0) {
+      setPendingMoveWithChildren({ data, etag: editingTaskData.task.etag, childCount: children.length });
+      return;
+    }
+    updateMutation.mutate({ data, etag: editingTaskData.task.etag });
+  }, [editingTaskData, childrenOf, updateMutation]);
 
   const incompleteTasks = useMemo(
     () => roots.filter((t) => t.data.status !== 'COMPLETED' && t.data.status !== 'CANCELLED'),
@@ -1167,6 +1406,7 @@ export default function TasksPage() {
                   compact={layout === 'compact'}
                   depth={0}
                   childrenOf={childrenOf}
+                  orphanedParentUid={orphanedParentUid}
                   selectedUid={selectedUid}
                   onSelect={handleSelect}
                   onToggleComplete={handleToggleComplete}
@@ -1208,6 +1448,7 @@ export default function TasksPage() {
                         compact={layout === 'compact'}
                         depth={0}
                         childrenOf={childrenOf}
+                        orphanedParentUid={orphanedParentUid}
                         selectedUid={selectedUid}
                         onSelect={handleSelect}
                         onToggleComplete={handleToggleComplete}
@@ -1240,6 +1481,8 @@ export default function TasksPage() {
                       onDropTask={handleKanbanDrop}
                       color={headerColor}
                       collectionColorMap={collectionColorMap}
+                      childrenOf={childrenOf}
+                      parentOf={parentOf}
                       className={
                         kanbanMode === 'fill' ? 'flex-1 min-w-0' : 'min-w-56 w-64 shrink-0'
                       }
@@ -1297,6 +1540,8 @@ export default function TasksPage() {
                           onDropTask={handleKanbanDrop}
                           color={headerColor}
                           collectionColorMap={collectionColorMap}
+                          childrenOf={childrenOf}
+                          parentOf={parentOf}
                           className="flex-1"
                         />
                       </div>
@@ -1339,6 +1584,10 @@ export default function TasksPage() {
             onEdit={handleEdit}
             onDelete={setDeleteConfirmTask}
             onToggleComplete={handleToggleComplete}
+            onAddSubtask={handleAddSubtask}
+            onSelectTask={handleSelect}
+            childrenOf={childrenOf}
+            parentOf={parentOf}
             fullscreen={false}
           />
         </div>
@@ -1350,6 +1599,10 @@ export default function TasksPage() {
           onEdit={handleEdit}
           onDelete={setDeleteConfirmTask}
           onToggleComplete={handleToggleComplete}
+          onAddSubtask={handleAddSubtask}
+          onSelectTask={handleSelect}
+          childrenOf={childrenOf}
+          parentOf={parentOf}
           fullscreen={true}
         />
       )}
@@ -1377,9 +1630,10 @@ export default function TasksPage() {
             calendars={taskCollections}
             isNew={false}
             saving={updateMutation.isPending}
-            onSave={(data) => updateMutation.mutate({ data, etag: editingTaskData.task.etag })}
+            onSave={handleEditSave}
             onDelete={() => setDeleteConfirmTask(editingTaskData.task)}
             onCancel={() => setEditingTaskData(null)}
+            allTasks={allTasks}
           />
         </div>
       )}
@@ -1389,51 +1643,111 @@ export default function TasksPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-card rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
-              <h2 className="text-sm font-semibold flex-1">New task</h2>
+              <h2 className="text-sm font-semibold flex-1">
+                {subtaskParent ? `New subtask of "${subtaskParent.data.summary || '(no title)'}"` : 'New task'}
+              </h2>
               <button
-                onClick={() => setCreateMode(false)}
+                onClick={() => { setCreateMode(false); setSubtaskParent(null); }}
                 className="text-muted-foreground hover:text-foreground"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
             <TaskEditForm
-              initial={emptyTaskJson(
-                defaultCreateCollectionUrl || taskCollections[0]?.url || '',
-              )}
+              initial={
+                subtaskParent
+                  ? {
+                      ...emptyTaskJson(subtaskParent.collectionUrl),
+                      relations: [{ relatedUid: subtaskParent.uid, reltype: 'PARENT' }],
+                    }
+                  : emptyTaskJson(defaultCreateCollectionUrl || taskCollections[0]?.url || '')
+              }
               calendars={taskCollections}
               isNew={true}
               saving={createMutation.isPending}
               onSave={(data) => createMutation.mutate(data)}
-              onCancel={() => setCreateMode(false)}
+              onCancel={() => { setCreateMode(false); setSubtaskParent(null); }}
+              allTasks={allTasks}
             />
           </div>
         </div>
       )}
 
       {/* Delete confirmation dialog */}
-      {deleteConfirmTask && (
+      {deleteConfirmTask && (() => {
+        const visibleChildren = childrenOf.get(deleteConfirmTask.uid) ?? [];
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-card rounded-lg shadow-xl w-full max-w-sm p-6">
+              <h2 className="font-semibold mb-2">Delete task?</h2>
+              <p className="text-sm text-muted-foreground mb-2">
+                &ldquo;{deleteConfirmTask.data.summary || '(no title)'}&rdquo; will be permanently deleted.
+              </p>
+              {visibleChildren.length > 0 && (
+                <p className="text-sm text-muted-foreground mb-4">
+                  This task has {visibleChildren.length} subtask{visibleChildren.length !== 1 ? 's' : ''}.
+                  You can delete them all or keep them as standalone tasks.
+                </p>
+              )}
+              <div className="flex gap-2 justify-end flex-wrap">
+                <button
+                  onClick={() => setDeleteConfirmTask(null)}
+                  className="px-3 py-1.5 text-sm rounded-md border border-input hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                {visibleChildren.length > 0 && (
+                  <button
+                    onClick={() =>
+                      deleteMutation.mutate({ uid: deleteConfirmTask.uid, etag: deleteConfirmTask.etag, deleteChildren: false })
+                    }
+                    disabled={deleteMutation.isPending}
+                    className="px-3 py-1.5 text-sm rounded-md border border-destructive text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                  >
+                    {deleteMutation.isPending ? 'Deleting…' : 'Delete task only'}
+                  </button>
+                )}
+                <button
+                  onClick={() =>
+                    deleteMutation.mutate({
+                      uid: deleteConfirmTask.uid,
+                      etag: deleteConfirmTask.etag,
+                      deleteChildren: visibleChildren.length > 0,
+                    })
+                  }
+                  disabled={deleteMutation.isPending}
+                  className="px-3 py-1.5 text-sm rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                >
+                  {deleteMutation.isPending ? 'Deleting…' : visibleChildren.length > 0 ? 'Delete all' : 'Delete'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Move-with-children confirmation dialog */}
+      {pendingMoveWithChildren && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-card rounded-lg shadow-xl w-full max-w-sm p-6">
-            <h2 className="font-semibold mb-2">Delete task?</h2>
+            <h2 className="font-semibold mb-2">Move subtasks too?</h2>
             <p className="text-sm text-muted-foreground mb-4">
-              &ldquo;{deleteConfirmTask.data.summary || '(no title)'}&rdquo; will be permanently deleted.
+              Moving this task will also move its {pendingMoveWithChildren.childCount} subtask
+              {pendingMoveWithChildren.childCount !== 1 ? 's' : ''} to the new list. Continue?
             </p>
             <div className="flex gap-2 justify-end">
               <button
-                onClick={() => setDeleteConfirmTask(null)}
+                onClick={() => setPendingMoveWithChildren(null)}
                 className="px-3 py-1.5 text-sm rounded-md border border-input hover:bg-muted"
               >
                 Cancel
               </button>
               <button
-                onClick={() =>
-                  deleteMutation.mutate({ uid: deleteConfirmTask.uid, etag: deleteConfirmTask.etag })
-                }
-                disabled={deleteMutation.isPending}
-                className="px-3 py-1.5 text-sm rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-50"
+                onClick={() => updateMutation.mutate(pendingMoveWithChildren)}
+                disabled={updateMutation.isPending}
+                className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
               >
-                {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+                {updateMutation.isPending ? 'Moving…' : 'Move all'}
               </button>
             </div>
           </div>

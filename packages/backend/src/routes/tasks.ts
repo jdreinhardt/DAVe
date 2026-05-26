@@ -6,7 +6,7 @@ import type { Config } from '../config.js';
 import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
 import { applyCompletion, serializeIcalTask } from '../lib/ical.js';
-import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask } from '../lib/dav.js';
+import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask, createTaskRaw } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import { upsertEntry, deleteEntryByUid } from '../db/cacheOps.js';
 
@@ -314,6 +314,35 @@ function buildTasksQuery(
   return { sql, values };
 }
 
+// Recursively find all descendant UIDs (BFS) for a given parent task.
+// Returns descendant UIDs in BFS order (parents before their children).
+function getDescendantUids(cacheDb: CacheDbInstance, parentUid: string, userId: string): string[] {
+  const result: string[] = [];
+  const queue = [parentUid];
+  const seen = new Set<string>([parentUid]);
+
+  while (queue.length > 0) {
+    const uid = queue.shift()!;
+    const children = cacheDb.prepare(`
+      SELECT e.uid
+      FROM entries e
+      JOIN entry_relations er ON er.entry_id = e.id
+      WHERE er.related_uid = ? AND er.reltype = 'PARENT'
+        AND e.user_id = ? AND e.component_type = 'VTODO'
+    `).all(uid, userId) as { uid: string }[];
+
+    for (const child of children) {
+      if (!seen.has(child.uid)) {
+        seen.add(child.uid);
+        result.push(child.uid);
+        queue.push(child.uid);
+      }
+    }
+  }
+
+  return result;
+}
+
 export async function tasksRoutes(
   app: FastifyInstance,
   opts: { cacheDb: CacheDbInstance; config: Config },
@@ -530,6 +559,33 @@ export async function tasksRoutes(
         try { upsertEntry(cacheDb, parsed); } catch (e) { app.log.warn({ e }, 'cache upsert failed after update'); }
       }
 
+      // Cascade collection move to all descendants.
+      const childMoveErrors: Array<{ uid: string; error: string }> = [];
+      if (isMove) {
+        const descendants = getDescendantUids(cacheDb, uid, session.username);
+        for (const childUid of descendants) {
+          const childRow = cacheDb.prepare(`
+            SELECT object_url, etag, raw_ics
+            FROM entries
+            WHERE uid = ? AND user_id = ? AND component_type = 'VTODO'
+          `).get(childUid, session.username) as { object_url: string; etag: string; raw_ics: string | null } | undefined;
+
+          if (!childRow?.raw_ics) continue;
+
+          try {
+            const newChild = await createTaskRaw(session, data.collectionUrl, childUid, childRow.raw_ics);
+            await davDeleteTask(session, childRow.object_url, childRow.etag);
+            const childParsed = parseEntry(childRow.raw_ics, newChild.url, data.collectionUrl, session.username, newChild.etag);
+            if (childParsed) {
+              try { upsertEntry(cacheDb, childParsed); } catch (e) { app.log.warn({ e }, 'cache upsert failed after child move'); }
+            }
+          } catch (err) {
+            app.log.warn({ err, childUid }, 'cascade move failed for child task');
+            childMoveErrors.push({ uid: childUid, error: 'Move failed' });
+          }
+        }
+      }
+
       const response: TaskWriteResponse = {
         uid: result.uid,
         url: result.url,
@@ -537,6 +593,7 @@ export async function tasksRoutes(
         collectionId: collectionIdFromUrl(result.collectionUrl),
         collectionUrl: result.collectionUrl,
         data: { ...taskData, alarms: taskData.alarms ?? [], rrule: taskData.rrule ?? null },
+        ...(childMoveErrors.length > 0 ? { childMoveErrors } : {}),
       };
       return reply.send(response);
     },
@@ -544,13 +601,13 @@ export async function tasksRoutes(
 
   // ── DELETE /api/tasks/:uid — delete ────────────────────────────────────────
 
-  app.delete<{ Params: { uid: string }; Querystring: { etag: string } }>(
+  app.delete<{ Params: { uid: string }; Querystring: { etag: string; deleteChildren?: string } }>(
     '/api/tasks/:uid',
     { preHandler: requireAuth },
     async (req, reply) => {
       const session = req.sessionData as SessionData;
       const { uid } = req.params;
-      const { etag } = req.query;
+      const { etag, deleteChildren } = req.query;
 
       if (!etag) {
         return reply.status(400).send({ error: 'etag query parameter is required', statusCode: 400 });
@@ -564,6 +621,30 @@ export async function tasksRoutes(
 
       if (!existing) {
         return reply.status(404).send({ error: 'Task not found', statusCode: 404 });
+      }
+
+      // Cascade delete all descendants first (leaves last so parents aren't orphaned briefly).
+      const childErrors: Array<{ uid: string; error: string }> = [];
+      if (deleteChildren === 'true') {
+        const descendants = getDescendantUids(cacheDb, uid, session.username);
+        // Delete in reverse BFS order so leaves are deleted before their parents.
+        for (const childUid of [...descendants].reverse()) {
+          const childRow = cacheDb.prepare(`
+            SELECT object_url, etag
+            FROM entries
+            WHERE uid = ? AND user_id = ? AND component_type = 'VTODO'
+          `).get(childUid, session.username) as { object_url: string; etag: string } | undefined;
+
+          if (!childRow) continue;
+
+          try {
+            await davDeleteTask(session, childRow.object_url, childRow.etag);
+            deleteEntryByUid(cacheDb, childUid, session.username);
+          } catch (err) {
+            app.log.warn({ err, childUid }, 'cascade delete failed for child task');
+            childErrors.push({ uid: childUid, error: 'Delete failed' });
+          }
+        }
       }
 
       try {
@@ -582,6 +663,10 @@ export async function tasksRoutes(
       }
 
       deleteEntryByUid(cacheDb, uid, session.username);
+
+      if (childErrors.length > 0) {
+        return reply.status(207).send({ childErrors });
+      }
       return reply.status(204).send();
     },
   );

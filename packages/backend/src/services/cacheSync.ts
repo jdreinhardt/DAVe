@@ -43,8 +43,9 @@ export async function initialSyncCollection(
   cacheDb: CacheDbInstance,
   config: Config,
   logger?: Logger,
+  componentType: 'VTODO' | 'VJOURNAL' = 'VTODO',
 ): Promise<void> {
-  const objects = await fetchAllCalendarObjects(session, collectionUrl, config);
+  const objects = await fetchAllCalendarObjects(session, collectionUrl, config, componentType);
 
   const cap = config.MAX_CACHED_ENTRIES_PER_USER;
   const existing = countEntriesForUser(cacheDb, userId);
@@ -128,7 +129,7 @@ export async function initialSyncForComponentType(
     if (already) continue; // incremental sync will keep it current
 
     logger?.info({ collectionUrl: cal.url, componentType }, 'Running initial sync for new collection');
-    await initialSyncCollection(session, cal.url, cal.syncToken, userId, cacheDb, config, logger);
+    await initialSyncCollection(session, cal.url, cal.syncToken, userId, cacheDb, config, logger, componentType);
   }
 }
 

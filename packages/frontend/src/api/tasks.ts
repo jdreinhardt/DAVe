@@ -1,4 +1,4 @@
-import type { Task, TaskJson, TasksResponse, TasksQueryParams, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest } from '@dave/shared';
+import type { Task, TaskJson, TasksResponse, TasksQueryParams, TaskWriteResponse, DeleteTaskResponse, CreateTaskRequest, UpdateTaskRequest } from '@dave/shared';
 import { apiFetch } from './client.js';
 
 export async function fetchTasks(params?: TasksQueryParams): Promise<TasksResponse> {
@@ -28,8 +28,14 @@ export async function updateTask(uid: string, data: TaskJson, etag: string): Pro
   });
 }
 
-export async function deleteTask(uid: string, etag: string): Promise<void> {
-  await apiFetch<void>(`/api/tasks/${encodeURIComponent(uid)}?etag=${encodeURIComponent(etag)}`, {
+export async function deleteTask(
+  uid: string,
+  etag: string,
+  deleteChildren?: boolean,
+): Promise<DeleteTaskResponse> {
+  const qs = new URLSearchParams({ etag });
+  if (deleteChildren) qs.set('deleteChildren', 'true');
+  return apiFetch<DeleteTaskResponse>(`/api/tasks/${encodeURIComponent(uid)}?${qs.toString()}`, {
     method: 'DELETE',
   });
 }

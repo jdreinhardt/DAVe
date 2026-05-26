@@ -910,11 +910,20 @@ export async function fetchAllCalendarObjects(
   session: SessionData,
   calUrl: string,
   _config: Config,
+  componentType: 'VTODO' | 'VJOURNAL' = 'VTODO',
 ): Promise<CalendarObjectRaw[]> {
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
   const objects = await _fetchCalendarObjects({
     calendar: { url: calUrl },
     headers: authHeaders,
+    filters: [
+      {
+        'comp-filter': {
+          _attributes: { name: 'VCALENDAR' },
+          'comp-filter': { _attributes: { name: componentType } },
+        },
+      },
+    ],
   });
   return objects
     .filter((obj: TsdavTypes.DAVCalendarObject) => obj.data)
@@ -1060,4 +1069,31 @@ export async function deleteTask(
     const body = await res.text().catch(() => '');
     throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
   }
+}
+
+// PUT existing raw ICS content into a new collection URL (used for cascade moves).
+export async function createTaskRaw(
+  session: SessionData,
+  collectionUrl: string,
+  uid: string,
+  rawIcs: string,
+): Promise<{ url: string; etag: string; collectionUrl: string }> {
+  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: rawIcs,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const etag = res.headers.get('ETag') ?? `"${uid}"`;
+  return { url, etag, collectionUrl };
 }

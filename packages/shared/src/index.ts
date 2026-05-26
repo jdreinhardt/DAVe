@@ -352,6 +352,11 @@ export interface TaskWriteResponse {
   collectionId: string;
   collectionUrl: string;
   data: TaskJson;
+  childMoveErrors?: Array<{ uid: string; error: string }>;
+}
+
+export interface DeleteTaskResponse {
+  childErrors?: Array<{ uid: string; error: string }>;
 }
 
 // ── API error shape ───────────────────────────────────────────────────────────

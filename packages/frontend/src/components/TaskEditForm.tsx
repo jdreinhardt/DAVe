@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Plus, Trash2, ChevronDown, ChevronUp, Repeat } from 'lucide-react';
-import type { Calendar, TaskJson, AlarmJson } from '@dave/shared';
+import type { Calendar, Task, TaskJson, AlarmJson } from '@dave/shared';
 import { cn } from '../lib/utils';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -13,6 +13,8 @@ interface TaskEditFormProps {
   onSave: (data: TaskJson) => void;
   onDelete?: () => void;
   onCancel: () => void;
+  /** All tasks visible to the user, used to populate the parent-task selector. */
+  allTasks?: Task[];
 }
 
 type TriggerUnit = 'minutes' | 'hours' | 'days' | 'weeks';
@@ -148,6 +150,7 @@ export default function TaskEditForm({
   onSave,
   onDelete,
   onCancel,
+  allTasks,
 }: TaskEditFormProps) {
   const [summary, setSummary] = useState(initial.summary);
   const [summaryError, setSummaryError] = useState(false);
@@ -166,6 +169,9 @@ export default function TaskEditForm({
   const [collectionUrl, setCollectionUrl] = useState(initial.collectionUrl);
   const [alarms, setAlarms] = useState<AlarmDraft[]>(() => (initial.alarms ?? []).map(alarmToAlarmDraft));
   const [showMore, setShowMore] = useState(!!(initial.alarms?.length || initial.dtstart || initial.percentComplete));
+  const [parentUid, setParentUid] = useState<string>(
+    () => initial.relations.find((r) => r.reltype === 'PARENT')?.relatedUid ?? '',
+  );
 
   // ── Handlers ─────────────────────────────────────────────────────────────
 
@@ -185,6 +191,12 @@ export default function TaskEditForm({
     }
     setSummaryError(false);
 
+    // Rebuild relations: keep all non-PARENT entries, then add PARENT if selected.
+    const nonParentRelations = initial.relations.filter((r) => r.reltype !== 'PARENT');
+    const relations = parentUid
+      ? [...nonParentRelations, { relatedUid: parentUid, reltype: 'PARENT' }]
+      : nonParentRelations;
+
     const data: TaskJson = {
       ...initial,
       summary: summary.trim(),
@@ -196,6 +208,7 @@ export default function TaskEditForm({
       completed: initial.completed, // completion timestamp managed by backend applyCompletion
       percentComplete: percentComplete || null,
       categories: parseCategoryInput(categoryStr),
+      relations,
       collectionUrl,
       alarms: alarms.map(alarmDraftToAlarmJson),
       rrule: initial.rrule, // pass through unchanged; M3 doesn't edit RRULE
@@ -246,12 +259,36 @@ export default function TaskEditForm({
           <label className="block text-sm font-medium mb-1">List</label>
           <select
             value={collectionUrl}
-            onChange={(e) => setCollectionUrl(e.target.value)}
+            onChange={(e) => {
+              setCollectionUrl(e.target.value);
+              setParentUid(''); // parent must be in the same collection
+            }}
             className="w-full rounded-md border border-input px-3 py-2 text-sm bg-background"
           >
             {calendars.map((cal) => (
               <option key={cal.url} value={cal.url}>{cal.displayName}</option>
             ))}
+          </select>
+        </div>
+      )}
+
+      {/* Parent task */}
+      {allTasks && allTasks.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium mb-1">Parent task</label>
+          <select
+            value={parentUid}
+            onChange={(e) => setParentUid(e.target.value)}
+            className="w-full rounded-md border border-input px-3 py-2 text-sm bg-background"
+          >
+            <option value="">(No parent)</option>
+            {allTasks
+              .filter((t) => t.uid !== initial.uid && t.collectionUrl === collectionUrl)
+              .map((t) => (
+                <option key={t.uid} value={t.uid}>
+                  {t.data.summary || '(no title)'}
+                </option>
+              ))}
           </select>
         </div>
       )}
