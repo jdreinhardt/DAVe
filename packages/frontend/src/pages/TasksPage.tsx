@@ -15,6 +15,8 @@ import {
   List,
   LayoutGrid,
   Columns3,
+  MoreVertical,
+  PencilLine,
   Plus,
   Repeat,
   Search,
@@ -22,7 +24,7 @@ import {
   X,
   ArrowUpDown,
 } from 'lucide-react';
-import type { Task, TaskJson, TasksQueryParams } from '@dave/shared';
+import type { Calendar, Task, TaskJson, TasksQueryParams } from '@dave/shared';
 import { fetchTasks, fetchTask, createTask, updateTask, deleteTask, applyCompletion, applyStatusChange, triggerTasksSync } from '../api/tasks';
 import { getCalendars } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
@@ -30,6 +32,9 @@ import { useSettings } from '../contexts/Settings';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../lib/utils';
 import TaskEditForm, { emptyTaskJson } from '../components/TaskEditForm';
+import BulkDeleteDialog from '../components/BulkDeleteDialog';
+import TaskBulkEditModal, { applyTaskBulkEdit } from '../components/TaskBulkEditModal';
+import type { TaskBulkEditConfig, TaskBulkEditFieldId } from '../components/TaskBulkEditModal';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -203,6 +208,12 @@ function TaskRow({
   onToggleComplete,
   calendarName,
   calendarColor,
+  isMultiSelect,
+  isSelectedFn,
+  onToggleSelect,
+  onEnterMultiSelect,
+  onEdit,
+  onDelete,
 }: {
   task: Task;
   compact: boolean;
@@ -214,25 +225,36 @@ function TaskRow({
   onToggleComplete: (task: Task) => void;
   calendarName?: string;
   calendarColor?: string;
+  isMultiSelect: boolean;
+  isSelectedFn: (uid: string) => boolean;
+  onToggleSelect: (uid: string) => void;
+  onEnterMultiSelect: (task: Task) => void;
+  onEdit: (task: Task) => void;
+  onDelete: (task: Task) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
+  const [menuOpen, setMenuOpen] = useState(false);
   const children = childrenOf.get(task.uid) ?? [];
   const hasChildren = children.length > 0;
   const collapseDeep = depth >= 3 && hasChildren;
   const [deepExpanded, setDeepExpanded] = useState(false);
   const isSelected = selectedUid === task.uid;
+  const isChecked = isSelectedFn(task.uid);
   const due = dueDateDisplay(task.data.due);
 
   return (
     <>
       <div
         className={cn(
-          'group flex items-start gap-2 px-3 rounded-md cursor-pointer transition-colors mx-1 my-0.5',
+          'group flex items-start gap-2 px-3 pr-1 rounded-md cursor-pointer transition-colors mx-1 my-0.5',
           compact ? 'py-1.5' : 'py-3',
-          isSelected ? 'bg-primary/10' : 'hover:bg-muted',
+          isChecked ? 'bg-primary/10' : isSelected ? 'bg-primary/5' : 'hover:bg-muted',
         )}
         style={{ paddingLeft: `${12 + depth * 20}px` }}
-        onClick={() => onSelect(task.uid)}
+        onClick={() => {
+          if (isMultiSelect) onToggleSelect(task.uid);
+          else onSelect(task.uid);
+        }}
       >
         {/* Expand/collapse toggle for subtasks */}
         {hasChildren && !collapseDeep ? (
@@ -254,22 +276,35 @@ function TaskRow({
           <span className="shrink-0 w-3.5" />
         )}
 
-        {/* Completion checkbox */}
-        <button
-          aria-label={task.data.status === 'COMPLETED' ? 'Mark incomplete' : 'Mark complete'}
-          className={cn(
-            'shrink-0 mt-0.5 w-4 h-4 rounded-full border-2 transition-colors hover:opacity-80',
-            task.data.status === 'COMPLETED'
-              ? 'bg-primary border-primary'
-              : task.data.status === 'CANCELLED'
-                ? 'border-muted-foreground bg-muted cursor-not-allowed opacity-50'
+        {/* Left control: square select checkbox (multi-select) or round complete circle (normal) */}
+        {isMultiSelect ? (
+          <button
+            aria-label={isChecked ? 'Deselect task' : 'Select task'}
+            className={cn(
+              'shrink-0 mt-0.5 w-4 h-4 rounded-sm border-2 transition-colors',
+              isChecked
+                ? 'bg-primary border-primary'
                 : 'border-muted-foreground hover:border-primary',
-          )}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (task.data.status !== 'CANCELLED') onToggleComplete(task);
-          }}
-        />
+            )}
+            onClick={(e) => { e.stopPropagation(); onToggleSelect(task.uid); }}
+          />
+        ) : (
+          <button
+            aria-label={task.data.status === 'COMPLETED' ? 'Mark incomplete' : 'Mark complete'}
+            className={cn(
+              'shrink-0 mt-0.5 w-4 h-4 rounded-full border-2 transition-colors hover:opacity-80',
+              task.data.status === 'COMPLETED'
+                ? 'bg-primary border-primary'
+                : task.data.status === 'CANCELLED'
+                  ? 'border-muted-foreground bg-muted cursor-not-allowed opacity-50'
+                  : 'border-muted-foreground hover:border-primary',
+            )}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (task.data.status !== 'CANCELLED') onToggleComplete(task);
+            }}
+          />
+        )}
 
         {/* Priority indicator */}
         {task.data.priority !== null && (
@@ -357,6 +392,51 @@ function TaskRow({
             )}
           </div>
         </div>
+
+        {/* Kebab quick-action menu */}
+        <div className="shrink-0 w-6 flex items-start justify-center pt-0.5 relative">
+          <button
+            className="opacity-0 group-hover:opacity-100 transition-opacity rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
+            onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+            aria-label="Task actions"
+          >
+            <MoreVertical className="h-3.5 w-3.5" />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 top-full mt-0.5 z-20 w-36 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                {isMultiSelect ? (
+                  <button
+                    className="w-full text-left px-3 py-1.5 hover:bg-muted"
+                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onToggleSelect(task.uid); }}
+                  >
+                    {isChecked ? 'Deselect' : 'Select'}
+                  </button>
+                ) : (
+                  <button
+                    className="w-full text-left px-3 py-1.5 hover:bg-muted"
+                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEnterMultiSelect(task); }}
+                  >
+                    Select
+                  </button>
+                )}
+                <button
+                  className="w-full text-left px-3 py-1.5 hover:bg-muted"
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEdit(task); }}
+                >
+                  Edit
+                </button>
+                <button
+                  className="w-full text-left px-3 py-1.5 hover:bg-muted text-destructive"
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onDelete(task); }}
+                >
+                  Delete
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Subtasks */}
@@ -376,6 +456,12 @@ function TaskRow({
             onToggleComplete={onToggleComplete}
             calendarName={calendarName}
             calendarColor={calendarColor}
+            isMultiSelect={isMultiSelect}
+            isSelectedFn={isSelectedFn}
+            onToggleSelect={onToggleSelect}
+            onEnterMultiSelect={onEnterMultiSelect}
+            onEdit={onEdit}
+            onDelete={onDelete}
           />
         ))}
 
@@ -405,6 +491,12 @@ function TaskRow({
                 onToggleComplete={onToggleComplete}
                 calendarName={calendarName}
                 calendarColor={calendarColor}
+                isMultiSelect={isMultiSelect}
+                isSelectedFn={isSelectedFn}
+                onToggleSelect={onToggleSelect}
+                onEnterMultiSelect={onEnterMultiSelect}
+                onEdit={onEdit}
+                onDelete={onDelete}
               />
             ))}
         </div>
@@ -899,6 +991,231 @@ function TaskDetailPanel({
   return panel;
 }
 
+// ── Shared-values helper ──────────────────────────────────────────────────────
+
+function computeSharedValues(tasks: Task[]) {
+  if (tasks.length === 0) {
+    return { sharedStatus: null as string | null, sharedPriority: undefined as number | null | undefined, sharedCategories: [] as string[] };
+  }
+  const first = tasks[0]!;
+  const sharedStatus = tasks.every((t) => t.data.status === first.data.status)
+    ? first.data.status
+    : null;
+  // undefined = mixed, null = all have no priority, number = all share same priority
+  const sharedPriority = tasks.every((t) => t.data.priority === first.data.priority)
+    ? first.data.priority
+    : undefined;
+  const sharedCategories = first.data.categories.filter((cat) =>
+    tasks.every((t) => t.data.categories.includes(cat)),
+  );
+  return { sharedStatus, sharedPriority, sharedCategories };
+}
+
+// ── Multi-task selection panel ────────────────────────────────────────────────
+
+function MultiTaskPanel({
+  tasks,
+  taskCollections,
+  deleting,
+  editing,
+  moving,
+  onOpenBulkEdit,
+  onBulkEditImmediate,
+  onBulkMove,
+  onDelete,
+  onClickTask,
+  onBack,
+}: {
+  tasks: Task[];
+  taskCollections: Calendar[];
+  deleting: boolean;
+  editing: boolean;
+  moving: boolean;
+  onOpenBulkEdit: (field?: TaskBulkEditFieldId) => void;
+  onBulkEditImmediate: (config: TaskBulkEditConfig) => void;
+  onBulkMove: (collectionUrl: string) => void;
+  onDelete: () => void;
+  onClickTask: (uid: string) => void;
+  onBack: () => void;
+}) {
+  const [moveOpen, setMoveOpen] = useState(false);
+  const busy = deleting || editing || moving;
+  const { sharedStatus, sharedPriority, sharedCategories } = computeSharedValues(tasks);
+  const hasMixedPriority = sharedPriority === undefined;
+  const anyHavePriority = tasks.some((t) => t.data.priority !== null);
+
+  return (
+    <div className="bg-card flex flex-col overflow-hidden flex-1 border-l border-border">
+      {/* Action header */}
+      <div className="flex items-center px-4 py-2 border-b border-border shrink-0 gap-2">
+        <button
+          onClick={onBack}
+          className="md:hidden shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"
+          aria-label="Back"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <span className="text-xs text-muted-foreground flex-1">
+          {tasks.length} tasks selected
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onOpenBulkEdit()}
+            disabled={busy}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <PencilLine className="h-3.5 w-3.5" /> Edit
+          </button>
+
+          {taskCollections.length > 1 && (
+            <div className="relative">
+              <button
+                onClick={() => setMoveOpen((o) => !o)}
+                disabled={busy}
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+              >
+                Move <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {moveOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMoveOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-20 w-48 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                    {taskCollections.map((col) => (
+                      <button
+                        key={col.id}
+                        onClick={() => { setMoveOpen(false); onBulkMove(col.url); }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted truncate"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: col.color || '#6C757D' }}
+                        />
+                        {col.displayName}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={onDelete}
+            disabled={busy}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Delete
+          </button>
+        </div>
+      </div>
+
+      {/* Shared values */}
+      <div className="px-4 py-3 border-b border-border shrink-0 space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Shared</p>
+
+        {/* Status */}
+        <div className="flex items-center gap-2">
+          <span className="w-20 shrink-0 text-xs text-muted-foreground">Status</span>
+          <span className="flex-1 text-xs">
+            {sharedStatus !== null
+              ? (STATUS_LABELS[sharedStatus] ?? sharedStatus)
+              : <span className="italic text-muted-foreground/60">Mixed</span>}
+          </span>
+          <button
+            onClick={() => onOpenBulkEdit('status')}
+            className="text-xs text-primary hover:underline shrink-0"
+          >
+            Set
+          </button>
+        </div>
+
+        {/* Priority */}
+        <div className="flex items-center gap-2">
+          <span className="w-20 shrink-0 text-xs text-muted-foreground">Priority</span>
+          <span className="flex-1 text-xs">
+            {hasMixedPriority
+              ? <span className="italic text-muted-foreground/60">Mixed</span>
+              : sharedPriority === null
+                ? <span className="text-muted-foreground/60">None</span>
+                : priorityLabel(sharedPriority)}
+          </span>
+          <button
+            onClick={() => onOpenBulkEdit('priority')}
+            className="text-xs text-primary hover:underline shrink-0"
+          >
+            Set
+          </button>
+          {anyHavePriority && (
+            <button
+              onClick={() => onBulkEditImmediate({ field: 'priority', op: 'clear' })}
+              className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+              title="Clear priority for all selected tasks"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {/* Categories */}
+        <div className="flex items-start gap-2">
+          <span className="w-20 shrink-0 text-xs text-muted-foreground mt-0.5">Categories</span>
+          <div className="flex-1 min-w-0">
+            {sharedCategories.length > 0
+              ? <CategoryChips categories={sharedCategories} />
+              : <span className="text-xs text-muted-foreground/60 italic">None shared</span>}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => onOpenBulkEdit('categories_add')}
+              className="text-xs text-primary hover:underline"
+            >
+              Add
+            </button>
+            {sharedCategories.length > 0 && (
+              <button
+                onClick={() => onBulkEditImmediate({ field: 'categories', op: 'remove', values: sharedCategories })}
+                className="text-xs text-muted-foreground hover:text-foreground"
+                title="Remove shared categories from all selected tasks"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Selected task cards */}
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
+          {tasks.map((task) => {
+            const due = dueDateDisplay(task.data.due);
+            return (
+              <button
+                key={task.uid}
+                onClick={() => onClickTask(task.uid)}
+                className="flex flex-col items-start gap-1.5 p-3 rounded-lg border border-border text-left hover:bg-muted hover:border-primary/30 transition-colors"
+              >
+                <p className="text-sm font-medium truncate w-full leading-snug">
+                  {task.data.summary || '(no title)'}
+                </p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {task.data.priority !== null && (
+                    <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', priorityColor(task.data.priority))} />
+                  )}
+                  <span className="text-xs text-muted-foreground">
+                    {STATUS_LABELS[task.data.status ?? ''] ?? task.data.status}
+                  </span>
+                  {due && <span className={cn('text-xs', due.className)}>{due.label}</span>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 type Layout = 'list' | 'compact' | 'kanban';
@@ -959,6 +1276,12 @@ export default function TasksPage() {
   const [pendingMoveWithChildren, setPendingMoveWithChildren] = useState<{ data: TaskJson; etag: string; childCount: number } | null>(null);
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // ── Multi-select state ────────────────────────────────────────────────────
+  const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkEditInitialField, setBulkEditInitialField] = useState<TaskBulkEditFieldId>('status');
 
   // ── Persist on change ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -1083,6 +1406,57 @@ export default function TasksPage() {
     },
   });
 
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (tasks: Task[]) =>
+      Promise.allSettled(tasks.map((t) => deleteTask(t.uid, t.etag))),
+    onSuccess: (results) => {
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      setShowBulkDelete(false);
+      setSelectedUids(new Set());
+      setSelectedUid(null);
+      showToast(`Deleted ${ok} task${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+      invalidateTasks();
+    },
+    onError: () => { setShowBulkDelete(false); showToast('Bulk delete failed.'); },
+  });
+
+  const bulkEditMutation = useMutation({
+    mutationFn: ({ tasks, config }: { tasks: Task[]; config: TaskBulkEditConfig }) =>
+      Promise.allSettled(
+        tasks.map((task) => {
+          const newData = applyTaskBulkEdit(task.data, config);
+          return updateTask(task.uid, newData, task.etag);
+        }),
+      ),
+    onSuccess: (results) => {
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      setShowBulkEdit(false);
+      showToast(`Updated ${ok} task${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+      invalidateTasks();
+    },
+    onError: () => { setShowBulkEdit(false); showToast('Bulk edit failed.'); },
+  });
+
+  const bulkMoveMutation = useMutation({
+    mutationFn: ({ tasks, collectionUrl }: { tasks: Task[]; collectionUrl: string }) =>
+      Promise.allSettled(
+        tasks.map((task) => {
+          const newData = { ...task.data, collectionUrl };
+          return updateTask(task.uid, newData, task.etag);
+        }),
+      ),
+    onSuccess: (results) => {
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      setSelectedUids(new Set());
+      showToast(`Moved ${ok} task${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+      invalidateTasks();
+    },
+    onError: () => showToast('Bulk move failed.'),
+  });
+
   const handleToggleComplete = useCallback((task: Task) => {
     const completed = task.data.status !== 'COMPLETED';
     const updated = applyCompletion(task.data, completed);
@@ -1115,6 +1489,28 @@ export default function TasksPage() {
   const handleAddSubtask = useCallback((parentTask: Task) => {
     setSubtaskParent(parentTask);
     setCreateMode(true);
+  }, []);
+
+  // ── Multi-select callbacks ────────────────────────────────────────────────
+
+  const toggleSelectUid = useCallback((uid: string) => {
+    setSelectedUids((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid);
+      else next.add(uid);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedUids(new Set()), []);
+
+  const handleEnterMultiSelect = useCallback((task: Task) => {
+    setSelectedUids((prev) => new Set([...prev, task.uid]));
+  }, []);
+
+  const handleOpenBulkEdit = useCallback((field: TaskBulkEditFieldId = 'status') => {
+    setBulkEditInitialField(field);
+    setShowBulkEdit(true);
   }, []);
 
   // ── Trigger initial sync once on mount ───────────────────────────────────
@@ -1153,6 +1549,42 @@ export default function TasksPage() {
 
   // ── Build tree ────────────────────────────────────────────────────────────
   const { roots, childrenOf, orphanedParentUid, parentOf } = useMemo(() => buildTree(allTasks), [allTasks]);
+
+  // ── Multi-select derived ──────────────────────────────────────────────────
+  const isMultiSelect = selectedUids.size > 0;
+  const selectedTasks = useMemo(
+    () => allTasks.filter((t) => selectedUids.has(t.uid)),
+    [allTasks, selectedUids],
+  );
+  const isTaskSelected = useCallback((uid: string) => selectedUids.has(uid), [selectedUids]);
+
+  const handleBulkEdit = useCallback((config: TaskBulkEditConfig) => {
+    bulkEditMutation.mutate({ tasks: selectedTasks, config });
+  }, [bulkEditMutation, selectedTasks]);
+
+  const handleBulkMove = useCallback((collectionUrl: string) => {
+    bulkMoveMutation.mutate({ tasks: selectedTasks, collectionUrl });
+  }, [bulkMoveMutation, selectedTasks]);
+
+  const handleBulkDelete = useCallback(() => {
+    bulkDeleteMutation.mutate(selectedTasks);
+  }, [bulkDeleteMutation, selectedTasks]);
+
+  // Drop filtered-out items from multi-select when allTasks changes
+  useEffect(() => {
+    if (selectedUids.size === 0) return;
+    const visibleUids = new Set(allTasks.map((t) => t.uid));
+    const dropped = [...selectedUids].filter((uid) => !visibleUids.has(uid));
+    if (dropped.length > 0) {
+      setSelectedUids((prev) => {
+        const next = new Set(prev);
+        for (const uid of dropped) next.delete(uid);
+        return next;
+      });
+      showToast(`${dropped.length} item${dropped.length !== 1 ? 's' : ''} removed from selection because they no longer match the filter`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allTasks]);
 
   const handleEditSave = useCallback((data: TaskJson) => {
     if (!editingTaskData) return;
@@ -1435,7 +1867,7 @@ export default function TasksPage() {
             )}
           </div>
 
-          {/* Layout toggle */}
+          {/* Layout toggle — pushed to right; multi-select bar appears below the toolbar */}
           <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
             <LayoutToggleButton
               icon={<List className="h-4 w-4" />}
@@ -1457,6 +1889,34 @@ export default function TasksPage() {
             />
           </div>
         </div>
+
+        {/* Multi-select bar */}
+        {isMultiSelect && (
+          <div className="px-4 py-1.5 border-b border-border bg-primary/5 flex items-center gap-2 shrink-0">
+            <span className="text-xs font-medium text-primary flex-1">
+              {selectedUids.size} selected
+            </span>
+            <button
+              onClick={() => setSelectedUids(new Set(allTasks.map((t) => t.uid)))}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              All
+            </button>
+            <button
+              onClick={clearSelection}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              None
+            </button>
+            <button
+              onClick={clearSelection}
+              title="Clear selection"
+              className="rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Task content */}
         <div ref={boardRef} className="flex-1 overflow-auto">
@@ -1483,6 +1943,12 @@ export default function TasksPage() {
                   onToggleComplete={handleToggleComplete}
                   calendarName={collectionNameMap.get(task.collectionUrl)}
                   calendarColor={collectionColorMap.get(task.collectionUrl)}
+                  isMultiSelect={isMultiSelect}
+                  isSelectedFn={isTaskSelected}
+                  onToggleSelect={toggleSelectUid}
+                  onEnterMultiSelect={handleEnterMultiSelect}
+                  onEdit={handleEdit}
+                  onDelete={setDeleteConfirmTask}
                 />
               ))}
 
@@ -1525,6 +1991,12 @@ export default function TasksPage() {
                         onToggleComplete={handleToggleComplete}
                         calendarName={collectionNameMap.get(task.collectionUrl)}
                         calendarColor={collectionColorMap.get(task.collectionUrl)}
+                        isMultiSelect={isMultiSelect}
+                        isSelectedFn={isTaskSelected}
+                        onToggleSelect={toggleSelectUid}
+                        onEnterMultiSelect={handleEnterMultiSelect}
+                        onEdit={handleEdit}
+                        onDelete={setDeleteConfirmTask}
                       />
                     ))}
                 </div>
@@ -1640,8 +2112,49 @@ export default function TasksPage() {
         </div>
       </div>
 
+      {/* Multi-task panel — shown when 2+ tasks are selected */}
+      {selectedUids.size >= 2 && !isMobile && (
+        <div className="flex shrink-0" style={{ width: panelWidth }}>
+          <div
+            className="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
+            onMouseDown={startResize}
+            title="Drag to resize"
+          />
+          <MultiTaskPanel
+            tasks={selectedTasks}
+            taskCollections={taskCollections}
+            deleting={bulkDeleteMutation.isPending}
+            editing={bulkEditMutation.isPending}
+            moving={bulkMoveMutation.isPending}
+            onOpenBulkEdit={handleOpenBulkEdit}
+            onBulkEditImmediate={handleBulkEdit}
+            onBulkMove={handleBulkMove}
+            onDelete={() => setShowBulkDelete(true)}
+            onClickTask={(uid) => { clearSelection(); handleSelect(uid); }}
+            onBack={clearSelection}
+          />
+        </div>
+      )}
+      {selectedUids.size >= 2 && isMobile && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <MultiTaskPanel
+            tasks={selectedTasks}
+            taskCollections={taskCollections}
+            deleting={bulkDeleteMutation.isPending}
+            editing={bulkEditMutation.isPending}
+            moving={bulkMoveMutation.isPending}
+            onOpenBulkEdit={handleOpenBulkEdit}
+            onBulkEditImmediate={handleBulkEdit}
+            onBulkMove={handleBulkMove}
+            onDelete={() => setShowBulkDelete(true)}
+            onClickTask={(uid) => { clearSelection(); handleSelect(uid); }}
+            onBack={clearSelection}
+          />
+        </div>
+      )}
+
       {/* Detail panel */}
-      {selectedTask && !editingTaskData && !isMobile && (
+      {selectedTask && !editingTaskData && !isMobile && selectedUids.size < 2 && (
         <div className="flex shrink-0" style={{ width: panelWidth }}>
           {/* Drag handle */}
           <div
@@ -1663,7 +2176,7 @@ export default function TasksPage() {
           />
         </div>
       )}
-      {selectedTask && !editingTaskData && isMobile && (
+      {selectedTask && !editingTaskData && isMobile && selectedUids.size < 2 && (
         <TaskDetailPanel
           task={selectedTask}
           onClose={() => setSelectedUid(null)}
@@ -1847,6 +2360,28 @@ export default function TasksPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Bulk delete dialog */}
+      {showBulkDelete && (
+        <BulkDeleteDialog
+          count={selectedUids.size}
+          noun="task"
+          onConfirm={handleBulkDelete}
+          onCancel={() => setShowBulkDelete(false)}
+          deleting={bulkDeleteMutation.isPending}
+        />
+      )}
+
+      {/* Bulk edit modal */}
+      {showBulkEdit && (
+        <TaskBulkEditModal
+          count={selectedUids.size}
+          initialField={bulkEditInitialField}
+          onApply={handleBulkEdit}
+          onCancel={() => setShowBulkEdit(false)}
+          applying={bulkEditMutation.isPending}
+        />
       )}
 
       {/* Toast */}

@@ -2,12 +2,13 @@ import { Trash2 } from 'lucide-react';
 
 interface Props {
   count: number;
+  noun?: string;
   onConfirm: () => void;
   onCancel: () => void;
   deleting: boolean;
 }
 
-export default function BulkDeleteDialog({ count, onConfirm, onCancel, deleting }: Props) {
+export default function BulkDeleteDialog({ count, noun = 'contact', onConfirm, onCancel, deleting }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="bg-background border border-border rounded-lg shadow-xl p-6 w-full max-w-sm">
@@ -17,7 +18,7 @@ export default function BulkDeleteDialog({ count, onConfirm, onCancel, deleting 
           </div>
           <div>
             <h2 className="text-sm font-semibold">
-              Delete {count} contact{count !== 1 ? 's' : ''}?
+              Delete {count} {noun}{count !== 1 ? 's' : ''}?
             </h2>
             <p className="text-xs text-muted-foreground mt-1">This cannot be undone.</p>
           </div>
