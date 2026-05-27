@@ -45,6 +45,12 @@ import BulkDeleteDialog from '../components/BulkDeleteDialog';
 import TaskBulkEditModal, { applyTaskBulkEdit } from '../components/TaskBulkEditModal';
 import type { TaskBulkEditConfig, TaskBulkEditFieldId } from '../components/TaskBulkEditModal';
 
+// Baikal stores colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
+function hex6(color: string): string {
+  if (color.startsWith('#') && color.length === 9) return color.slice(0, 7);
+  return color;
+}
+
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
 function loadPref<T>(key: string, fallback: T): T {
@@ -372,7 +378,7 @@ function TaskRow({
                     className="px-1.5 py-0.5 rounded text-xs shrink-0 font-medium"
                     style={
                       calendarColor
-                        ? { backgroundColor: calendarColor + '33', color: calendarColor }
+                        ? { backgroundColor: hex6(calendarColor) + '33', color: hex6(calendarColor) }
                         : {
                             backgroundColor: 'hsl(var(--muted))',
                             color: 'hsl(var(--muted-foreground))',

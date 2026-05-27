@@ -31,6 +31,14 @@ function savePref(key: string, value: unknown): void {
   }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+// Baikal stores colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
+function hex6(color: string): string {
+  if (color.startsWith('#') && color.length === 9) return color.slice(0, 7);
+  return color;
+}
+
 // ── Date formatting ───────────────────────────────────────────────────────────
 
 function formatRelative(iso: string | null | undefined): string {
@@ -187,6 +195,20 @@ export default function NotesPage() {
     () => notes.find((n) => n.uid === selectedUid) ?? null,
     [notes, selectedUid],
   );
+
+  // ── Collection display maps ───────────────────────────────────────────────
+
+  const collectionNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const cal of vjournalCalendars) map.set(cal.url, cal.displayName);
+    return map;
+  }, [vjournalCalendars]);
+
+  const collectionColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const cal of vjournalCalendars) map.set(cal.url, cal.color);
+    return map;
+  }, [vjournalCalendars]);
 
   // ── All unique categories for filter chips ────────────────────────────────
 
@@ -472,6 +494,8 @@ export default function NotesPage() {
                 }}
                 onToggleCheck={(uid, shift) => toggleSelect(uid, shift, selectedUid)}
                 multiSelectActive={selectedUids.size > 0}
+                collectionName={collectionNameMap.get(note.data.collectionUrl)}
+                collectionColor={collectionColorMap.get(note.data.collectionUrl)}
               />
             ))}
           </div>
@@ -554,6 +578,8 @@ interface NoteCardProps {
   onSelect: (uid: string) => void;
   onToggleCheck: (uid: string, shift: boolean) => void;
   multiSelectActive: boolean;
+  collectionName?: string;
+  collectionColor?: string;
 }
 
 function NoteCard({
@@ -564,6 +590,8 @@ function NoteCard({
   onSelect,
   onToggleCheck,
   multiSelectActive,
+  collectionName,
+  collectionColor,
 }: NoteCardProps) {
   const { data } = note;
   const preview = bodyPreview(data.description);
@@ -590,16 +618,25 @@ function NoteCard({
           {data.summary || <span className="italic text-muted-foreground">Untitled</span>}
         </p>
         {preview && <p className="text-xs text-muted-foreground line-clamp-3 mb-2">{preview}</p>}
-        <div className="flex items-center justify-between gap-2 mt-auto">
-          <span className="text-xs text-muted-foreground/60">
-            {formatRelative(data.lastModified)}
-          </span>
-          {data.categories.length > 0 && (
-            <span className="text-xs text-muted-foreground/60 truncate max-w-24">
-              {data.categories[0]}
-              {data.categories.length > 1 ? ` +${data.categories.length - 1}` : ''}
+        <div className="flex items-center gap-2 mt-auto flex-wrap">
+          {collectionName && (
+            <span
+              className={cn(
+                'text-xs px-1.5 py-0.5 rounded font-medium shrink-0',
+                !collectionColor && 'bg-muted text-muted-foreground',
+              )}
+              style={
+                collectionColor
+                  ? { backgroundColor: hex6(collectionColor) + '33', color: hex6(collectionColor) }
+                  : undefined
+              }
+            >
+              {collectionName}
             </span>
           )}
+          <span className="text-xs text-muted-foreground/60 ml-auto">
+            {formatRelative(data.lastModified)}
+          </span>
         </div>
       </div>
     );
@@ -632,7 +669,22 @@ function NoteCard({
           {data.summary || <span className="italic text-muted-foreground">Untitled</span>}
         </p>
         {preview && <p className="text-xs text-muted-foreground truncate mt-0.5">{preview}</p>}
-        <div className="flex items-center gap-2 mt-1">
+        <div className="flex items-center gap-2 mt-1 flex-wrap">
+          {collectionName && (
+            <span
+              className={cn(
+                'text-xs px-1.5 py-0.5 rounded font-medium shrink-0',
+                !collectionColor && 'bg-muted text-muted-foreground',
+              )}
+              style={
+                collectionColor
+                  ? { backgroundColor: hex6(collectionColor) + '33', color: hex6(collectionColor) }
+                  : undefined
+              }
+            >
+              {collectionName}
+            </span>
+          )}
           <span className="text-xs text-muted-foreground/60">
             {formatRelative(data.lastModified)}
           </span>
