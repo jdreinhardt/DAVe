@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import type { EventJson, AlarmJson, AttendeeJson, RecurrenceRule, TaskJson } from '@dave/shared';
+import type { EventJson, AlarmJson, AttendeeJson, RecurrenceRule, TaskJson, NoteJson } from '@dave/shared';
 // crypto is available as a global in Node 19+; the import keeps older Node happy.
 import { randomUUID } from 'node:crypto';
 
@@ -1094,5 +1094,82 @@ function setDateOrDatetime(comp: any, propName: string, isoStr: string | null): 
     prop.setValue(ICAL.Time.fromJSDate(new Date(isoStr), true));
   }
   comp.addProperty(prop);
+}
+
+/**
+ * Serialize a NoteJson into a VCALENDAR > VJOURNAL ICS string.
+ *
+ * When rawIcs is provided (update path), the existing ICS is parsed and only
+ * the managed properties are replaced — unknown X- properties are preserved
+ * verbatim (round-trip fidelity, same principle as serializeIcalTask).
+ *
+ * When rawIcs is absent (create path), a fresh VCALENDAR is built.
+ *
+ * Notes have no DTSTART; journals have one. The presence of entry.dtstart is
+ * the sole discriminator — do not set it to distinguish the two component types.
+ */
+export function serializeIcalJournal(entry: NoteJson, rawIcs?: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vcal: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vjournal: any;
+
+  if (rawIcs) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jcal: any = ICAL.parse(rawIcs);
+      vcal = new ICAL.Component(jcal);
+      vjournal = vcal.getFirstSubcomponent('vjournal');
+    } catch {
+      rawIcs = undefined;
+    }
+  }
+
+  if (!vjournal) {
+    vcal = new ICAL.Component(['vcalendar', [], []]);
+    vcal.addPropertyWithValue('version', '2.0');
+    vcal.addPropertyWithValue('prodid', '-//dave//EN');
+    vcal.addPropertyWithValue('calscale', 'GREGORIAN');
+    vjournal = new ICAL.Component('vjournal');
+    vcal.addSubcomponent(vjournal);
+  }
+
+  const uid = entry.uid || randomUUID();
+
+  vjournal.removeAllProperties('uid');
+  vjournal.addPropertyWithValue('uid', uid);
+
+  vjournal.removeAllProperties('dtstamp');
+  vjournal.addPropertyWithValue('dtstamp', ICAL.Time.fromJSDate(new Date(), true));
+
+  vjournal.removeAllProperties('last-modified');
+  vjournal.addPropertyWithValue('last-modified', ICAL.Time.fromJSDate(new Date(), true));
+
+  setPropText(vjournal, 'summary', entry.summary);
+  setPropText(vjournal, 'description', entry.description || null);
+
+  // DTSTART — present for journals (dated), absent for notes (undated)
+  setDateOrDatetime(vjournal, 'dtstart', entry.dtstart);
+
+  // CATEGORIES — one CATEGORIES property with all values
+  vjournal.removeAllProperties('categories');
+  if (entry.categories.length > 0) {
+    const catProp = new ICAL.Property('categories');
+    catProp.setValues(entry.categories);
+    vjournal.addProperty(catProp);
+  }
+
+  // RELATED-TO — one property per relation; preserve unknown reltypes
+  vjournal.removeAllProperties('related-to');
+  for (const rel of entry.relations) {
+    const relProp = new ICAL.Property('related-to');
+    if (rel.reltype && rel.reltype !== 'UNKNOWN') {
+      relProp.setParameter('reltype', rel.reltype);
+    }
+    relProp.setValue(rel.relatedUid);
+    vjournal.addProperty(relProp);
+  }
+
+  return vcal.toString();
 }
 

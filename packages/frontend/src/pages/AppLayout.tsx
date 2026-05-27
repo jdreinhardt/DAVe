@@ -38,7 +38,11 @@ export default function AppLayout() {
     ? 'Contacts'
     : pathname.startsWith('/tasks')
       ? 'Tasks'
-      : 'Calendar';
+      : pathname.startsWith('/notes')
+        ? 'Notes'
+        : pathname.startsWith('/journals')
+          ? 'Journals'
+          : 'Calendar';
 
   if (meQuery.isLoading) {
     return (

@@ -3,10 +3,10 @@ import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
-import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson, TaskJson } from '@dave/shared';
+import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson, TaskJson, NoteJson } from '@dave/shared';
 import type { RecurrenceScope, CreateAddressBookRequest, UpdateAddressBookRequest, CreateCalendarRequest, UpdateCalendarRequest } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
-import { parseIcalEvents, serializeIcalEvent, serializeIcalTask, injectException, addExdate, truncateRrule, updateMasterVevent } from './ical.js';
+import { parseIcalEvents, serializeIcalEvent, serializeIcalTask, serializeIcalJournal, injectException, addExdate, truncateRrule, updateMasterVevent } from './ical.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
@@ -1147,6 +1147,93 @@ export async function updateTask(
 }
 
 export async function deleteTask(
+  session: SessionData,
+  objectUrl: string,
+  etag: string,
+): Promise<void> {
+  const res = await fetch(objectUrl, {
+    method: 'DELETE',
+    headers: {
+      ...basicAuthHeader(session),
+      'If-Match': etag,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
+  }
+}
+
+// ── Journal (VJOURNAL) write operations ───────────────────────────────────────
+
+export interface JournalWriteResult {
+  uid: string;
+  url: string;
+  etag: string;
+  collectionUrl: string;
+  rawIcs: string;
+}
+
+export async function createJournal(
+  session: SessionData,
+  collectionUrl: string,
+  data: NoteJson,
+): Promise<JournalWriteResult> {
+  const uid = data.uid || crypto.randomUUID();
+  const entryData: NoteJson = { ...data, uid };
+  const icsStr = serializeIcalJournal(entryData);
+  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: icsStr,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const etag = res.headers.get('ETag') ?? `"${uid}"`;
+  return { uid, url, etag, collectionUrl, rawIcs: icsStr };
+}
+
+export async function updateJournal(
+  session: SessionData,
+  objectUrl: string,
+  collectionUrl: string,
+  data: NoteJson,
+  etag: string,
+  rawIcs: string,
+): Promise<JournalWriteResult> {
+  const updatedIcs = serializeIcalJournal(data, rawIcs);
+
+  const res = await fetch(objectUrl, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-Match': etag,
+    },
+    body: updatedIcs,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const newEtag = res.headers.get('ETag') ?? etag;
+  return { uid: data.uid, url: objectUrl, etag: newEtag, collectionUrl, rawIcs: updatedIcs };
+}
+
+export async function deleteJournal(
   session: SessionData,
   objectUrl: string,
   etag: string,

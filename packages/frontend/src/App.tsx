@@ -4,6 +4,8 @@ import AppLayout from './pages/AppLayout';
 import ContactsPage from './pages/ContactsPage';
 import CalendarPage from './pages/CalendarPage';
 import TasksPage from './pages/TasksPage';
+import NotesPage from './pages/NotesPage';
+import JournalsPage from './pages/JournalsPage';
 
 const router = createBrowserRouter([
   {
@@ -18,6 +20,8 @@ const router = createBrowserRouter([
       { path: 'contacts', element: <ContactsPage /> },
       { path: 'calendar', element: <CalendarPage /> },
       { path: 'tasks', element: <TasksPage /> },
+      { path: 'notes', element: <NotesPage /> },
+      { path: 'journals', element: <JournalsPage /> },
     ],
   },
 ]);

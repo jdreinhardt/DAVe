@@ -361,6 +361,62 @@ export interface DeleteTaskResponse {
   childErrors?: Array<{ uid: string; error: string }>;
 }
 
+// ── Notes and Journals ────────────────────────────────────────────────────────
+
+// Both Notes (undated VJOURNAL) and Journals (dated VJOURNAL) share this type.
+// The presence of dtstart is the sole discriminator: null = note, non-null = journal.
+export interface NoteJson {
+  uid: string;
+  summary: string;
+  description: string;
+  dtstart: string | null;        // null → note; ISO date string → journal
+  lastModified: string | null;
+  categories: string[];
+  relations: TaskRelation[];     // RELATED-TO entries; preserved on round-trip
+  collectionUrl: string;
+}
+
+export interface Note {
+  uid: string;
+  etag: string;
+  collectionUrl: string;
+  collectionId: string;          // last path segment of collectionUrl
+  data: NoteJson;
+}
+
+export interface NotesResponse {
+  notes: Note[];
+  total: number;
+}
+
+export interface NotesQueryParams {
+  category?: string;
+  q?: string;
+  sort?: 'summary' | 'created' | 'modified' | 'category';
+  order?: 'asc' | 'desc';
+  collections?: string;          // comma-separated collection URLs
+}
+
+// ── Note write request/response shapes ────────────────────────────────────────
+
+export interface CreateNoteRequest {
+  data: NoteJson;
+}
+
+export interface UpdateNoteRequest {
+  data: NoteJson;
+  etag: string;
+}
+
+export interface NoteWriteResponse {
+  uid: string;
+  url: string;
+  etag: string;
+  collectionId: string;
+  collectionUrl: string;
+  data: NoteJson;
+}
+
 // ── API error shape ───────────────────────────────────────────────────────────
 
 export interface ApiError {

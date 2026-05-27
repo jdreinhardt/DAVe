@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BookUser, Calendar, Check, CheckSquare, LogOut, Pencil, Plus, RefreshCw, Settings } from 'lucide-react';
+import { BookUser, Calendar, Check, CheckSquare, LogOut, NotebookPen, Pencil, Plus, RefreshCw, Settings, ScrollText } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import AddressBookModal from './AddressBookModal';
 import CalendarModal from './CalendarModal';
@@ -50,9 +50,11 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
   const inContacts = pathname.startsWith('/contacts');
   const inCalendar = pathname.startsWith('/calendar');
   const inTasks = pathname.startsWith('/tasks');
+  const inNotes = pathname.startsWith('/notes');
+  const inJournals = pathname.startsWith('/journals');
   const isLoading =
     (inContacts ? abQuery.isFetching : false) ||
-    (inCalendar || inTasks ? calQuery.isFetching : false);
+    (inCalendar || inTasks || inNotes || inJournals ? calQuery.isFetching : false);
 
   return (
     <>
@@ -91,6 +93,12 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
         <SidebarNavLink to="/tasks" icon={<CheckSquare className="h-4 w-4" />}>
           Tasks
         </SidebarNavLink>
+        <SidebarNavLink to="/notes" icon={<NotebookPen className="h-4 w-4" />}>
+          Notes
+        </SidebarNavLink>
+        <SidebarNavLink to="/journals" icon={<ScrollText className="h-4 w-4" />}>
+          Journals
+        </SidebarNavLink>
       </nav>
 
       <div className="mx-4 my-1 border-t border-border" />
@@ -117,6 +125,13 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
 
       {inTasks && (
         <TaskCollectionSection
+          allCalendars={calQuery.data}
+          isError={calQuery.isError}
+        />
+      )}
+
+      {(inNotes || inJournals) && (
+        <VJournalCollectionSection
           allCalendars={calQuery.data}
           isError={calQuery.isError}
         />
@@ -199,6 +214,103 @@ function SidebarNavLink({
       {icon}
       {children}
     </NavLink>
+  );
+}
+
+// Notes and Journals share the same VJOURNAL collections and one visibility state.
+function VJournalCollectionSection({
+  allCalendars,
+  isError,
+}: {
+  allCalendars: CalendarType[] | undefined;
+  isError: boolean;
+}) {
+  const {
+    hiddenVJournalCollections,
+    toggleVJournalCollection,
+    showAllVJournalCollections,
+    hideAllVJournalCollections,
+  } = useCollectionVisibility();
+
+  const vjournalCollections = (allCalendars ?? []).filter((cal) =>
+    cal.components.includes('VJOURNAL'),
+  );
+
+  const allVisible = vjournalCollections.every((c) => !hiddenVJournalCollections.has(c.id));
+  const noneVisible =
+    vjournalCollections.length > 0 && vjournalCollections.every((c) => hiddenVJournalCollections.has(c.id));
+
+  return (
+    <div className="px-2 py-2">
+      <div className="group flex items-center justify-between px-3 mb-1">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Collections
+        </p>
+        {vjournalCollections.length > 1 && (
+          <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={showAllVJournalCollections}
+              disabled={allVisible}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors"
+            >
+              All
+            </button>
+            <span className="text-muted-foreground/40 text-xs">·</span>
+            <button
+              onClick={() => hideAllVJournalCollections(vjournalCollections.map((c) => c.id))}
+              disabled={noneVisible}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors"
+            >
+              None
+            </button>
+          </div>
+        )}
+      </div>
+
+      {isError && (
+        <p className="px-3 text-xs text-destructive">Failed to load</p>
+      )}
+
+      {allCalendars === undefined && !isError && (
+        <div className="px-3 space-y-2">
+          {[1, 2].map((i) => (
+            <div key={i} className="h-5 rounded bg-muted animate-pulse" />
+          ))}
+        </div>
+      )}
+
+      {allCalendars !== undefined && vjournalCollections.length === 0 && (
+        <p className="px-3 text-xs text-muted-foreground">No collections available</p>
+      )}
+
+      {vjournalCollections.map((cal) => (
+        <label
+          key={cal.id}
+          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors"
+        >
+          <input
+            type="checkbox"
+            className="sr-only"
+            checked={!hiddenVJournalCollections.has(cal.id)}
+            onChange={() => toggleVJournalCollection(cal.id)}
+          />
+          <span
+            className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+            style={{
+              backgroundColor: hiddenVJournalCollections.has(cal.id) ? 'transparent' : (cal.color || '#0082C9'),
+              borderColor: cal.color || '#0082C9',
+            }}
+          >
+            {!hiddenVJournalCollections.has(cal.id) && (
+              <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+            )}
+          </span>
+          <span className={cn('truncate', hiddenVJournalCollections.has(cal.id) && 'text-muted-foreground line-through')}>
+            {cal.displayName}
+          </span>
+        </label>
+      ))}
+    </div>
   );
 }
 
