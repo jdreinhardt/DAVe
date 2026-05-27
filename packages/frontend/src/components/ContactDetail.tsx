@@ -1,6 +1,8 @@
 import { Mail, Phone, MapPin, Globe, Cake, StickyNote, Tag, User } from 'lucide-react';
 import type { Contact, VCardAddress } from '@dave/shared';
-import { cn } from '../lib/utils';
+import { useSettings } from '../contexts/Settings';
+import type { MapService } from '../contexts/Settings';
+import { cn, buildMapUrl } from '../lib/utils';
 
 interface ContactDetailProps {
   contact: Contact;
@@ -8,6 +10,7 @@ interface ContactDetailProps {
 
 export default function ContactDetail({ contact }: ContactDetailProps) {
   const { data } = contact;
+  const { mapService } = useSettings();
 
   const displayName =
     data.fullName ||
@@ -70,7 +73,7 @@ export default function ContactDetail({ contact }: ContactDetailProps) {
         <Section icon={<MapPin className="h-4 w-4" />} title="Address">
           {data.addresses.map((a, i) => (
             <FieldRow key={i} label={typeLabel(a.types, 'Address')} preferred={a.preferred}>
-              <AddressBlock address={a} />
+              <AddressBlock address={a} mapService={mapService} />
             </FieldRow>
           ))}
         </Section>
@@ -180,21 +183,29 @@ function FieldRow({
   );
 }
 
-function AddressBlock({ address }: { address: VCardAddress }) {
+function AddressBlock({ address, mapService }: { address: VCardAddress; mapService: MapService }) {
   const lines = [
     address.street,
     [address.city, address.region, address.postalCode].filter(Boolean).join(', '),
     address.country,
   ].filter(Boolean);
+  const query = lines.join(', ');
   return (
-    <address className="not-italic text-sm text-foreground leading-relaxed">
-      {lines.map((l, i) => (
-        <span key={i}>
-          {l}
-          {i < lines.length - 1 && <br />}
-        </span>
-      ))}
-    </address>
+    <a
+      href={buildMapUrl(query, mapService)}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="hover:underline text-primary"
+    >
+      <address className="not-italic text-sm leading-relaxed">
+        {lines.map((l, i) => (
+          <span key={i}>
+            {l}
+            {i < lines.length - 1 && <br />}
+          </span>
+        ))}
+      </address>
+    </a>
   );
 }
 

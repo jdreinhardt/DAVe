@@ -18,21 +18,9 @@ import {
 import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useSettings } from '../contexts/Settings';
-import type { MapService } from '../contexts/Settings';
-import { cn } from '../lib/utils';
+import { cn, buildMapUrl } from '../lib/utils';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
 import { useHotkey } from '../hooks/useHotkey';
-
-// ── Map helpers ───────────────────────────────────────────────────────────────
-
-function buildMapUrl(location: string, service: MapService): string {
-  const q = encodeURIComponent(location);
-  switch (service) {
-    case 'google': return `https://www.google.com/maps/search/?api=1&query=${q}`;
-    case 'apple':  return `https://maps.apple.com/?q=${q}`;
-    default:       return `https://www.openstreetmap.org/search?query=${q}`;
-  }
-}
 
 function formatAlarmTrigger(trigger: string): string {
   const negative = trigger.startsWith('-');
