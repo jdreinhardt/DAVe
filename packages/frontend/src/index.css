@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 /* CSS custom properties for theming. Updated by .dark class for dark mode. */
 :root {
