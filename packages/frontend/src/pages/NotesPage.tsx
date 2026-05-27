@@ -1,6 +1,19 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowUpDown, ExternalLink, Grid, List, Plus, Search, Tag, Trash2, X } from 'lucide-react';
+import {
+  ArrowUpDown,
+  ChevronDown,
+  ExternalLink,
+  Grid,
+  List,
+  MoreVertical,
+  PencilLine,
+  Plus,
+  Search,
+  Tag,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { Note, NoteJson, NotesQueryParams, Calendar } from '@dave/shared';
 import { fetchNotes, createNote, updateNote, deleteNote, triggerNotesSync } from '../api/notes';
@@ -11,6 +24,12 @@ import { cn } from '../lib/utils';
 import VJournalDetail from '../components/VJournalDetail';
 import VJournalEditForm, { emptyNoteJson } from '../components/VJournalEditForm';
 import BulkDeleteDialog from '../components/BulkDeleteDialog';
+import NoteBulkEditModal, {
+  applyNoteBulkEdit,
+  type NoteBulkEditConfig,
+  type NoteBulkEditFieldId,
+} from '../components/NoteBulkEditModal';
+import TagInput from '../components/TagInput';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -89,6 +108,168 @@ function NoCollectionsState() {
   );
 }
 
+// ── Shared-values helper ──────────────────────────────────────────────────────
+
+function computeSharedCategories(notes: Note[]): string[] {
+  if (notes.length === 0) return [];
+  const first = notes[0]!;
+  return first.data.categories.filter((cat) => notes.every((n) => n.data.categories.includes(cat)));
+}
+
+// ── Multi-note selection panel ────────────────────────────────────────────────
+
+function NoteMultiSelectPanel({
+  notes,
+  noteCollections,
+  deleting,
+  editing,
+  moving,
+  onOpenBulkEdit,
+  onBulkMove,
+  onDelete,
+  onBack,
+}: {
+  notes: Note[];
+  noteCollections: Calendar[];
+  deleting: boolean;
+  editing: boolean;
+  moving: boolean;
+  onOpenBulkEdit: (field?: NoteBulkEditFieldId) => void;
+  onBulkMove: (collectionUrl: string) => void;
+  onDelete: () => void;
+  onBack: () => void;
+}) {
+  const [moveOpen, setMoveOpen] = useState(false);
+  const busy = deleting || editing || moving;
+  const sharedCategories = computeSharedCategories(notes);
+
+  return (
+    <div className="bg-card flex flex-col overflow-hidden flex-1 border-l border-border">
+      {/* Action header */}
+      <div className="flex items-center px-4 py-2 border-b border-border shrink-0 gap-2">
+        <button
+          onClick={onBack}
+          className="md:hidden shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"
+          aria-label="Back"
+        >
+          ←
+        </button>
+        <span className="text-xs text-muted-foreground flex-1">
+          {notes.length} note{notes.length !== 1 ? 's' : ''} selected
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onOpenBulkEdit()}
+            disabled={busy}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <PencilLine className="h-3.5 w-3.5" /> Edit
+          </button>
+
+          {noteCollections.length > 1 && (
+            <div className="relative">
+              <button
+                onClick={() => setMoveOpen((o) => !o)}
+                disabled={busy}
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50"
+              >
+                Move <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+              {moveOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMoveOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1 z-20 w-48 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                    {noteCollections.map((col) => (
+                      <button
+                        key={col.id}
+                        onClick={() => {
+                          setMoveOpen(false);
+                          onBulkMove(col.url);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted truncate"
+                      >
+                        <span
+                          className="h-2.5 w-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: hex6(col.color) || '#6C757D' }}
+                        />
+                        {col.displayName}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          <button
+            onClick={onDelete}
+            disabled={busy}
+            className="flex items-center gap-1 rounded px-2 py-1 text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Delete
+          </button>
+        </div>
+      </div>
+
+      {/* Shared values */}
+      <div className="px-4 py-3 border-b border-border shrink-0 space-y-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Shared
+        </p>
+
+        {/* Categories */}
+        <div className="flex items-start gap-2">
+          <span className="w-24 shrink-0 text-xs text-muted-foreground mt-0.5">Categories</span>
+          <div className="flex-1 min-w-0 flex flex-wrap gap-1">
+            {sharedCategories.length > 0 ? (
+              sharedCategories.map((c) => (
+                <span
+                  key={c}
+                  className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full"
+                >
+                  {c}
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-muted-foreground/60 italic">None shared</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => onOpenBulkEdit('categories_add')}
+              className="text-xs text-primary hover:underline"
+            >
+              Add
+            </button>
+            {sharedCategories.length > 0 && (
+              <button
+                onClick={() => onOpenBulkEdit('categories_remove')}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Selected notes list */}
+      <div className="flex-1 overflow-y-auto py-2">
+        {notes.map((n) => (
+          <div
+            key={n.uid}
+            className="flex items-center gap-2 px-4 py-1.5 text-xs text-foreground"
+          >
+            <span className="truncate flex-1">
+              {n.data.summary || <span className="italic text-muted-foreground">Untitled</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function NotesPage() {
@@ -117,20 +298,30 @@ export default function NotesPage() {
   const [creatingNew, setCreatingNew] = useState(false);
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [showBulkEdit, setShowBulkEdit] = useState(false);
+  const [bulkEditInitialField, setBulkEditInitialField] = useState<
+    NoteBulkEditFieldId | undefined
+  >(undefined);
+
+  // Per-note kebab actions
+  const [noteForConvert, setNoteForConvert] = useState<Note | null>(null);
+  const [noteForTagEdit, setNoteForTagEdit] = useState<Note | null>(null);
+  const [noteForDelete, setNoteForDelete] = useState<Note | null>(null);
+
+  // Toast
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3500);
+  }, []);
 
   // Persist preferences
-  useEffect(() => {
-    savePref('notes.view', view);
-  }, [view]);
-  useEffect(() => {
-    savePref('notes.sort', sort);
-  }, [sort]);
-  useEffect(() => {
-    savePref('notes.order', order);
-  }, [order]);
-  useEffect(() => {
-    savePref('notes.category', categoryFilter);
-  }, [categoryFilter]);
+  useEffect(() => { savePref('notes.view', view); }, [view]);
+  useEffect(() => { savePref('notes.sort', sort); }, [sort]);
+  useEffect(() => { savePref('notes.order', order); }, [order]);
+  useEffect(() => { savePref('notes.category', categoryFilter); }, [categoryFilter]);
 
   // Debounce search
   useEffect(() => {
@@ -178,9 +369,7 @@ export default function NotesPage() {
   // Kick off initial sync on first load
   useEffect(() => {
     if (hasCollections) {
-      triggerNotesSync().catch(() => {
-        /* non-fatal */
-      });
+      triggerNotesSync().catch(() => { /* non-fatal */ });
     }
   }, [hasCollections]);
 
@@ -191,9 +380,31 @@ export default function NotesPage() {
     }
   }, [notes, selectedUid]);
 
+  // Drop selected items that are no longer in the visible set
+  useEffect(() => {
+    if (selectedUids.size === 0) return;
+    const visibleUids = new Set(notes.map((n) => n.uid));
+    const dropped = [...selectedUids].filter((uid) => !visibleUids.has(uid));
+    if (dropped.length > 0) {
+      setSelectedUids((prev) => {
+        const next = new Set(prev);
+        for (const uid of dropped) next.delete(uid);
+        return next;
+      });
+      showToast(
+        `${dropped.length} note${dropped.length !== 1 ? 's' : ''} removed from selection because ${dropped.length !== 1 ? 'they no longer match' : 'it no longer matches'} the filter`,
+      );
+    }
+  }, [notes, selectedUids, showToast]);
+
   const selectedNote = useMemo(
     () => notes.find((n) => n.uid === selectedUid) ?? null,
     [notes, selectedUid],
+  );
+
+  const selectedNotes = useMemo(
+    () => notes.filter((n) => selectedUids.has(n.uid)),
+    [notes, selectedUids],
   );
 
   // ── Collection display maps ───────────────────────────────────────────────
@@ -222,10 +433,14 @@ export default function NotesPage() {
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
+  const invalidateNotes = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['notes'] });
+  }, [queryClient]);
+
   const createMutation = useMutation({
     mutationFn: (data: NoteJson) => createNote(data),
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['notes'] });
+      invalidateNotes();
       setCreatingNew(false);
       setSelectedUid(result.uid);
     },
@@ -235,16 +450,93 @@ export default function NotesPage() {
     mutationFn: ({ uid, data, etag }: { uid: string; data: NoteJson; etag: string }) =>
       updateNote(uid, data, etag),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notes'] });
+      invalidateNotes();
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: ({ uid, etag }: { uid: string; etag: string }) => deleteNote(uid, etag),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notes'] });
+      invalidateNotes();
       setSelectedUid(null);
     },
+  });
+
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (toDelete: Note[]) =>
+      Promise.allSettled(toDelete.map((n) => deleteNote(n.uid, n.etag))),
+    onSuccess: (results) => {
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      setShowBulkDelete(false);
+      setSelectedUids(new Set());
+      setSelectedUid(null);
+      showToast(`Deleted ${ok} note${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+      invalidateNotes();
+    },
+    onError: () => {
+      setShowBulkDelete(false);
+      showToast('Bulk delete failed.');
+    },
+  });
+
+  const bulkEditMutation = useMutation({
+    mutationFn: ({ notesToEdit, config }: { notesToEdit: Note[]; config: NoteBulkEditConfig }) =>
+      Promise.allSettled(
+        notesToEdit.map((n) => {
+          const newData = applyNoteBulkEdit(n.data, config);
+          return updateNote(n.uid, newData, n.etag);
+        }),
+      ),
+    onSuccess: (results) => {
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      setShowBulkEdit(false);
+      showToast(`Updated ${ok} note${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+      invalidateNotes();
+    },
+    onError: () => {
+      setShowBulkEdit(false);
+      showToast('Bulk edit failed.');
+    },
+  });
+
+  const bulkMoveMutation = useMutation({
+    mutationFn: ({ notesToMove, collectionUrl }: { notesToMove: Note[]; collectionUrl: string }) =>
+      Promise.allSettled(
+        notesToMove.map((n) => {
+          const newData = { ...n.data, collectionUrl };
+          return updateNote(n.uid, newData, n.etag);
+        }),
+      ),
+    onSuccess: (results) => {
+      const ok = results.filter((r) => r.status === 'fulfilled').length;
+      const fail = results.filter((r) => r.status === 'rejected').length;
+      setSelectedUids(new Set());
+      showToast(`Moved ${ok} note${ok !== 1 ? 's' : ''}${fail ? ` (${fail} failed)` : ''}`);
+      invalidateNotes();
+    },
+    onError: () => showToast('Bulk move failed.'),
+  });
+
+  const singleTagEditMutation = useMutation({
+    mutationFn: ({ uid, data, etag }: { uid: string; data: NoteJson; etag: string }) =>
+      updateNote(uid, data, etag),
+    onSuccess: () => {
+      invalidateNotes();
+      setNoteForTagEdit(null);
+    },
+    onError: () => showToast('Failed to update tags.'),
+  });
+
+  const singleDeleteMutation = useMutation({
+    mutationFn: ({ uid, etag }: { uid: string; etag: string }) => deleteNote(uid, etag),
+    onSuccess: (_, { uid }) => {
+      invalidateNotes();
+      setNoteForDelete(null);
+      if (selectedUid === uid) setSelectedUid(null);
+    },
+    onError: () => showToast('Delete failed.'),
   });
 
   // ── Multi-select helpers ──────────────────────────────────────────────────
@@ -274,7 +566,48 @@ export default function NotesPage() {
     [notes],
   );
 
-  const clearSelection = () => setSelectedUids(new Set());
+  const clearSelection = useCallback(() => setSelectedUids(new Set()), []);
+
+  const handleEnterMultiSelect = useCallback((uid: string) => {
+    setSelectedUids(new Set([uid]));
+    setSelectedUid(null);
+    setCreatingNew(false);
+  }, []);
+
+  const handleOpenBulkEdit = useCallback((field?: NoteBulkEditFieldId) => {
+    setBulkEditInitialField(field);
+    setShowBulkEdit(true);
+  }, []);
+
+  const handleBulkEdit = useCallback(
+    (config: NoteBulkEditConfig) => {
+      bulkEditMutation.mutate({ notesToEdit: selectedNotes, config });
+    },
+    [bulkEditMutation, selectedNotes],
+  );
+
+  const handleBulkMove = useCallback(
+    (collectionUrl: string) => {
+      bulkMoveMutation.mutate({ notesToMove: selectedNotes, collectionUrl });
+    },
+    [bulkMoveMutation, selectedNotes],
+  );
+
+  const handleBulkDelete = useCallback(() => {
+    setShowBulkDelete(true);
+  }, []);
+
+  const handleInitiateConvert = useCallback((note: Note) => {
+    setNoteForConvert(note);
+  }, []);
+
+  const handleInitiateTagEdit = useCallback((note: Note) => {
+    setNoteForTagEdit(note);
+  }, []);
+
+  const handleInitiateDelete = useCallback((note: Note) => {
+    setNoteForDelete(note);
+  }, []);
 
   // ── Convert note → journal ────────────────────────────────────────────────
 
@@ -286,7 +619,6 @@ export default function NotesPage() {
         {
           onSuccess: () => {
             setSelectedUid(null);
-            // Navigate to journals tab — the entry will appear there
             navigate('/journals');
           },
         },
@@ -297,15 +629,15 @@ export default function NotesPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
-  // If still loading calendars, show nothing (Sidebar already has loading state)
   if (calQuery.isLoading) return null;
 
-  // Empty state: no VJOURNAL-capable collections at all
   if (calQuery.data && vjournalCalendars.length === 0) {
     return <NoCollectionsState />;
   }
 
-  const showDetailPanel = (selectedNote && !creatingNew) || creatingNew;
+  const isMultiSelect = selectedUids.size > 0;
+  const showMultiPanel = isMultiSelect && !creatingNew;
+  const showDetailPanel = (selectedNote && !creatingNew && !isMultiSelect) || creatingNew;
   const defaultCollectionUrl =
     vjournalCalendars.find((c) => !hiddenVJournalCollections.has(c.id))?.url ??
     vjournalCalendars[0]?.url ??
@@ -431,36 +763,18 @@ export default function NotesPage() {
         </div>
       )}
 
-      {/* Bulk action bar — full width */}
-      {selectedUids.size > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/5 border-b border-border shrink-0">
-          <span className="text-xs text-muted-foreground flex-1">{selectedUids.size} selected</span>
-          <button
-            onClick={() => setShowBulkDelete(true)}
-            className="flex items-center gap-1 text-xs text-destructive hover:text-destructive/80 transition-colors"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Delete
-          </button>
-          <button
-            onClick={clearSelection}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* Content row: list + detail */}
+      {/* Content row: list + detail/multi-panel */}
       <div className="flex flex-1 overflow-hidden min-h-0">
         {/* List/grid pane */}
         <div
           className={cn(
             'flex flex-col h-full overflow-hidden',
-            showDetailPanel && !isMobile ? 'w-80 shrink-0 border-r border-border' : 'flex-1',
-            showDetailPanel && isMobile ? 'hidden' : '',
+            (showDetailPanel || showMultiPanel) && !isMobile
+              ? 'w-80 shrink-0 border-r border-border'
+              : 'flex-1',
+            (showDetailPanel || showMultiPanel) && isMobile ? 'hidden' : '',
           )}
         >
-          {/* Notes list / grid */}
           <div
             className={cn(
               'flex-1 overflow-y-auto',
@@ -493,13 +807,39 @@ export default function NotesPage() {
                   setCreatingNew(false);
                 }}
                 onToggleCheck={(uid, shift) => toggleSelect(uid, shift, selectedUid)}
-                multiSelectActive={selectedUids.size > 0}
+                onEnterMultiSelect={handleEnterMultiSelect}
+                onInitiateConvert={handleInitiateConvert}
+                onInitiateTagEdit={handleInitiateTagEdit}
+                onInitiateDelete={handleInitiateDelete}
+                multiSelectActive={isMultiSelect}
                 collectionName={collectionNameMap.get(note.data.collectionUrl)}
                 collectionColor={collectionColorMap.get(note.data.collectionUrl)}
               />
             ))}
           </div>
         </div>
+
+        {/* Multi-select panel */}
+        {showMultiPanel && (
+          <div
+            className={cn(
+              'flex-1 flex flex-col h-full overflow-hidden bg-background relative',
+              isMobile ? 'w-full absolute inset-0 z-10' : '',
+            )}
+          >
+            <NoteMultiSelectPanel
+              notes={selectedNotes}
+              noteCollections={vjournalCalendars}
+              deleting={bulkDeleteMutation.isPending}
+              editing={bulkEditMutation.isPending}
+              moving={bulkMoveMutation.isPending}
+              onOpenBulkEdit={handleOpenBulkEdit}
+              onBulkMove={handleBulkMove}
+              onDelete={handleBulkDelete}
+              onBack={clearSelection}
+            />
+          </div>
+        )}
 
         {/* Detail / edit panel */}
         {showDetailPanel && (
@@ -553,17 +893,178 @@ export default function NotesPage() {
       {showBulkDelete && (
         <BulkDeleteDialog
           count={selectedUids.size}
-          deleting={deleteMutation.isPending}
-          onConfirm={async () => {
-            const toDelete = notes.filter((n) => selectedUids.has(n.uid));
-            await Promise.allSettled(toDelete.map((n) => deleteNote(n.uid, n.etag)));
-            queryClient.invalidateQueries({ queryKey: ['notes'] });
-            clearSelection();
-            setShowBulkDelete(false);
+          deleting={bulkDeleteMutation.isPending}
+          onConfirm={() => {
+            bulkDeleteMutation.mutate(selectedNotes);
           }}
           onCancel={() => setShowBulkDelete(false)}
         />
       )}
+
+      {/* Bulk edit modal */}
+      {showBulkEdit && (
+        <NoteBulkEditModal
+          count={selectedUids.size}
+          initialField={bulkEditInitialField}
+          applying={bulkEditMutation.isPending}
+          onApply={handleBulkEdit}
+          onCancel={() => setShowBulkEdit(false)}
+        />
+      )}
+
+      {/* Convert to journal dialog */}
+      {noteForConvert && (
+        <ConvertToJournalDialog
+          note={noteForConvert}
+          converting={updateMutation.isPending}
+          onConfirm={(dtstart) =>
+            handleConvertToJournal(
+              noteForConvert.uid,
+              noteForConvert.data,
+              noteForConvert.etag,
+              dtstart,
+            )
+          }
+          onCancel={() => setNoteForConvert(null)}
+        />
+      )}
+
+      {/* Edit tags dialog */}
+      {noteForTagEdit && (
+        <EditTagsDialog
+          note={noteForTagEdit}
+          saving={singleTagEditMutation.isPending}
+          onSave={(categories) =>
+            singleTagEditMutation.mutate({
+              uid: noteForTagEdit.uid,
+              data: { ...noteForTagEdit.data, categories },
+              etag: noteForTagEdit.etag,
+            })
+          }
+          onCancel={() => setNoteForTagEdit(null)}
+        />
+      )}
+
+      {/* Per-note delete dialog */}
+      {noteForDelete && (
+        <BulkDeleteDialog
+          count={1}
+          noun="note"
+          deleting={singleDeleteMutation.isPending}
+          onConfirm={() =>
+            singleDeleteMutation.mutate({ uid: noteForDelete.uid, etag: noteForDelete.etag })
+          }
+          onCancel={() => setNoteForDelete(null)}
+        />
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-foreground text-background text-xs px-4 py-2 shadow-lg pointer-events-none">
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Inline per-note dialogs ───────────────────────────────────────────────────
+
+function ConvertToJournalDialog({
+  note,
+  converting,
+  onConfirm,
+  onCancel,
+}: {
+  note: Note;
+  converting: boolean;
+  onConfirm: (dtstart: string) => void;
+  onCancel: () => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [date, setDate] = useState(today);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-background border border-border rounded-lg shadow-xl p-6 w-full max-w-sm">
+        <h2 className="text-sm font-semibold mb-0.5">Convert to Journal</h2>
+        <p className="text-xs text-muted-foreground mb-4 truncate">
+          &ldquo;{note.data.summary || 'Untitled'}&rdquo; will move to the Journals tab.
+        </p>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground">Journal date</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-5">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={converting}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => { if (date) onConfirm(date); }}
+            disabled={converting || !date}
+            className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {converting ? 'Converting…' : 'Convert'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EditTagsDialog({
+  note,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  note: Note;
+  saving: boolean;
+  onSave: (categories: string[]) => void;
+  onCancel: () => void;
+}) {
+  const [categories, setCategories] = useState<string[]>(note.data.categories);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-background border border-border rounded-lg shadow-xl p-6 w-full max-w-sm">
+        <h2 className="text-sm font-semibold mb-0.5">Edit tags</h2>
+        <p className="text-xs text-muted-foreground mb-4 truncate">
+          &ldquo;{note.data.summary || 'Untitled'}&rdquo;
+        </p>
+        <TagInput value={categories} onChange={setCategories} />
+        <div className="flex justify-end gap-2 mt-5">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            className="rounded-md border border-input bg-background px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave(categories)}
+            disabled={saving}
+            className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -577,6 +1078,10 @@ interface NoteCardProps {
   isChecked: boolean;
   onSelect: (uid: string) => void;
   onToggleCheck: (uid: string, shift: boolean) => void;
+  onEnterMultiSelect: (uid: string) => void;
+  onInitiateConvert: (note: Note) => void;
+  onInitiateTagEdit: (note: Note) => void;
+  onInitiateDelete: (note: Note) => void;
   multiSelectActive: boolean;
   collectionName?: string;
   collectionColor?: string;
@@ -589,10 +1094,16 @@ function NoteCard({
   isChecked,
   onSelect,
   onToggleCheck,
+  onEnterMultiSelect,
+  onInitiateConvert,
+  onInitiateTagEdit,
+  onInitiateDelete,
   multiSelectActive,
   collectionName,
   collectionColor,
 }: NoteCardProps) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
   const { data } = note;
   const preview = bodyPreview(data.description);
 
@@ -604,17 +1115,87 @@ function NoteCard({
     }
   };
 
+  const handleMenuToggle = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMenuOpen((o) => !o);
+  };
+
+  const checkbox = (
+    <div
+      className={cn(
+        'h-4 w-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors',
+        isChecked ? 'bg-primary border-primary' : 'border-muted-foreground/40',
+      )}
+    >
+      {isChecked && <span className="text-primary-foreground text-[10px] font-bold">✓</span>}
+    </div>
+  );
+
   if (view === 'grid') {
     return (
       <div
         onClick={handleClick}
         className={cn(
-          'rounded-lg border border-border bg-card p-3 cursor-pointer transition-colors hover:border-primary/40',
+          'relative rounded-lg border border-border bg-card p-3 cursor-pointer transition-colors hover:border-primary/40',
           isSelected && 'border-primary bg-primary/5',
           isChecked && 'border-primary/60 bg-primary/10',
         )}
       >
-        <p className="text-sm font-medium text-foreground mb-1 line-clamp-2 min-h-5">
+        {/* Checkbox overlay — top-left */}
+        {multiSelectActive && (
+          <div className="absolute top-2 left-2">{checkbox}</div>
+        )}
+
+        {/* Context menu button */}
+        {!multiSelectActive && (
+          <div ref={menuRef} className="absolute top-2 right-2">
+            <button
+              onClick={handleMenuToggle}
+              className="rounded p-0.5 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+            >
+              <MoreVertical className="h-3.5 w-3.5" />
+            </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-xs">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEnterMultiSelect(note.uid); }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                  >
+                    Select
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateTagEdit(note); }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                  >
+                    Edit tags
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateConvert(note); }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                  >
+                    Convert to Journal
+                  </button>
+                  <div className="border-t border-border my-1" />
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateDelete(note); }}
+                    className="w-full px-3 py-1.5 text-left text-destructive hover:bg-destructive/10"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        <p
+          className={cn(
+            'text-sm font-medium text-foreground mb-1 line-clamp-2 min-h-5',
+            multiSelectActive && 'ml-5',
+          )}
+        >
           {data.summary || <span className="italic text-muted-foreground">Untitled</span>}
         </p>
         {preview && <p className="text-xs text-muted-foreground line-clamp-3 mb-2">{preview}</p>}
@@ -653,16 +1234,7 @@ function NoteCard({
       )}
     >
       {/* Multi-select check indicator */}
-      {multiSelectActive && (
-        <div
-          className={cn(
-            'mt-0.5 h-4 w-4 shrink-0 rounded border-2 flex items-center justify-center transition-colors',
-            isChecked ? 'bg-primary border-primary' : 'border-muted-foreground/40',
-          )}
-        >
-          {isChecked && <span className="text-primary-foreground text-[10px] font-bold">✓</span>}
-        </div>
-      )}
+      {multiSelectActive && <div className="mt-0.5">{checkbox}</div>}
 
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-foreground truncate">
@@ -701,6 +1273,50 @@ function NoteCard({
           )}
         </div>
       </div>
+
+      {/* Context menu */}
+      {!multiSelectActive && (
+        <div ref={menuRef} className="shrink-0 self-center">
+          <button
+            onClick={handleMenuToggle}
+            className="rounded p-1 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
+          >
+            <MoreVertical className="h-3.5 w-3.5" />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-3 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-xs">
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEnterMultiSelect(note.uid); }}
+                  className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                >
+                  Select
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateTagEdit(note); }}
+                  className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                >
+                  Edit tags
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateConvert(note); }}
+                  className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                >
+                  Convert to Journal
+                </button>
+                <div className="border-t border-border my-1" />
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateDelete(note); }}
+                  className="w-full px-3 py-1.5 text-left text-destructive hover:bg-destructive/10"
+                >
+                  Delete
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
