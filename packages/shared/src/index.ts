@@ -222,6 +222,7 @@ export interface UpdateEventRequest {
   data: EventJson;
   etag: string;
   scope?: RecurrenceScope;
+  oldCalendarId?: string;
 }
 
 export interface DeleteEventRequest {

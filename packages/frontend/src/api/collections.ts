@@ -51,10 +51,11 @@ export const updateCalendarEvent = (
   data: EventJson,
   etag: string,
   scope?: RecurrenceScope,
+  oldCalendarId?: string,
 ): Promise<EventWriteResponse> =>
   apiFetch<EventWriteResponse>(
     `/api/events/${encodeURIComponent(eventId)}`,
-    { method: 'PUT', body: JSON.stringify({ data, etag, scope }) },
+    { method: 'PUT', body: JSON.stringify({ data, etag, scope, oldCalendarId }) },
   );
 
 export const deleteCalendarEvent = (

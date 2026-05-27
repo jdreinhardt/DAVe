@@ -454,6 +454,100 @@ export async function updateEvent(
   return { id, url, etag: newEtag, calendarId, data: eventData };
 }
 
+/**
+ * Move an event from one calendar to another, applying any edits in the same operation.
+ *
+ * scope=undefined / non-recurring: serialize updated ICS, PUT to new calendar, DELETE from old.
+ * scope='all':  fetch raw ICS from old calendar, update master VEVENT, PUT to new, DELETE old.
+ * scope='following': truncate original series in old calendar, create continuation in new calendar.
+ * scope='this': moving a single exception between CalDAV calendars is not meaningful — the
+ *               calendar change is silently ignored and the exception is injected into the
+ *               original calendar as usual.
+ */
+export async function moveEvent(
+  session: SessionData,
+  oldCalendarId: string,
+  id: string,
+  data: EventJson,
+  etag: string,
+  scope: RecurrenceScope | undefined,
+  config: Config,
+): Promise<EventWriteResult> {
+  const newCalendarId = data.calendarId;
+
+  if (scope === 'this') {
+    const sameCalData: EventJson = { ...data, calendarId: oldCalendarId };
+    return updateEventScoped(session, oldCalendarId, id, sameCalData, etag, 'this', config);
+  }
+
+  if (scope === 'following') {
+    // Truncate the original series in the old calendar; create the continuation in the new one.
+    const { raw, etag: freshEtag } = await fetchRawEvent(session, oldCalendarId, id);
+    const truncatedIcs = truncateRrule(raw, data.start, data.allDay);
+    const oldUrl = calendarObjectUrl(session, oldCalendarId, id);
+    const truncatedEtag = await putRawIcs(session, oldUrl, truncatedIcs, freshEtag);
+
+    const newUid = crypto.randomUUID();
+    const continuationData: EventJson = { ...data, uid: newUid, calendarId: newCalendarId, recurrenceId: null };
+    const continuationResult = await createEvent(session, newCalendarId, continuationData, config);
+
+    const result: EventWriteResult & { continuation?: EventWriteResult } = {
+      id,
+      url: oldUrl,
+      etag: truncatedEtag,
+      calendarId: oldCalendarId,
+      data: { ...data, uid: data.uid },
+      continuation: continuationResult,
+    };
+    return result;
+  }
+
+  if (scope === 'all') {
+    // Fetch raw from old calendar, rewrite master VEVENT, PUT to new calendar, then DELETE old.
+    const masterData: EventJson = { ...data, calendarId: newCalendarId, recurrenceId: null };
+    const { raw, etag: freshEtag } = await fetchRawEvent(session, oldCalendarId, id);
+    const updatedIcs = updateMasterVevent(raw, masterData);
+    const newUrl = calendarObjectUrl(session, newCalendarId, id);
+    const putRes = await fetch(newUrl, {
+      method: 'PUT',
+      headers: {
+        ...basicAuthHeader(session),
+        'Content-Type': 'text/calendar; charset=utf-8',
+        'If-None-Match': '*',
+      },
+      body: updatedIcs,
+    });
+    if (!putRes.ok) {
+      const body = await putRes.text().catch(() => '');
+      throw Object.assign(new Error(`PUT failed: ${putRes.status}`), { statusCode: putRes.status, body });
+    }
+    const newEtag = putRes.headers.get('ETag') ?? freshEtag;
+    await deleteEvent(session, oldCalendarId, id, freshEtag, config);
+    return { id, url: newUrl, etag: newEtag, calendarId: newCalendarId, data: masterData };
+  }
+
+  // Non-recurring: serialize updated event, PUT to new calendar, DELETE from old.
+  const eventData: EventJson = { ...data, calendarId: newCalendarId, recurrenceId: null };
+  const icsStr = serializeIcalEvent(eventData);
+  const newUrl = calendarObjectUrl(session, newCalendarId, id);
+  const putRes = await fetch(newUrl, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: icsStr,
+  });
+  if (!putRes.ok) {
+    const body = await putRes.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${putRes.status}`), { statusCode: putRes.status, body });
+  }
+  const newEtag = putRes.headers.get('ETag') ?? etag;
+  await deleteEvent(session, oldCalendarId, id, etag, config);
+  return { id, url: newUrl, etag: newEtag, calendarId: newCalendarId, data: eventData };
+}
+
 export async function deleteEvent(
   session: SessionData,
   calendarId: string,

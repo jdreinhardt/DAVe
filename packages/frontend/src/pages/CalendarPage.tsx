@@ -279,11 +279,15 @@ export default function CalendarPage() {
 
   const updateMutation = useMutation({
     mutationFn: ({ ev, data, scope }: { ev: CalendarEvent; data: EventJson; scope?: RecurrenceScope }) =>
-      updateCalendarEvent(ev.id, data, ev.etag, scope),
-    onSuccess: (result) => {
+      updateCalendarEvent(ev.id, data, ev.etag, scope, ev.calendarId),
+    onSuccess: (result, { ev }) => {
       queryClient.invalidateQueries({ queryKey: ['events', result.calendarId] });
       if (result.continuation) {
         queryClient.invalidateQueries({ queryKey: ['events', result.continuation.calendarId] });
+      }
+      // When the event moved calendars, also flush the source calendar's cache.
+      if (ev.calendarId !== result.calendarId) {
+        queryClient.invalidateQueries({ queryKey: ['events', ev.calendarId] });
       }
       setEditModal(null);
       setPopup(null);

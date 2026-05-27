@@ -319,7 +319,7 @@ export default function EventEditForm({
           <div className="flex-1 overflow-y-auto p-5 space-y-4 min-h-0">
 
             {/* Calendar selector */}
-            {isNew && calendars.length > 1 && (
+            {calendars.length > 1 && (
               <FormSection title="Calendar">
                 <select
                   value={calendarId}
