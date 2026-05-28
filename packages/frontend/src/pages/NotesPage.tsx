@@ -744,12 +744,13 @@ export default function NotesPage() {
         {
           onSuccess: () => {
             setSelectedUid(null);
+            queryClient.invalidateQueries({ queryKey: ['journals'] });
             navigate('/journals');
           },
         },
       );
     },
-    [updateMutation, navigate],
+    [updateMutation, queryClient, navigate],
   );
 
   // ── Render ────────────────────────────────────────────────────────────────

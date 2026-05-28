@@ -417,6 +417,25 @@ export interface NoteWriteResponse {
   data: NoteJson;
 }
 
+// ── Journals query / response shapes ─────────────────────────────────────────
+
+// Journals are dated VJOURNAL entries (dtstart present).
+// They share the Note / NoteJson data shape — dtstart is always non-null here.
+export interface JournalsQueryParams {
+  category?: string;
+  q?: string;
+  sort?: 'summary' | 'created' | 'modified' | 'journal_date' | 'category';
+  order?: 'asc' | 'desc';
+  collections?: string;       // comma-separated collection URLs
+  from?: string;              // YYYY-MM-DD — inclusive lower bound on DTSTART (calendar view, milestone 9)
+  to?: string;                // YYYY-MM-DD — inclusive upper bound on DTSTART (calendar view, milestone 9)
+}
+
+export interface JournalsResponse {
+  journals: Note[];
+  total: number;
+}
+
 // ── API error shape ───────────────────────────────────────────────────────────
 
 export interface ApiError {
