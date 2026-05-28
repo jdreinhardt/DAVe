@@ -169,8 +169,11 @@ function buildNotesQuery(
   }
 
   if (params.q?.trim()) {
-    clauses.push('e.id IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)');
-    values.push(buildFtsQuery(params.q));
+    const words = params.q.trim().split(/\s+/).filter(Boolean);
+    const catMatch = words.map(() => 'lower(category) LIKE lower(?)||\'%\'').join(' OR ');
+    clauses.push(`(e.id IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)
+      OR e.id IN (SELECT entry_id FROM entry_categories WHERE ${catMatch}))`);
+    values.push(buildFtsQuery(params.q), ...words);
   }
 
   const where = clauses.join(' AND ');
