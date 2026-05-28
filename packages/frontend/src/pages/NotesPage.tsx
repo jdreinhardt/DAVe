@@ -1571,7 +1571,7 @@ function NoteCard({
       {!multiSelectActive && (
         <div
           ref={menuRef}
-          className="shrink-0 self-start mt-1 opacity-0 group-hover/card:opacity-100 transition-opacity"
+          className="relative shrink-0 self-start mt-1 opacity-0 group-hover/card:opacity-100 transition-opacity"
         >
           <button
             onClick={handleMenuToggle}
@@ -1582,7 +1582,7 @@ function NoteCard({
           {menuOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={closeMenu} />
-              <div className="absolute right-3 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+              <div className="absolute right-0 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
                 {showMoveSubmenu ? (
                   <>
                     <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border mb-1">
