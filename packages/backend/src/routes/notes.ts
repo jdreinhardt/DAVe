@@ -142,8 +142,22 @@ function buildNotesQuery(
   const values: SqlValue[] = [userId];
 
   if (params.category) {
-    clauses.push('e.id IN (SELECT entry_id FROM entry_categories WHERE category = ?)');
-    values.push(params.category);
+    const all = params.category.split(',').map((c) => c.trim()).filter(Boolean);
+    const includeNoTags = all.includes('__none__');
+    const cats = all.filter((c) => c !== '__none__');
+    const sub: string[] = [];
+    if (cats.length === 1) {
+      sub.push('e.id IN (SELECT entry_id FROM entry_categories WHERE category = ?)');
+      values.push(cats[0]!);
+    } else if (cats.length > 1) {
+      sub.push(`e.id IN (SELECT entry_id FROM entry_categories WHERE category IN (${cats.map(() => '?').join(',')}))`);
+      values.push(...cats);
+    }
+    if (includeNoTags) {
+      sub.push('e.id NOT IN (SELECT DISTINCT entry_id FROM entry_categories)');
+    }
+    if (sub.length === 1) clauses.push(sub[0]!);
+    else if (sub.length > 1) clauses.push(`(${sub.join(' OR ')})`);
   }
 
   if (params.collections) {

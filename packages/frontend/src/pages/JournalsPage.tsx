@@ -10,6 +10,7 @@ import {
   ArrowUpDown,
   BookOpen,
   CalendarDays,
+  CalendarSearch,
   ChevronDown,
   ExternalLink,
   List,
@@ -17,13 +18,18 @@ import {
   PencilLine,
   Plus,
   Search,
-  Tag,
   Trash2,
   X,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { Note, NoteJson, JournalsQueryParams, Calendar } from '@dave/shared';
-import { fetchJournals, createJournal, updateJournal, deleteJournal, triggerJournalsSync } from '../api/journals';
+import {
+  fetchJournals,
+  createJournal,
+  updateJournal,
+  deleteJournal,
+  triggerJournalsSync,
+} from '../api/journals';
 import { getCalendars } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useNoteDrag } from '../contexts/NoteDrag';
@@ -38,6 +44,7 @@ import NoteBulkEditModal, {
   type NoteBulkEditFieldId,
 } from '../components/NoteBulkEditModal';
 import TagInput from '../components/TagInput';
+import TagFilterButton from '../components/TagFilterButton';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -84,14 +91,14 @@ function formatJournalDate(iso: string | null | undefined): string {
 // ── Timeline grouping ─────────────────────────────────────────────────────────
 
 interface DayGroup {
-  dateKey: string;   // YYYY-MM-DD
-  dayLabel: string;  // "Wednesday, May 28"
+  dateKey: string; // YYYY-MM-DD
+  dayLabel: string; // "Wednesday, May 28"
   journals: Note[];
 }
 
 interface MonthGroup {
-  yearMonth: string;   // YYYY-MM (also used as scroll target id)
-  monthLabel: string;  // "May 2026"
+  yearMonth: string; // YYYY-MM (also used as scroll target id)
+  monthLabel: string; // "May 2026"
   days: DayGroup[];
 }
 
@@ -143,7 +150,9 @@ function NoCollectionsState() {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-6 py-12">
       <div className="text-4xl mb-4">📖</div>
-      <h2 className="text-base font-semibold text-foreground mb-1">No journals collections found</h2>
+      <h2 className="text-base font-semibold text-foreground mb-1">
+        No journals collections found
+      </h2>
       <p className="text-sm text-muted-foreground max-w-xs mb-4">
         Your Baikal calendars don&apos;t currently support VJOURNAL components. Enable VJOURNAL on
         an existing collection or create a new one.
@@ -165,7 +174,9 @@ function NoCollectionsState() {
 function computeSharedCategories(journals: Note[]): string[] {
   if (journals.length === 0) return [];
   const first = journals[0]!;
-  return first.data.categories.filter((cat) => journals.every((j) => j.data.categories.includes(cat)));
+  return first.data.categories.filter((cat) =>
+    journals.every((j) => j.data.categories.includes(cat)),
+  );
 }
 
 // ── Multi-journal selection panel ─────────────────────────────────────────────
@@ -264,13 +275,18 @@ function JournalMultiSelectPanel({
 
       {/* Shared values */}
       <div className="px-4 py-3 border-b border-border shrink-0 space-y-2">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Shared</p>
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Shared
+        </p>
         <div className="flex items-start gap-2">
           <span className="w-24 shrink-0 text-xs text-muted-foreground mt-0.5">Categories</span>
           <div className="flex-1 min-w-0 flex flex-wrap gap-1">
             {sharedCategories.length > 0 ? (
               sharedCategories.map((c) => (
-                <span key={c} className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full">
+                <span
+                  key={c}
+                  className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full"
+                >
                   {c}
                 </span>
               ))
@@ -279,11 +295,17 @@ function JournalMultiSelectPanel({
             )}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            <button onClick={() => onOpenBulkEdit('categories_add')} className="text-xs text-primary hover:underline">
+            <button
+              onClick={() => onOpenBulkEdit('categories_add')}
+              className="text-xs text-primary hover:underline"
+            >
               Add
             </button>
             {sharedCategories.length > 0 && (
-              <button onClick={() => onOpenBulkEdit('categories_remove')} className="text-xs text-muted-foreground hover:text-foreground">
+              <button
+                onClick={() => onOpenBulkEdit('categories_remove')}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
                 Remove
               </button>
             )}
@@ -305,12 +327,17 @@ function JournalMultiSelectPanel({
               {j.data.categories.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {j.data.categories.slice(0, 2).map((c) => (
-                    <span key={c} className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full">
+                    <span
+                      key={c}
+                      className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full"
+                    >
                       {c}
                     </span>
                   ))}
                   {j.data.categories.length > 2 && (
-                    <span className="text-xs text-muted-foreground/60">+{j.data.categories.length - 2}</span>
+                    <span className="text-xs text-muted-foreground/60">
+                      +{j.data.categories.length - 2}
+                    </span>
                   )}
                 </div>
               )}
@@ -406,7 +433,9 @@ function JournalCard({
       ref={menuRef}
       className={cn(
         'relative shrink-0',
-        variant === 'list' ? 'self-start mt-1 opacity-0 group-hover/card:opacity-100 transition-opacity' : 'absolute top-2 right-2 opacity-0 group-hover/card:opacity-100 transition-opacity',
+        variant === 'list'
+          ? 'self-start mt-1 opacity-0 group-hover/card:opacity-100 transition-opacity'
+          : 'absolute top-2 right-2 opacity-0 group-hover/card:opacity-100 transition-opacity',
       )}
     >
       <button
@@ -421,15 +450,20 @@ function JournalCard({
       {menuOpen && (
         <>
           <div className="fixed inset-0 z-10" onClick={closeMenu} />
-          <div className={cn(
-            'absolute z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm',
-            variant === 'list' ? 'right-0' : 'right-0 top-full mt-1',
-          )}>
+          <div
+            className={cn(
+              'absolute z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm',
+              variant === 'list' ? 'right-0' : 'right-0 top-full mt-1',
+            )}
+          >
             {showMoveSubmenu ? (
               <>
                 <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border mb-1">
                   <button
-                    onClick={(e) => { e.stopPropagation(); setShowMoveSubmenu(false); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMoveSubmenu(false);
+                    }}
                     className="text-muted-foreground hover:text-foreground leading-none"
                   >
                     ←
@@ -447,7 +481,10 @@ function JournalCard({
                     disabled={journal.data.collectionUrl === col.url}
                     className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted disabled:opacity-40 disabled:cursor-default"
                   >
-                    <span className="h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: hex6(col.color) || '#6C757D' }} />
+                    <span
+                      className="h-2 w-2 rounded-full shrink-0"
+                      style={{ backgroundColor: hex6(col.color) || '#6C757D' }}
+                    />
                     {col.displayName}
                   </button>
                 ))}
@@ -455,26 +492,41 @@ function JournalCard({
             ) : (
               <>
                 <button
-                  onClick={(e) => { e.stopPropagation(); closeMenu(); onEnterMultiSelect(journal.uid); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeMenu();
+                    onEnterMultiSelect(journal.uid);
+                  }}
                   className="w-full px-3 py-1.5 text-left hover:bg-muted"
                 >
                   Select
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); closeMenu(); onInitiateTagEdit(journal); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeMenu();
+                    onInitiateTagEdit(journal);
+                  }}
                   className="w-full px-3 py-1.5 text-left hover:bg-muted"
                 >
                   Edit tags
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); closeMenu(); onConvertToNote(journal); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeMenu();
+                    onConvertToNote(journal);
+                  }}
                   className="w-full px-3 py-1.5 text-left hover:bg-muted"
                 >
                   Convert to Note
                 </button>
                 {journalCollections.length > 1 && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); setShowMoveSubmenu(true); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMoveSubmenu(true);
+                    }}
                     className="w-full px-3 py-1.5 text-left hover:bg-muted"
                   >
                     Move to…
@@ -482,7 +534,11 @@ function JournalCard({
                 )}
                 <div className="border-t border-border my-1" />
                 <button
-                  onClick={(e) => { e.stopPropagation(); closeMenu(); onInitiateDelete(journal); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeMenu();
+                    onInitiateDelete(journal);
+                  }}
                   className="w-full px-3 py-1.5 text-left text-destructive hover:bg-destructive/10"
                 >
                   Delete
@@ -499,7 +555,10 @@ function JournalCard({
     return (
       <div
         draggable
-        onDragStart={(e) => { e.stopPropagation(); onDragStart(journal); }}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          onDragStart(journal);
+        }}
         onDragEnd={onDragEnd}
         onClick={handleClick}
         className={cn(
@@ -511,21 +570,36 @@ function JournalCard({
         {multiSelectActive && <div className="absolute top-2 left-2">{checkbox}</div>}
         {!multiSelectActive && kebabMenu}
 
-        <p className={cn('text-sm font-medium text-foreground truncate', multiSelectActive && 'ml-5')}>
+        <p
+          className={cn(
+            'text-sm font-medium text-foreground truncate',
+            multiSelectActive && 'ml-5',
+          )}
+        >
           {data.summary || <span className="italic text-muted-foreground">Untitled</span>}
         </p>
         {preview && <p className="text-xs text-muted-foreground truncate mt-0.5">{preview}</p>}
         <div className="flex items-center gap-2 mt-1 flex-wrap">
           {collectionName && (
             <span
-              className={cn('text-xs px-1.5 py-0.5 rounded font-medium shrink-0', !collectionColor && 'bg-muted text-muted-foreground')}
-              style={collectionColor ? { backgroundColor: hex6(collectionColor) + '33', color: hex6(collectionColor) } : undefined}
+              className={cn(
+                'text-xs px-1.5 py-0.5 rounded font-medium shrink-0',
+                !collectionColor && 'bg-muted text-muted-foreground',
+              )}
+              style={
+                collectionColor
+                  ? { backgroundColor: hex6(collectionColor) + '33', color: hex6(collectionColor) }
+                  : undefined
+              }
             >
               {collectionName}
             </span>
           )}
           {data.categories.slice(0, 2).map((c) => (
-            <span key={c} className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full">
+            <span
+              key={c}
+              className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full"
+            >
               {c}
             </span>
           ))}
@@ -541,7 +615,10 @@ function JournalCard({
   return (
     <div
       draggable
-      onDragStart={(e) => { e.stopPropagation(); onDragStart(journal); }}
+      onDragStart={(e) => {
+        e.stopPropagation();
+        onDragStart(journal);
+      }}
       onDragEnd={onDragEnd}
       onClick={handleClick}
       className={cn(
@@ -559,8 +636,15 @@ function JournalCard({
         <div className="flex items-center gap-2 mt-1 flex-wrap">
           {collectionName && (
             <span
-              className={cn('text-xs px-1.5 py-0.5 rounded font-medium shrink-0', !collectionColor && 'bg-muted text-muted-foreground')}
-              style={collectionColor ? { backgroundColor: hex6(collectionColor) + '33', color: hex6(collectionColor) } : undefined}
+              className={cn(
+                'text-xs px-1.5 py-0.5 rounded font-medium shrink-0',
+                !collectionColor && 'bg-muted text-muted-foreground',
+              )}
+              style={
+                collectionColor
+                  ? { backgroundColor: hex6(collectionColor) + '33', color: hex6(collectionColor) }
+                  : undefined
+              }
             >
               {collectionName}
             </span>
@@ -569,7 +653,10 @@ function JournalCard({
             {formatJournalDate(data.dtstart)}
           </span>
           {data.categories.slice(0, 2).map((c) => (
-            <span key={c} className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full">
+            <span
+              key={c}
+              className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full"
+            >
               {c}
             </span>
           ))}
@@ -638,7 +725,9 @@ function TimelineView({
   if (isEmpty) {
     return (
       <p className="text-sm text-muted-foreground text-center py-12 px-4">
-        {hasSearch ? 'No matching journal entries.' : 'No journal entries yet. Create your first one.'}
+        {hasSearch
+          ? 'No matching journal entries.'
+          : 'No journal entries yet. Create your first one.'}
       </p>
     );
   }
@@ -656,7 +745,9 @@ function TimelineView({
 
           {mg.days.map((dg) => (
             <div key={dg.dateKey} className="mb-4">
-              <p className="text-xs font-medium text-muted-foreground mb-1.5 pl-0.5">{dg.dayLabel}</p>
+              <p className="text-xs font-medium text-muted-foreground mb-1.5 pl-0.5">
+                {dg.dayLabel}
+              </p>
               <div className="flex flex-col gap-1.5">
                 {dg.journals.map((j) => (
                   <JournalCard
@@ -685,6 +776,74 @@ function TimelineView({
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── Date jumper button ────────────────────────────────────────────────────────
+
+function DateJumperButton({
+  view,
+  monthGroups,
+  calendarRef,
+}: {
+  view: 'timeline' | 'list' | 'calendar';
+  monthGroups: MonthGroup[];
+  calendarRef: React.RefObject<FullCalendar | null>;
+}) {
+  const dateInputRef = useRef<HTMLInputElement>(null);
+  const [jumpDate, setJumpDate] = useState(() => new Date().toISOString().substring(0, 10));
+
+  function handleDateChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const date = e.target.value;
+    if (!date) return;
+    setJumpDate(date);
+    if (view === 'calendar') {
+      calendarRef.current?.getApi().gotoDate(date);
+    } else {
+      const yearMonth = date.substring(0, 7);
+      let target = yearMonth;
+      if (!monthGroups.some((mg) => mg.yearMonth === yearMonth)) {
+        const [y, m] = yearMonth.split('-').map(Number);
+        const targetTotal = y! * 12 + m!;
+        let minDist = Infinity;
+        for (const mg of monthGroups) {
+          const [gy, gm] = mg.yearMonth.split('-').map(Number);
+          const dist = Math.abs(gy! * 12 + gm! - targetTotal);
+          if (dist < minDist) {
+            minDist = dist;
+            target = mg.yearMonth;
+          }
+        }
+      }
+      document.getElementById(`month-${target}`)?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }
+
+  return (
+    <div className="relative shrink-0">
+      <input
+        ref={dateInputRef}
+        type="date"
+        value={jumpDate}
+        onChange={handleDateChange}
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+      />
+      <button
+        onClick={() => {
+          try {
+            dateInputRef.current?.showPicker();
+          } catch {
+            dateInputRef.current?.focus();
+          }
+        }}
+        title="Jump to date"
+        className="flex items-center gap-1.5 text-sm rounded-md border border-input bg-background px-2 py-1.5 hover:bg-muted transition-colors"
+      >
+        <CalendarSearch className="h-3.5 w-3.5 text-muted-foreground" />
+      </button>
     </div>
   );
 }
@@ -746,7 +905,8 @@ function JournalCalendarView({
   const getEventClassNames = useCallback(
     (arg: EventContentArg) => {
       const classes: string[] = [];
-      if (arg.event.id === selectedUid) classes.push('!opacity-100', 'ring-1', 'ring-inset', 'ring-white/50');
+      if (arg.event.id === selectedUid)
+        classes.push('!opacity-100', 'ring-1', 'ring-inset', 'ring-white/50');
       if (debouncedQuery && !arg.event.title.toLowerCase().includes(debouncedQuery.toLowerCase())) {
         classes.push('opacity-30');
       }
@@ -772,6 +932,7 @@ function JournalCalendarView({
         plugins={[dayGridPlugin, interactionPlugin]}
         initialView="dayGridMonth"
         headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
+        buttonText={{ today: 'Today' }}
         events={events}
         eventContent={renderEventContent}
         eventClassNames={getEventClassNames}
@@ -802,27 +963,34 @@ export default function JournalsPage() {
   const [order, setOrder] = useState<'asc' | 'desc'>(() =>
     loadPref('journals.order', 'desc' as 'asc' | 'desc'),
   );
-  const [categoryFilter, setCategoryFilter] = useState<string>(() =>
-    loadPref('journals.category', ''),
-  );
+  const [categoryFilter, setCategoryFilter] = useState<string[]>(() => {
+    const v = loadPref<unknown>('journals.category', []);
+    return Array.isArray(v) ? (v as string[]) : [];
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [creatingNew, setCreatingNew] = useState(false);
   const [newJournalDefaultDate, setNewJournalDefaultDate] = useState<string | null>(null);
-  const [calendarViewRange, setCalendarViewRange] = useState<{ from: string; to: string } | null>(null);
+  const [calendarViewRange, setCalendarViewRange] = useState<{ from: string; to: string } | null>(
+    null,
+  );
   const calendarRef = useRef<FullCalendar>(null);
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [showBulkEdit, setShowBulkEdit] = useState(false);
-  const [bulkEditInitialField, setBulkEditInitialField] = useState<NoteBulkEditFieldId | undefined>(undefined);
+  const [bulkEditInitialField, setBulkEditInitialField] = useState<NoteBulkEditFieldId | undefined>(
+    undefined,
+  );
 
   // Panel resize
   const PANEL_MIN = 240;
   const PANEL_MAX = 1500;
   const [panelWidth, setPanelWidth] = useState<number>(() => loadPref('journals.panelWidth', 440));
-  useEffect(() => { savePref('journals.panelWidth', panelWidth); }, [panelWidth]);
+  useEffect(() => {
+    savePref('journals.panelWidth', panelWidth);
+  }, [panelWidth]);
 
   const startResize = useCallback(
     (e: React.MouseEvent) => {
@@ -846,7 +1014,9 @@ export default function JournalsPage() {
   const [detailPanelWidth, setDetailPanelWidth] = useState<number>(() =>
     loadPref('journals.detailPanelWidth', 440),
   );
-  useEffect(() => { savePref('journals.detailPanelWidth', detailPanelWidth); }, [detailPanelWidth]);
+  useEffect(() => {
+    savePref('journals.detailPanelWidth', detailPanelWidth);
+  }, [detailPanelWidth]);
 
   const startDetailResize = useCallback(
     (e: React.MouseEvent) => {
@@ -870,22 +1040,30 @@ export default function JournalsPage() {
   const [journalForTagEdit, setJournalForTagEdit] = useState<Note | null>(null);
   const [journalForDelete, setJournalForDelete] = useState<Note | null>(null);
 
-  const [toast, setToast] = useState<{ msg: string; action?: { label: string; onClick: () => void } } | null>(null);
+  const [toast, setToast] = useState<{
+    msg: string;
+    action?: { label: string; onClick: () => void };
+  } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showToast = useCallback(
-    (msg: string, action?: { label: string; onClick: () => void }) => {
-      setToast({ msg, action });
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = setTimeout(() => setToast(null), 4000);
-    },
-    [],
-  );
+  const showToast = useCallback((msg: string, action?: { label: string; onClick: () => void }) => {
+    setToast({ msg, action });
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  }, []);
 
   // Persist preferences
-  useEffect(() => { savePref('journals.view', view); }, [view]);
-  useEffect(() => { savePref('journals.sort', sort); }, [sort]);
-  useEffect(() => { savePref('journals.order', order); }, [order]);
-  useEffect(() => { savePref('journals.category', categoryFilter); }, [categoryFilter]);
+  useEffect(() => {
+    savePref('journals.view', view);
+  }, [view]);
+  useEffect(() => {
+    savePref('journals.sort', sort);
+  }, [sort]);
+  useEffect(() => {
+    savePref('journals.order', order);
+  }, [order]);
+  useEffect(() => {
+    savePref('journals.category', categoryFilter);
+  }, [categoryFilter]);
 
   // Calendar view is desktop-only; reset to timeline if user opens on mobile
   useEffect(() => {
@@ -922,7 +1100,7 @@ export default function JournalsPage() {
   // Calendar view excludes q from the main query — search is handled by dimming in the calendar.
   const params: JournalsQueryParams = {
     ...(view === 'timeline' ? { sort: 'journal_date', order: 'desc' } : { sort, order }),
-    ...(categoryFilter ? { category: categoryFilter } : {}),
+    ...(categoryFilter.length > 0 ? { category: categoryFilter.join(',') } : {}),
     ...(debouncedQuery && view !== 'calendar' ? { q: debouncedQuery } : {}),
     ...(visibleCollectionUrls.length > 0 ? { collections: visibleCollectionUrls.join(',') } : {}),
   };
@@ -931,8 +1109,10 @@ export default function JournalsPage() {
     ? {
         from: calendarViewRange.from,
         to: calendarViewRange.to,
-        ...(categoryFilter ? { category: categoryFilter } : {}),
-        ...(visibleCollectionUrls.length > 0 ? { collections: visibleCollectionUrls.join(',') } : {}),
+        ...(categoryFilter.length > 0 ? { category: categoryFilter.join(',') } : {}),
+        ...(visibleCollectionUrls.length > 0
+          ? { collections: visibleCollectionUrls.join(',') }
+          : {}),
       }
     : null;
 
@@ -948,7 +1128,11 @@ export default function JournalsPage() {
   const calendarJournalsQuery = useQuery({
     queryKey: ['journals', 'calendar', calendarParams],
     queryFn: () => fetchJournals(calendarParams!),
-    enabled: view === 'calendar' && hasCollections && visibleCollectionUrls.length > 0 && calendarParams !== null,
+    enabled:
+      view === 'calendar' &&
+      hasCollections &&
+      visibleCollectionUrls.length > 0 &&
+      calendarParams !== null,
     staleTime: 30_000,
   });
 
@@ -960,7 +1144,9 @@ export default function JournalsPage() {
   // Kick off initial sync on first load
   useEffect(() => {
     if (hasCollections) {
-      triggerJournalsSync().catch(() => { /* non-fatal */ });
+      triggerJournalsSync().catch(() => {
+        /* non-fatal */
+      });
     }
   }, [hasCollections]);
 
@@ -1011,13 +1197,13 @@ export default function JournalsPage() {
   }, [vjournalCalendars]);
 
   const allCategories = useMemo(() => {
-    const cats = new Set<string>();
+    const cats = new Set<string>(categoryFilter.filter((c) => c !== '__none__'));
     const source = view === 'calendar' ? calendarJournals : journals;
     for (const j of source) {
       for (const c of j.data.categories) cats.add(c);
     }
     return [...cats].sort();
-  }, [journals, calendarJournals, view]);
+  }, [journals, calendarJournals, view, categoryFilter]);
 
   // Timeline grouping (only computed when view === 'timeline')
   const monthGroups = useMemo(
@@ -1076,7 +1262,13 @@ export default function JournalsPage() {
   });
 
   const bulkEditMutation = useMutation({
-    mutationFn: ({ journalsToEdit, config }: { journalsToEdit: Note[]; config: NoteBulkEditConfig }) =>
+    mutationFn: ({
+      journalsToEdit,
+      config,
+    }: {
+      journalsToEdit: Note[];
+      config: NoteBulkEditConfig;
+    }) =>
       Promise.allSettled(
         journalsToEdit.map((j) => {
           const newData = applyNoteBulkEdit(j.data, config);
@@ -1097,7 +1289,13 @@ export default function JournalsPage() {
   });
 
   const bulkMoveMutation = useMutation({
-    mutationFn: ({ journalsToMove, collectionUrl }: { journalsToMove: Note[]; collectionUrl: string }) =>
+    mutationFn: ({
+      journalsToMove,
+      collectionUrl,
+    }: {
+      journalsToMove: Note[];
+      collectionUrl: string;
+    }) =>
       Promise.allSettled(
         journalsToMove.map((j) => {
           const newData = { ...j.data, collectionUrl };
@@ -1162,7 +1360,10 @@ export default function JournalsPage() {
   );
 
   const clearSelection = useCallback(() => setSelectedUids(new Set()), []);
-  const selectAll = useCallback(() => setSelectedUids(new Set(journals.map((j) => j.uid))), [journals]);
+  const selectAll = useCallback(
+    () => setSelectedUids(new Set(journals.map((j) => j.uid))),
+    [journals],
+  );
 
   const handleEnterMultiSelect = useCallback((uid: string) => {
     setSelectedUids(new Set([uid]));
@@ -1193,7 +1394,11 @@ export default function JournalsPage() {
 
   const handleMoveJournal = useCallback(
     (journal: Note, collectionUrl: string) => {
-      updateMutation.mutate({ uid: journal.uid, data: { ...journal.data, collectionUrl }, etag: journal.etag });
+      updateMutation.mutate({
+        uid: journal.uid,
+        data: { ...journal.data, collectionUrl },
+        etag: journal.etag,
+      });
     },
     [updateMutation],
   );
@@ -1259,12 +1464,9 @@ export default function JournalsPage() {
     [clearSelection],
   );
 
-  const handleCalendarDatesSet = useCallback(
-    (from: string, to: string) => {
-      setCalendarViewRange({ from, to });
-    },
-    [],
-  );
+  const handleCalendarDatesSet = useCallback((from: string, to: string) => {
+    setCalendarViewRange({ from, to });
+  }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1323,7 +1525,9 @@ export default function JournalsPage() {
           <>
             <select
               value={sort ?? ''}
-              onChange={(e) => setSort((e.target.value as JournalsQueryParams['sort']) || undefined)}
+              onChange={(e) =>
+                setSort((e.target.value as JournalsQueryParams['sort']) || undefined)
+              }
               className="text-sm rounded-md border border-input bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
             >
               <option value="">Default sort</option>
@@ -1346,41 +1550,16 @@ export default function JournalsPage() {
           </>
         )}
 
-        {/* Date jumper — timeline view only */}
-        {view === 'timeline' && monthGroups.length > 1 && (
-          <select
-            defaultValue=""
-            onChange={(e) => {
-              const m = e.target.value;
-              if (m) {
-                document.getElementById(`month-${m}`)?.scrollIntoView({ behavior: 'smooth' });
-                // Reset select back to placeholder after scrolling
-                (e.target as HTMLSelectElement).value = '';
-              }
-            }}
-            className="text-sm rounded-md border border-input bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
-            <option value="" disabled>Jump to month…</option>
-            {monthGroups.map((mg) => (
-              <option key={mg.yearMonth} value={mg.yearMonth}>{mg.monthLabel}</option>
-            ))}
-          </select>
+        {/* Date jumper — timeline and calendar views */}
+        {(view === 'timeline' || view === 'calendar') && (
+          <DateJumperButton view={view} monthGroups={monthGroups} calendarRef={calendarRef} />
         )}
 
-        {/* Jump-to-month — calendar view only */}
-        {view === 'calendar' && (
-          <input
-            type="month"
-            onChange={(e) => {
-              if (e.target.value) {
-                calendarRef.current?.getApi().gotoDate(e.target.value + '-01');
-                e.target.value = '';
-              }
-            }}
-            className="text-sm rounded-md border border-input bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
-            title="Jump to month"
-          />
-        )}
+        <TagFilterButton
+          allTags={allCategories}
+          selected={categoryFilter}
+          onChange={setCategoryFilter}
+        />
 
         {/* View toggle */}
         <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
@@ -1425,36 +1604,6 @@ export default function JournalsPage() {
         </div>
       </div>
 
-      {/* Category filter chips */}
-      {allCategories.length > 0 && (
-        <div className="flex gap-1.5 px-3 py-1.5 overflow-x-auto shrink-0 border-b border-border">
-          <button
-            onClick={() => setCategoryFilter('')}
-            className={cn(
-              'text-xs px-2 py-0.5 rounded-full border transition-colors shrink-0',
-              !categoryFilter
-                ? 'bg-primary/10 border-primary/30 text-primary'
-                : 'border-input text-muted-foreground hover:border-primary/30 hover:text-foreground',
-            )}
-          >
-            All
-          </button>
-          {allCategories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setCategoryFilter(cat === categoryFilter ? '' : cat)}
-              className={cn(
-                'text-xs px-2 py-0.5 rounded-full border transition-colors shrink-0 flex items-center gap-1',
-                cat === categoryFilter
-                  ? 'bg-primary/10 border-primary/30 text-primary'
-                  : 'border-input text-muted-foreground hover:border-primary/30 hover:text-foreground',
-              )}
-            >
-              <Tag className="h-2.5 w-2.5" /> {cat}
-            </button>
-          ))}
-        </div>
-      )}
 
       {/* Content row: list/timeline + detail/multi-panel */}
       <div className="flex flex-1 overflow-hidden min-h-0">
@@ -1468,24 +1617,45 @@ export default function JournalsPage() {
           {/* Selection count bar */}
           {isMultiSelect && (
             <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/5 border-b border-border shrink-0">
-              <span className="text-xs text-muted-foreground flex-1">{selectedUids.size} selected</span>
-              <button onClick={selectAll} className="text-xs text-primary hover:underline transition-colors">All</button>
+              <span className="text-xs text-muted-foreground flex-1">
+                {selectedUids.size} selected
+              </span>
+              <button
+                onClick={selectAll}
+                className="text-xs text-primary hover:underline transition-colors"
+              >
+                All
+              </button>
               <span className="text-muted-foreground/40 text-xs">·</span>
-              <button onClick={clearSelection} className="text-xs text-muted-foreground hover:text-foreground transition-colors">None</button>
-              <button onClick={clearSelection} title="Clear selection" className="text-muted-foreground hover:text-foreground transition-colors">
+              <button
+                onClick={clearSelection}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                None
+              </button>
+              <button
+                onClick={clearSelection}
+                title="Clear selection"
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
           )}
 
-          <div className={cn('flex-1', view === 'calendar' ? 'overflow-hidden' : 'overflow-y-auto')}>
+          <div
+            className={cn('flex-1', view === 'calendar' ? 'overflow-hidden' : 'overflow-y-auto')}
+          >
             {view === 'timeline' ? (
               <TimelineView
                 monthGroups={monthGroups}
                 selectedUid={selectedUid}
                 selectedUids={selectedUids}
                 multiSelectActive={isMultiSelect}
-                onSelect={(uid) => { setSelectedUid(uid); setCreatingNew(false); }}
+                onSelect={(uid) => {
+                  setSelectedUid(uid);
+                  setCreatingNew(false);
+                }}
                 onToggleCheck={(uid, shift) => toggleSelect(uid, shift, selectedUid)}
                 onEnterMultiSelect={handleEnterMultiSelect}
                 onConvertToNote={handleConvertToNote}
@@ -1499,7 +1669,7 @@ export default function JournalsPage() {
                 collectionColorMap={collectionColorMap}
                 isLoading={journalsQuery.isLoading}
                 isEmpty={!journalsQuery.isLoading && journals.length === 0}
-                hasSearch={!!(debouncedQuery || categoryFilter)}
+                hasSearch={!!(debouncedQuery || categoryFilter.length > 0)}
               />
             ) : view === 'calendar' ? (
               <JournalCalendarView
@@ -1521,7 +1691,9 @@ export default function JournalsPage() {
                 )}
                 {!journalsQuery.isLoading && journals.length === 0 && (
                   <p className="text-sm text-muted-foreground text-center py-12 px-4">
-                    {debouncedQuery || categoryFilter ? 'No matching journal entries.' : 'No journal entries yet. Create your first one.'}
+                    {debouncedQuery || categoryFilter.length > 0
+                      ? 'No matching journal entries.'
+                      : 'No journal entries yet. Create your first one.'}
                   </p>
                 )}
                 {journals.map((j) => (
@@ -1531,7 +1703,10 @@ export default function JournalsPage() {
                     variant="list"
                     isSelected={selectedUid === j.uid}
                     isChecked={selectedUids.has(j.uid)}
-                    onSelect={(uid) => { setSelectedUid(uid); setCreatingNew(false); }}
+                    onSelect={(uid) => {
+                      setSelectedUid(uid);
+                      setCreatingNew(false);
+                    }}
                     onToggleCheck={(uid, shift) => toggleSelect(uid, shift, selectedUid)}
                     onEnterMultiSelect={handleEnterMultiSelect}
                     onConvertToNote={handleConvertToNote}
@@ -1599,13 +1774,19 @@ export default function JournalsPage() {
             <div className="flex-1 flex flex-col h-full overflow-hidden bg-background border-l border-border relative">
               {creatingNew && (
                 <VJournalEditForm
-                  initial={emptyJournalJson(defaultCollectionUrl, newJournalDefaultDate ?? undefined)}
+                  initial={emptyJournalJson(
+                    defaultCollectionUrl,
+                    newJournalDefaultDate ?? undefined,
+                  )}
                   calendars={vjournalCalendars}
                   mode="journal"
                   isNew
                   saving={createMutation.isPending}
                   onSave={(data) => createMutation.mutate(data)}
-                  onCancel={() => { setCreatingNew(false); setNewJournalDefaultDate(null); }}
+                  onCancel={() => {
+                    setCreatingNew(false);
+                    setNewJournalDefaultDate(null);
+                  }}
                 />
               )}
               {selectedJournal && !creatingNew && (
@@ -1618,7 +1799,13 @@ export default function JournalsPage() {
                   onDelete={(uid, etag) => deleteMutation.mutate({ uid, etag })}
                   onClose={() => setSelectedUid(null)}
                   onConvertToNote={(uid, data, etag) =>
-                    handleConvertToNote({ uid, etag, collectionUrl: data.collectionUrl, collectionId: '', data })
+                    handleConvertToNote({
+                      uid,
+                      etag,
+                      collectionUrl: data.collectionUrl,
+                      collectionId: '',
+                      data,
+                    })
                   }
                 />
               )}
@@ -1630,7 +1817,10 @@ export default function JournalsPage() {
         {showDetailPanel && isMobile && (
           <div className="w-full absolute inset-0 z-10 flex flex-col h-full overflow-hidden bg-background">
             <button
-              onClick={() => { setSelectedUid(null); setCreatingNew(false); }}
+              onClick={() => {
+                setSelectedUid(null);
+                setCreatingNew(false);
+              }}
               className="flex items-center gap-1 px-3 py-2 text-sm text-muted-foreground hover:text-foreground border-b border-border shrink-0"
             >
               ← Back
@@ -1643,7 +1833,10 @@ export default function JournalsPage() {
                 isNew
                 saving={createMutation.isPending}
                 onSave={(data) => createMutation.mutate(data)}
-                onCancel={() => { setCreatingNew(false); setNewJournalDefaultDate(null); }}
+                onCancel={() => {
+                  setCreatingNew(false);
+                  setNewJournalDefaultDate(null);
+                }}
               />
             )}
             {selectedJournal && !creatingNew && (
@@ -1656,7 +1849,13 @@ export default function JournalsPage() {
                 onDelete={(uid, etag) => deleteMutation.mutate({ uid, etag })}
                 onClose={() => setSelectedUid(null)}
                 onConvertToNote={(uid, data, etag) =>
-                  handleConvertToNote({ uid, etag, collectionUrl: data.collectionUrl, collectionId: '', data })
+                  handleConvertToNote({
+                    uid,
+                    etag,
+                    collectionUrl: data.collectionUrl,
+                    collectionId: '',
+                    data,
+                  })
                 }
               />
             )}
@@ -1721,7 +1920,10 @@ export default function JournalsPage() {
           <span>{toast.msg}</span>
           {toast.action && (
             <button
-              onClick={() => { toast.action!.onClick(); setToast(null); }}
+              onClick={() => {
+                toast.action!.onClick();
+                setToast(null);
+              }}
               className="font-medium underline hover:no-underline shrink-0"
             >
               {toast.action.label}

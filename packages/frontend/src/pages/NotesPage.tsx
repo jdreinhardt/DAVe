@@ -10,7 +10,6 @@ import {
   PencilLine,
   Plus,
   Search,
-  Tag,
   Trash2,
   X,
 } from 'lucide-react';
@@ -31,6 +30,7 @@ import NoteBulkEditModal, {
   type NoteBulkEditFieldId,
 } from '../components/NoteBulkEditModal';
 import TagInput from '../components/TagInput';
+import TagFilterButton from '../components/TagFilterButton';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -310,9 +310,10 @@ export default function NotesPage() {
   const [order, setOrder] = useState<'asc' | 'desc'>(() =>
     loadPref('notes.order', 'desc' as 'asc' | 'desc'),
   );
-  const [categoryFilter, setCategoryFilter] = useState<string>(() =>
-    loadPref('notes.category', ''),
-  );
+  const [categoryFilter, setCategoryFilter] = useState<string[]>(() => {
+    const v = loadPref<unknown>('notes.category', []);
+    return Array.isArray(v) ? (v as string[]) : [];
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
@@ -436,7 +437,7 @@ export default function NotesPage() {
   const params: NotesQueryParams = {
     sort,
     order,
-    ...(categoryFilter ? { category: categoryFilter } : {}),
+    ...(categoryFilter.length > 0 ? { category: categoryFilter.join(',') } : {}),
     ...(debouncedQuery ? { q: debouncedQuery } : {}),
     ...(visibleCollectionUrls.length > 0 ? { collections: visibleCollectionUrls.join(',') } : {}),
   };
@@ -507,15 +508,15 @@ export default function NotesPage() {
     return map;
   }, [vjournalCalendars]);
 
-  // ── All unique categories for filter chips ────────────────────────────────
+  // ── All unique categories for tag filter ─────────────────────────────────
 
   const allCategories = useMemo(() => {
-    const cats = new Set<string>();
+    const cats = new Set<string>(categoryFilter.filter((c) => c !== '__none__'));
     for (const n of notes) {
       for (const c of n.data.categories) cats.add(c);
     }
     return [...cats].sort();
-  }, [notes]);
+  }, [notes, categoryFilter]);
 
   // ── Mutations ─────────────────────────────────────────────────────────────
 
@@ -829,6 +830,12 @@ export default function NotesPage() {
           </button>
         )}
 
+        <TagFilterButton
+          allTags={allCategories}
+          selected={categoryFilter}
+          onChange={setCategoryFilter}
+        />
+
         {/* View toggle — right */}
         <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
           <button
@@ -858,36 +865,6 @@ export default function NotesPage() {
         </div>
       </div>
 
-      {/* Category filter chips — full width */}
-      {allCategories.length > 0 && (
-        <div className="flex gap-1.5 px-3 py-1.5 overflow-x-auto shrink-0 border-b border-border">
-          <button
-            onClick={() => setCategoryFilter('')}
-            className={cn(
-              'text-xs px-2 py-0.5 rounded-full border transition-colors shrink-0',
-              !categoryFilter
-                ? 'bg-primary/10 border-primary/30 text-primary'
-                : 'border-input text-muted-foreground hover:border-primary/30 hover:text-foreground',
-            )}
-          >
-            All
-          </button>
-          {allCategories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setCategoryFilter(cat === categoryFilter ? '' : cat)}
-              className={cn(
-                'text-xs px-2 py-0.5 rounded-full border transition-colors shrink-0 flex items-center gap-1',
-                cat === categoryFilter
-                  ? 'bg-primary/10 border-primary/30 text-primary'
-                  : 'border-input text-muted-foreground hover:border-primary/30 hover:text-foreground',
-              )}
-            >
-              <Tag className="h-2.5 w-2.5" /> {cat}
-            </button>
-          ))}
-        </div>
-      )}
 
       {/* Content row: list + detail/multi-panel */}
       <div className="flex flex-1 overflow-hidden min-h-0">
@@ -942,7 +919,7 @@ export default function NotesPage() {
 
             {!notesQuery.isLoading && notes.length === 0 && (
               <p className="text-sm text-muted-foreground text-center py-12 px-4">
-                {debouncedQuery || categoryFilter
+                {debouncedQuery || categoryFilter.length > 0
                   ? 'No matching notes.'
                   : 'No notes yet. Create your first one.'}
               </p>
