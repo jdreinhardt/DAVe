@@ -19,6 +19,7 @@ import type { Note, NoteJson, NotesQueryParams, Calendar } from '@dave/shared';
 import { fetchNotes, createNote, updateNote, deleteNote, triggerNotesSync } from '../api/notes';
 import { getCalendars } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
+import { useNoteDrag } from '../contexts/NoteDrag';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../lib/utils';
 import VJournalDetail from '../components/VJournalDetail';
@@ -253,18 +254,39 @@ function NoteMultiSelectPanel({
         </div>
       </div>
 
-      {/* Selected notes list */}
-      <div className="flex-1 overflow-y-auto py-2">
-        {notes.map((n) => (
-          <div
-            key={n.uid}
-            className="flex items-center gap-2 px-4 py-1.5 text-xs text-foreground"
-          >
-            <span className="truncate flex-1">
-              {n.data.summary || <span className="italic text-muted-foreground">Untitled</span>}
-            </span>
-          </div>
-        ))}
+      {/* Selected note cards */}
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="grid grid-cols-2 gap-2">
+          {notes.map((n) => (
+            <div key={n.uid} className="flex flex-col gap-1.5 p-3 rounded-lg border border-border">
+              <p className="text-sm font-medium truncate w-full leading-snug">
+                {n.data.summary || <span className="italic text-muted-foreground">(no title)</span>}
+              </p>
+              {n.data.description && (
+                <p className="text-xs text-muted-foreground line-clamp-2 leading-snug">
+                  {bodyPreview(n.data.description, 80)}
+                </p>
+              )}
+              {n.data.categories.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {n.data.categories.slice(0, 2).map((c) => (
+                    <span
+                      key={c}
+                      className="text-xs bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded-full"
+                    >
+                      {c}
+                    </span>
+                  ))}
+                  {n.data.categories.length > 2 && (
+                    <span className="text-xs text-muted-foreground/60">
+                      +{n.data.categories.length - 2}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -276,6 +298,7 @@ export default function NotesPage() {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
+  const { startDrag, endDrag } = useNoteDrag();
 
   // Preferences persisted in localStorage
   const [view, setView] = useState<'list' | 'grid'>(() =>
@@ -299,9 +322,36 @@ export default function NotesPage() {
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [showBulkEdit, setShowBulkEdit] = useState(false);
-  const [bulkEditInitialField, setBulkEditInitialField] = useState<
-    NoteBulkEditFieldId | undefined
-  >(undefined);
+  const [bulkEditInitialField, setBulkEditInitialField] = useState<NoteBulkEditFieldId | undefined>(
+    undefined,
+  );
+
+  // ── Panel resize ──────────────────────────────────────────────────────────
+  const PANEL_MIN = 240;
+  const PANEL_MAX = 700;
+  const [panelWidth, setPanelWidth] = useState<number>(() => loadPref('notes.panelWidth', 440));
+  useEffect(() => {
+    savePref('notes.panelWidth', panelWidth);
+  }, [panelWidth]);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = panelWidth;
+      const onMove = (ev: MouseEvent) => {
+        const delta = startX - ev.clientX;
+        setPanelWidth(Math.max(PANEL_MIN, Math.min(PANEL_MAX, startWidth + delta)));
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+    [panelWidth],
+  );
 
   // Per-note kebab actions
   const [noteForConvert, setNoteForConvert] = useState<Note | null>(null);
@@ -318,10 +368,18 @@ export default function NotesPage() {
   }, []);
 
   // Persist preferences
-  useEffect(() => { savePref('notes.view', view); }, [view]);
-  useEffect(() => { savePref('notes.sort', sort); }, [sort]);
-  useEffect(() => { savePref('notes.order', order); }, [order]);
-  useEffect(() => { savePref('notes.category', categoryFilter); }, [categoryFilter]);
+  useEffect(() => {
+    savePref('notes.view', view);
+  }, [view]);
+  useEffect(() => {
+    savePref('notes.sort', sort);
+  }, [sort]);
+  useEffect(() => {
+    savePref('notes.order', order);
+  }, [order]);
+  useEffect(() => {
+    savePref('notes.category', categoryFilter);
+  }, [categoryFilter]);
 
   // Debounce search
   useEffect(() => {
@@ -369,7 +427,9 @@ export default function NotesPage() {
   // Kick off initial sync on first load
   useEffect(() => {
     if (hasCollections) {
-      triggerNotesSync().catch(() => { /* non-fatal */ });
+      triggerNotesSync().catch(() => {
+        /* non-fatal */
+      });
     }
   }, [hasCollections]);
 
@@ -568,6 +628,10 @@ export default function NotesPage() {
 
   const clearSelection = useCallback(() => setSelectedUids(new Set()), []);
 
+  const selectAll = useCallback(() => {
+    setSelectedUids(new Set(notes.map((n) => n.uid)));
+  }, [notes]);
+
   const handleEnterMultiSelect = useCallback((uid: string) => {
     setSelectedUids(new Set([uid]));
     setSelectedUid(null);
@@ -596,6 +660,41 @@ export default function NotesPage() {
   const handleBulkDelete = useCallback(() => {
     setShowBulkDelete(true);
   }, []);
+
+  const handleMoveNote = useCallback(
+    (note: Note, collectionUrl: string) => {
+      updateMutation.mutate({
+        uid: note.uid,
+        data: { ...note.data, collectionUrl },
+        etag: note.etag,
+      });
+    },
+    [updateMutation],
+  );
+
+  const handleCardDragStart = useCallback(
+    (note: Note) => {
+      if (selectedUids.has(note.uid) && selectedUids.size > 1) {
+        const all = notes.filter((n) => selectedUids.has(n.uid));
+        startDrag(note, (targetCollectionUrl) =>
+          bulkMoveMutation.mutate({ notesToMove: all, collectionUrl: targetCollectionUrl }),
+        );
+      } else {
+        startDrag(note, (targetCollectionUrl) =>
+          updateMutation.mutate({
+            uid: note.uid,
+            data: { ...note.data, collectionUrl: targetCollectionUrl },
+            etag: note.etag,
+          }),
+        );
+      }
+    },
+    [startDrag, selectedUids, notes, bulkMoveMutation, updateMutation],
+  );
+
+  const handleCardDragEnd = useCallback(() => {
+    endDrag();
+  }, [endDrag]);
 
   const handleInitiateConvert = useCallback((note: Note) => {
     setNoteForConvert(note);
@@ -768,13 +867,40 @@ export default function NotesPage() {
         {/* List/grid pane */}
         <div
           className={cn(
-            'flex flex-col h-full overflow-hidden',
-            (showDetailPanel || showMultiPanel) && !isMobile
-              ? 'w-80 shrink-0 border-r border-border'
-              : 'flex-1',
+            'flex flex-col h-full overflow-hidden flex-1',
+            showDetailPanel && !isMobile && 'w-80 shrink-0 border-r border-border',
             (showDetailPanel || showMultiPanel) && isMobile ? 'hidden' : '',
           )}
         >
+          {/* Selection count + All / None / Cancel bar */}
+          {isMultiSelect && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/5 border-b border-border shrink-0">
+              <span className="text-xs text-muted-foreground flex-1">
+                {selectedUids.size} selected
+              </span>
+              <button
+                onClick={selectAll}
+                className="text-xs text-primary hover:underline transition-colors"
+              >
+                All
+              </button>
+              <span className="text-muted-foreground/40 text-xs">·</span>
+              <button
+                onClick={clearSelection}
+                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              >
+                None
+              </button>
+              <button
+                onClick={clearSelection}
+                title="Clear selection"
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
           <div
             className={cn(
               'flex-1 overflow-y-auto',
@@ -811,6 +937,10 @@ export default function NotesPage() {
                 onInitiateConvert={handleInitiateConvert}
                 onInitiateTagEdit={handleInitiateTagEdit}
                 onInitiateDelete={handleInitiateDelete}
+                onMoveNote={handleMoveNote}
+                onDragStart={handleCardDragStart}
+                onDragEnd={handleCardDragEnd}
+                noteCollections={vjournalCalendars}
                 multiSelectActive={isMultiSelect}
                 collectionName={collectionNameMap.get(note.data.collectionUrl)}
                 collectionColor={collectionColorMap.get(note.data.collectionUrl)}
@@ -820,13 +950,28 @@ export default function NotesPage() {
         </div>
 
         {/* Multi-select panel */}
-        {showMultiPanel && (
-          <div
-            className={cn(
-              'flex-1 flex flex-col h-full overflow-hidden bg-background relative',
-              isMobile ? 'w-full absolute inset-0 z-10' : '',
-            )}
-          >
+        {showMultiPanel && !isMobile && (
+          <div className="flex shrink-0" style={{ width: panelWidth }}>
+            <div
+              className="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
+              onMouseDown={startResize}
+              title="Drag to resize"
+            />
+            <NoteMultiSelectPanel
+              notes={selectedNotes}
+              noteCollections={vjournalCalendars}
+              deleting={bulkDeleteMutation.isPending}
+              editing={bulkEditMutation.isPending}
+              moving={bulkMoveMutation.isPending}
+              onOpenBulkEdit={handleOpenBulkEdit}
+              onBulkMove={handleBulkMove}
+              onDelete={handleBulkDelete}
+              onBack={clearSelection}
+            />
+          </div>
+        )}
+        {showMultiPanel && isMobile && (
+          <div className="fixed inset-0 z-50 flex flex-col bg-background">
             <NoteMultiSelectPanel
               notes={selectedNotes}
               noteCollections={vjournalCalendars}
@@ -1013,7 +1158,9 @@ function ConvertToJournalDialog({
           </button>
           <button
             type="button"
-            onClick={() => { if (date) onConfirm(date); }}
+            onClick={() => {
+              if (date) onConfirm(date);
+            }}
             disabled={converting || !date}
             className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
@@ -1082,6 +1229,10 @@ interface NoteCardProps {
   onInitiateConvert: (note: Note) => void;
   onInitiateTagEdit: (note: Note) => void;
   onInitiateDelete: (note: Note) => void;
+  onMoveNote: (note: Note, collectionUrl: string) => void;
+  onDragStart: (note: Note) => void;
+  onDragEnd: () => void;
+  noteCollections: Calendar[];
   multiSelectActive: boolean;
   collectionName?: string;
   collectionColor?: string;
@@ -1098,11 +1249,16 @@ function NoteCard({
   onInitiateConvert,
   onInitiateTagEdit,
   onInitiateDelete,
+  onMoveNote,
+  onDragStart,
+  onDragEnd,
+  noteCollections,
   multiSelectActive,
   collectionName,
   collectionColor,
 }: NoteCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showMoveSubmenu, setShowMoveSubmenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const { data } = note;
   const preview = bodyPreview(data.description);
@@ -1117,7 +1273,15 @@ function NoteCard({
 
   const handleMenuToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setMenuOpen((o) => !o);
+    setMenuOpen((o) => {
+      if (o) setShowMoveSubmenu(false);
+      return !o;
+    });
+  };
+
+  const closeMenu = () => {
+    setMenuOpen(false);
+    setShowMoveSubmenu(false);
   };
 
   const checkbox = (
@@ -1134,21 +1298,25 @@ function NoteCard({
   if (view === 'grid') {
     return (
       <div
+        draggable
+        onDragStart={(e) => { e.stopPropagation(); onDragStart(note); }}
+        onDragEnd={onDragEnd}
         onClick={handleClick}
         className={cn(
-          'relative rounded-lg border border-border bg-card p-3 cursor-pointer transition-colors hover:border-primary/40',
+          'group/card relative rounded-lg border border-border bg-card p-3 cursor-pointer transition-colors hover:border-primary/40',
           isSelected && 'border-primary bg-primary/5',
           isChecked && 'border-primary/60 bg-primary/10',
         )}
       >
         {/* Checkbox overlay — top-left */}
-        {multiSelectActive && (
-          <div className="absolute top-2 left-2">{checkbox}</div>
-        )}
+        {multiSelectActive && <div className="absolute top-2 left-2">{checkbox}</div>}
 
-        {/* Context menu button */}
+        {/* Context menu button — hover only */}
         {!multiSelectActive && (
-          <div ref={menuRef} className="absolute top-2 right-2">
+          <div
+            ref={menuRef}
+            className="absolute top-2 right-2 opacity-0 group-hover/card:opacity-100 transition-opacity"
+          >
             <button
               onClick={handleMenuToggle}
               className="rounded p-0.5 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
@@ -1157,33 +1325,97 @@ function NoteCard({
             </button>
             {menuOpen && (
               <>
-                <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-                <div className="absolute right-0 top-full mt-1 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-xs">
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEnterMultiSelect(note.uid); }}
-                    className="w-full px-3 py-1.5 text-left hover:bg-muted"
-                  >
-                    Select
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateTagEdit(note); }}
-                    className="w-full px-3 py-1.5 text-left hover:bg-muted"
-                  >
-                    Edit tags
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateConvert(note); }}
-                    className="w-full px-3 py-1.5 text-left hover:bg-muted"
-                  >
-                    Convert to Journal
-                  </button>
-                  <div className="border-t border-border my-1" />
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateDelete(note); }}
-                    className="w-full px-3 py-1.5 text-left text-destructive hover:bg-destructive/10"
-                  >
-                    Delete
-                  </button>
+                <div className="fixed inset-0 z-10" onClick={closeMenu} />
+                <div className="absolute right-0 top-full mt-1 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                  {showMoveSubmenu ? (
+                    <>
+                      <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border mb-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowMoveSubmenu(false);
+                          }}
+                          className="text-muted-foreground hover:text-foreground leading-none"
+                        >
+                          ←
+                        </button>
+                        <span className="text-xs text-muted-foreground">Move to</span>
+                      </div>
+                      {noteCollections.map((col) => (
+                        <button
+                          key={col.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            closeMenu();
+                            onMoveNote(note, col.url);
+                          }}
+                          disabled={note.data.collectionUrl === col.url}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted disabled:opacity-40 disabled:cursor-default"
+                        >
+                          <span
+                            className="h-2 w-2 rounded-full shrink-0"
+                            style={{ backgroundColor: hex6(col.color) || '#6C757D' }}
+                          />
+                          {col.displayName}
+                        </button>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeMenu();
+                          onEnterMultiSelect(note.uid);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                      >
+                        Select
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeMenu();
+                          onInitiateTagEdit(note);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                      >
+                        Edit tags
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeMenu();
+                          onInitiateConvert(note);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                      >
+                        Convert to Journal
+                      </button>
+                      {noteCollections.length > 1 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowMoveSubmenu(true);
+                          }}
+                          className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                        >
+                          Move to…
+                        </button>
+                      )}
+                      <div className="border-t border-border my-1" />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeMenu();
+                          onInitiateDelete(note);
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-destructive hover:bg-destructive/10"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
               </>
             )}
@@ -1226,9 +1458,12 @@ function NoteCard({
   // List view
   return (
     <div
+      draggable
+      onDragStart={(e) => { e.stopPropagation(); onDragStart(note); }}
+      onDragEnd={onDragEnd}
       onClick={handleClick}
       className={cn(
-        'flex items-start gap-3 px-3 py-2.5 border-b border-border cursor-pointer transition-colors hover:bg-muted/50',
+        'group/card flex items-start gap-3 px-3 py-2.5 border-b border-border cursor-pointer transition-colors hover:bg-muted/50',
         isSelected && 'bg-primary/5',
         isChecked && 'bg-primary/10',
       )}
@@ -1274,9 +1509,12 @@ function NoteCard({
         </div>
       </div>
 
-      {/* Context menu */}
+      {/* Context menu — hover only */}
       {!multiSelectActive && (
-        <div ref={menuRef} className="shrink-0 self-center">
+        <div
+          ref={menuRef}
+          className="shrink-0 self-start mt-1 opacity-0 group-hover/card:opacity-100 transition-opacity"
+        >
           <button
             onClick={handleMenuToggle}
             className="rounded p-1 text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted transition-colors"
@@ -1285,33 +1523,97 @@ function NoteCard({
           </button>
           {menuOpen && (
             <>
-              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-3 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-xs">
-                <button
-                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onEnterMultiSelect(note.uid); }}
-                  className="w-full px-3 py-1.5 text-left hover:bg-muted"
-                >
-                  Select
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateTagEdit(note); }}
-                  className="w-full px-3 py-1.5 text-left hover:bg-muted"
-                >
-                  Edit tags
-                </button>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateConvert(note); }}
-                  className="w-full px-3 py-1.5 text-left hover:bg-muted"
-                >
-                  Convert to Journal
-                </button>
-                <div className="border-t border-border my-1" />
-                <button
-                  onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onInitiateDelete(note); }}
-                  className="w-full px-3 py-1.5 text-left text-destructive hover:bg-destructive/10"
-                >
-                  Delete
-                </button>
+              <div className="fixed inset-0 z-10" onClick={closeMenu} />
+              <div className="absolute right-3 z-20 w-44 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                {showMoveSubmenu ? (
+                  <>
+                    <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border mb-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowMoveSubmenu(false);
+                        }}
+                        className="text-muted-foreground hover:text-foreground leading-none"
+                      >
+                        ←
+                      </button>
+                      <span className="text-xs text-muted-foreground">Move to</span>
+                    </div>
+                    {noteCollections.map((col) => (
+                      <button
+                        key={col.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          closeMenu();
+                          onMoveNote(note, col.url);
+                        }}
+                        disabled={note.data.collectionUrl === col.url}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted disabled:opacity-40 disabled:cursor-default"
+                      >
+                        <span
+                          className="h-2 w-2 rounded-full shrink-0"
+                          style={{ backgroundColor: hex6(col.color) || '#6C757D' }}
+                        />
+                        {col.displayName}
+                      </button>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeMenu();
+                        onEnterMultiSelect(note.uid);
+                      }}
+                      className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                    >
+                      Select
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeMenu();
+                        onInitiateTagEdit(note);
+                      }}
+                      className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                    >
+                      Edit tags
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeMenu();
+                        onInitiateConvert(note);
+                      }}
+                      className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                    >
+                      Convert to Journal
+                    </button>
+                    {noteCollections.length > 1 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowMoveSubmenu(true);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-muted"
+                      >
+                        Move to…
+                      </button>
+                    )}
+                    <div className="border-t border-border my-1" />
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeMenu();
+                        onInitiateDelete(note);
+                      }}
+                      className="w-full px-3 py-1.5 text-left text-destructive hover:bg-destructive/10"
+                    >
+                      Delete
+                    </button>
+                  </>
+                )}
               </div>
             </>
           )}

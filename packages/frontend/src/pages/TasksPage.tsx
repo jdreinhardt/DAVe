@@ -378,7 +378,10 @@ function TaskRow({
                     className="px-1.5 py-0.5 rounded text-xs shrink-0 font-medium"
                     style={
                       calendarColor
-                        ? { backgroundColor: hex6(calendarColor) + '33', color: hex6(calendarColor) }
+                        ? {
+                            backgroundColor: hex6(calendarColor) + '33',
+                            color: hex6(calendarColor),
+                          }
                         : {
                             backgroundColor: 'hsl(var(--muted))',
                             color: 'hsl(var(--muted-foreground))',

@@ -7,6 +7,7 @@ import { ApiError } from '../api/client';
 import Sidebar from '../components/Sidebar';
 import { CollectionVisibilityProvider } from '../contexts/CollectionVisibility';
 import { ContactDragProvider } from '../contexts/ContactDrag';
+import { NoteDragProvider } from '../contexts/NoteDrag';
 import { SettingsProvider } from '../contexts/Settings';
 import { useSyncCollections } from '../hooks/useSyncCollections';
 
@@ -60,6 +61,7 @@ export default function AppLayout() {
     <SettingsProvider>
       <CollectionVisibilityProvider>
         <ContactDragProvider>
+          <NoteDragProvider>
           <SyncPoller />
           <div className="flex h-screen overflow-hidden bg-background">
             <Sidebar
@@ -84,6 +86,7 @@ export default function AppLayout() {
               </main>
             </div>
           </div>
+          </NoteDragProvider>
         </ContactDragProvider>
       </CollectionVisibilityProvider>
     </SettingsProvider>

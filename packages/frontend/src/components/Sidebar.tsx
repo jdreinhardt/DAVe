@@ -12,6 +12,7 @@ import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useContactDrag } from '../contexts/ContactDrag';
+import { useNoteDrag } from '../contexts/NoteDrag';
 import type { AddressBook, Calendar as CalendarType } from '@dave/shared';
 import type { MeResponse } from '@dave/shared';
 
@@ -232,6 +233,10 @@ function VJournalCollectionSection({
     hideAllVJournalCollections,
   } = useCollectionVisibility();
 
+  const { dragging: noteDragging } = useNoteDrag();
+  const isDraggingNote = noteDragging !== null;
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
   const vjournalCollections = (allCalendars ?? []).filter((cal) =>
     cal.components.includes('VJOURNAL'),
   );
@@ -283,33 +288,43 @@ function VJournalCollectionSection({
         <p className="px-3 text-xs text-muted-foreground">No collections available</p>
       )}
 
-      {vjournalCollections.map((cal) => (
-        <label
-          key={cal.id}
-          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors"
-        >
-          <input
-            type="checkbox"
-            className="sr-only"
-            checked={!hiddenVJournalCollections.has(cal.id)}
-            onChange={() => toggleVJournalCollection(cal.id)}
-          />
-          <span
-            className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
-            style={{
-              backgroundColor: hiddenVJournalCollections.has(cal.id) ? 'transparent' : (cal.color || '#0082C9'),
-              borderColor: cal.color || '#0082C9',
-            }}
-          >
-            {!hiddenVJournalCollections.has(cal.id) && (
-              <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+      {vjournalCollections.map((cal) => {
+        const isSameCol = isDraggingNote && noteDragging!.note.data.collectionUrl === cal.url;
+        const isOver = dropTargetId === cal.id;
+        return (
+          <label
+            key={cal.id}
+            onDragOver={isDraggingNote && !isSameCol ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropTargetId(cal.id); } : undefined}
+            onDragLeave={isDraggingNote ? () => setDropTargetId(null) : undefined}
+            onDrop={isDraggingNote && !isSameCol ? (e) => { e.preventDefault(); setDropTargetId(null); noteDragging!.onMove(cal.url); } : undefined}
+            className={cn(
+              'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors',
+              isOver && 'bg-primary/10 ring-1 ring-inset ring-primary/40',
             )}
-          </span>
-          <span className={cn('truncate', hiddenVJournalCollections.has(cal.id) && 'text-muted-foreground line-through')}>
-            {cal.displayName}
-          </span>
-        </label>
-      ))}
+          >
+            <input
+              type="checkbox"
+              className="sr-only"
+              checked={!hiddenVJournalCollections.has(cal.id)}
+              onChange={() => toggleVJournalCollection(cal.id)}
+            />
+            <span
+              className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+              style={{
+                backgroundColor: hiddenVJournalCollections.has(cal.id) ? 'transparent' : (cal.color || '#0082C9'),
+                borderColor: cal.color || '#0082C9',
+              }}
+            >
+              {!hiddenVJournalCollections.has(cal.id) && (
+                <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+              )}
+            </span>
+            <span className={cn('truncate', hiddenVJournalCollections.has(cal.id) && 'text-muted-foreground line-through')}>
+              {cal.displayName}
+            </span>
+          </label>
+        );
+      })}
     </div>
   );
 }
