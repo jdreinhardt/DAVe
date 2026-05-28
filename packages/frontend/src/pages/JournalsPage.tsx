@@ -1,7 +1,15 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import FullCalendar from '@fullcalendar/react';
+import dayGridPlugin from '@fullcalendar/daygrid';
+import interactionPlugin from '@fullcalendar/interaction';
+import type { EventInput, DatesSetArg, EventClickArg, EventContentArg } from '@fullcalendar/core';
+import type { DateClickArg } from '@fullcalendar/interaction';
 import {
+  AlignLeft,
   ArrowUpDown,
+  BookOpen,
+  CalendarDays,
   ChevronDown,
   ExternalLink,
   List,
@@ -12,7 +20,6 @@ import {
   Tag,
   Trash2,
   X,
-  AlignLeft,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import type { Note, NoteJson, JournalsQueryParams, Calendar } from '@dave/shared';
@@ -682,6 +689,102 @@ function TimelineView({
   );
 }
 
+// ── Calendar view ─────────────────────────────────────────────────────────────
+
+function JournalCalendarView({
+  journals,
+  collectionColorMap,
+  debouncedQuery,
+  selectedUid,
+  onEventClick,
+  onDateClick,
+  onDatesSet,
+  calendarRef,
+}: {
+  journals: Note[];
+  collectionColorMap: Map<string, string>;
+  debouncedQuery: string;
+  selectedUid: string | null;
+  onEventClick: (uid: string) => void;
+  onDateClick: (dateStr: string) => void;
+  onDatesSet: (from: string, to: string) => void;
+  calendarRef: React.RefObject<FullCalendar | null>;
+}) {
+  const events: EventInput[] = useMemo(
+    () =>
+      journals.map((j) => {
+        const rawColor = collectionColorMap.get(j.data.collectionUrl);
+        const color = rawColor ? hex6(rawColor) : undefined;
+        return {
+          id: j.uid,
+          title: j.data.summary || '(Untitled)',
+          start: j.data.dtstart?.substring(0, 10) ?? '',
+          allDay: true,
+          backgroundColor: color,
+          borderColor: color,
+          extendedProps: { componentType: 'journal', collectionUrl: j.data.collectionUrl },
+        };
+      }),
+    [journals, collectionColorMap],
+  );
+
+  const handleEventClick = useCallback(
+    (arg: EventClickArg) => onEventClick(arg.event.id),
+    [onEventClick],
+  );
+
+  const handleDateClick = useCallback(
+    (arg: DateClickArg) => onDateClick(arg.dateStr),
+    [onDateClick],
+  );
+
+  const handleDatesSet = useCallback(
+    (arg: DatesSetArg) => onDatesSet(arg.startStr.substring(0, 10), arg.endStr.substring(0, 10)),
+    [onDatesSet],
+  );
+
+  const getEventClassNames = useCallback(
+    (arg: EventContentArg) => {
+      const classes: string[] = [];
+      if (arg.event.id === selectedUid) classes.push('!opacity-100', 'ring-1', 'ring-inset', 'ring-white/50');
+      if (debouncedQuery && !arg.event.title.toLowerCase().includes(debouncedQuery.toLowerCase())) {
+        classes.push('opacity-30');
+      }
+      return classes;
+    },
+    [debouncedQuery, selectedUid],
+  );
+
+  const renderEventContent = useCallback(
+    (arg: EventContentArg) => (
+      <div className="flex items-center gap-0.5 px-0.5 w-full overflow-hidden">
+        <BookOpen className="h-2.5 w-2.5 shrink-0 opacity-80" />
+        <span className="text-[11px] leading-tight truncate">{arg.event.title}</span>
+      </div>
+    ),
+    [],
+  );
+
+  return (
+    <div className="h-full p-3 overflow-hidden">
+      <FullCalendar
+        ref={calendarRef}
+        plugins={[dayGridPlugin, interactionPlugin]}
+        initialView="dayGridMonth"
+        headerToolbar={{ left: 'prev,next today', center: 'title', right: '' }}
+        events={events}
+        eventContent={renderEventContent}
+        eventClassNames={getEventClassNames}
+        eventClick={handleEventClick}
+        dateClick={handleDateClick}
+        datesSet={handleDatesSet}
+        height="100%"
+        dayMaxEvents={3}
+      />
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function JournalsPage() {
@@ -690,8 +793,8 @@ export default function JournalsPage() {
   const navigate = useNavigate();
   const { startDrag, endDrag } = useNoteDrag();
 
-  const [view, setView] = useState<'timeline' | 'list'>(() =>
-    loadPref('journals.view', 'timeline' as 'timeline' | 'list'),
+  const [view, setView] = useState<'timeline' | 'list' | 'calendar'>(() =>
+    loadPref('journals.view', 'timeline' as 'timeline' | 'list' | 'calendar'),
   );
   const [sort, setSort] = useState<JournalsQueryParams['sort']>(() =>
     loadPref('journals.sort', 'journal_date' as JournalsQueryParams['sort']),
@@ -707,6 +810,9 @@ export default function JournalsPage() {
 
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [creatingNew, setCreatingNew] = useState(false);
+  const [newJournalDefaultDate, setNewJournalDefaultDate] = useState<string | null>(null);
+  const [calendarViewRange, setCalendarViewRange] = useState<{ from: string; to: string } | null>(null);
+  const calendarRef = useRef<FullCalendar>(null);
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [showBulkEdit, setShowBulkEdit] = useState(false);
@@ -781,6 +887,11 @@ export default function JournalsPage() {
   useEffect(() => { savePref('journals.order', order); }, [order]);
   useEffect(() => { savePref('journals.category', categoryFilter); }, [categoryFilter]);
 
+  // Calendar view is desktop-only; reset to timeline if user opens on mobile
+  useEffect(() => {
+    if (isMobile && view === 'calendar') setView('timeline');
+  }, [isMobile, view]);
+
   // Debounce search
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(searchQuery), 150);
@@ -808,12 +919,22 @@ export default function JournalsPage() {
   const hasCollections = calQuery.data !== undefined && vjournalCalendars.length > 0;
 
   // Timeline always fetches by journal_date desc; list uses user sort pref.
+  // Calendar view excludes q from the main query — search is handled by dimming in the calendar.
   const params: JournalsQueryParams = {
     ...(view === 'timeline' ? { sort: 'journal_date', order: 'desc' } : { sort, order }),
     ...(categoryFilter ? { category: categoryFilter } : {}),
-    ...(debouncedQuery ? { q: debouncedQuery } : {}),
+    ...(debouncedQuery && view !== 'calendar' ? { q: debouncedQuery } : {}),
     ...(visibleCollectionUrls.length > 0 ? { collections: visibleCollectionUrls.join(',') } : {}),
   };
+
+  const calendarParams: JournalsQueryParams | null = calendarViewRange
+    ? {
+        from: calendarViewRange.from,
+        to: calendarViewRange.to,
+        ...(categoryFilter ? { category: categoryFilter } : {}),
+        ...(visibleCollectionUrls.length > 0 ? { collections: visibleCollectionUrls.join(',') } : {}),
+      }
+    : null;
 
   const journalsQuery = useQuery({
     queryKey: ['journals', params],
@@ -823,6 +944,18 @@ export default function JournalsPage() {
   });
 
   const journals = useMemo(() => journalsQuery.data?.journals ?? [], [journalsQuery.data]);
+
+  const calendarJournalsQuery = useQuery({
+    queryKey: ['journals', 'calendar', calendarParams],
+    queryFn: () => fetchJournals(calendarParams!),
+    enabled: view === 'calendar' && hasCollections && visibleCollectionUrls.length > 0 && calendarParams !== null,
+    staleTime: 30_000,
+  });
+
+  const calendarJournals = useMemo(
+    () => calendarJournalsQuery.data?.journals ?? [],
+    [calendarJournalsQuery.data],
+  );
 
   // Kick off initial sync on first load
   useEffect(() => {
@@ -879,11 +1012,12 @@ export default function JournalsPage() {
 
   const allCategories = useMemo(() => {
     const cats = new Set<string>();
-    for (const j of journals) {
+    const source = view === 'calendar' ? calendarJournals : journals;
+    for (const j of source) {
       for (const c of j.data.categories) cats.add(c);
     }
     return [...cats].sort();
-  }, [journals]);
+  }, [journals, calendarJournals, view]);
 
   // Timeline grouping (only computed when view === 'timeline')
   const monthGroups = useMemo(
@@ -902,6 +1036,7 @@ export default function JournalsPage() {
     onSuccess: (result) => {
       invalidateJournals();
       setCreatingNew(false);
+      setNewJournalDefaultDate(null);
       setSelectedUid(result.uid);
     },
   });
@@ -1105,6 +1240,32 @@ export default function JournalsPage() {
     [updateMutation, queryClient, showToast, navigate],
   );
 
+  const handleCalendarEventClick = useCallback(
+    (uid: string) => {
+      clearSelection();
+      setSelectedUid(uid);
+      setCreatingNew(false);
+    },
+    [clearSelection],
+  );
+
+  const handleCalendarDateClick = useCallback(
+    (dateStr: string) => {
+      setNewJournalDefaultDate(dateStr);
+      setCreatingNew(true);
+      setSelectedUid(null);
+      clearSelection();
+    },
+    [clearSelection],
+  );
+
+  const handleCalendarDatesSet = useCallback(
+    (from: string, to: string) => {
+      setCalendarViewRange({ from, to });
+    },
+    [],
+  );
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (calQuery.isLoading) return null;
@@ -1206,6 +1367,21 @@ export default function JournalsPage() {
           </select>
         )}
 
+        {/* Jump-to-month — calendar view only */}
+        {view === 'calendar' && (
+          <input
+            type="month"
+            onChange={(e) => {
+              if (e.target.value) {
+                calendarRef.current?.getApi().gotoDate(e.target.value + '-01');
+                e.target.value = '';
+              }
+            }}
+            className="text-sm rounded-md border border-input bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
+            title="Jump to month"
+          />
+        )}
+
         {/* View toggle */}
         <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
           <button
@@ -1232,6 +1408,20 @@ export default function JournalsPage() {
           >
             <List className="h-4 w-4" />
           </button>
+          {!isMobile && (
+            <button
+              onClick={() => setView('calendar')}
+              className={cn(
+                'p-1 rounded transition-colors',
+                view === 'calendar'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              title="Calendar view"
+            >
+              <CalendarDays className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -1288,7 +1478,7 @@ export default function JournalsPage() {
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto">
+          <div className={cn('flex-1', view === 'calendar' ? 'overflow-hidden' : 'overflow-y-auto')}>
             {view === 'timeline' ? (
               <TimelineView
                 monthGroups={monthGroups}
@@ -1310,6 +1500,17 @@ export default function JournalsPage() {
                 isLoading={journalsQuery.isLoading}
                 isEmpty={!journalsQuery.isLoading && journals.length === 0}
                 hasSearch={!!(debouncedQuery || categoryFilter)}
+              />
+            ) : view === 'calendar' ? (
+              <JournalCalendarView
+                journals={calendarJournals}
+                collectionColorMap={collectionColorMap}
+                debouncedQuery={debouncedQuery}
+                selectedUid={selectedUid}
+                onEventClick={handleCalendarEventClick}
+                onDateClick={handleCalendarDateClick}
+                onDatesSet={handleCalendarDatesSet}
+                calendarRef={calendarRef}
               />
             ) : (
               <>
@@ -1398,13 +1599,13 @@ export default function JournalsPage() {
             <div className="flex-1 flex flex-col h-full overflow-hidden bg-background border-l border-border relative">
               {creatingNew && (
                 <VJournalEditForm
-                  initial={emptyJournalJson(defaultCollectionUrl)}
+                  initial={emptyJournalJson(defaultCollectionUrl, newJournalDefaultDate ?? undefined)}
                   calendars={vjournalCalendars}
                   mode="journal"
                   isNew
                   saving={createMutation.isPending}
                   onSave={(data) => createMutation.mutate(data)}
-                  onCancel={() => setCreatingNew(false)}
+                  onCancel={() => { setCreatingNew(false); setNewJournalDefaultDate(null); }}
                 />
               )}
               {selectedJournal && !creatingNew && (
@@ -1436,13 +1637,13 @@ export default function JournalsPage() {
             </button>
             {creatingNew && (
               <VJournalEditForm
-                initial={emptyJournalJson(defaultCollectionUrl)}
+                initial={emptyJournalJson(defaultCollectionUrl, newJournalDefaultDate ?? undefined)}
                 calendars={vjournalCalendars}
                 mode="journal"
                 isNew
                 saving={createMutation.isPending}
                 onSave={(data) => createMutation.mutate(data)}
-                onCancel={() => setCreatingNew(false)}
+                onCancel={() => { setCreatingNew(false); setNewJournalDefaultDate(null); }}
               />
             )}
             {selectedJournal && !creatingNew && (
