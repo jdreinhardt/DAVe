@@ -444,7 +444,7 @@ export default function NotesPage() {
   const notesQuery = useQuery({
     queryKey: ['notes', params],
     queryFn: () => fetchNotes(params),
-    enabled: hasCollections,
+    enabled: hasCollections && visibleCollectionUrls.length > 0,
     staleTime: 30_000,
   });
 
