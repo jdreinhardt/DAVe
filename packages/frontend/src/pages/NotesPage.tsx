@@ -929,8 +929,9 @@ export default function NotesPage() {
           <div
             className={cn(
               'flex-1 overflow-y-auto',
-              view === 'grid' ? 'grid grid-cols-2 gap-2 p-3 content-start' : '',
+              view === 'grid' ? 'grid gap-2 p-3 content-start' : '',
             )}
+            style={view === 'grid' ? { gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' } : undefined}
           >
             {notesQuery.isLoading && (
               <div className="flex items-center justify-center h-24">

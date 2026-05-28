@@ -615,7 +615,10 @@ export function updateMasterVevent(rawIcs: string, event: EventJson): string {
 
 /**
  * Return the UTC offset for a given IANA timezone at the instant described by
- * isoStr, as a ±HHMM string suitable for VTIMEZONE TZOFFSETFROM/TZOFFSETTO.
+ * isoStr, as a jCal ±HH:MM string for use with addPropertyWithValue on
+ * TZOFFSETFROM/TZOFFSETTO. ical.js's toICAL() expects this colon-separated
+ * form and strips the colon when emitting ICAL; passing ±HHMM would cause
+ * toICAL to mis-slice and produce a truncated value like -050.
  * Uses Intl so no tz database is needed.
  */
 function utcOffsetString(isoStr: string, tzid: string): string {
@@ -639,7 +642,7 @@ function utcOffsetString(isoStr: string, tzid: string): string {
   const abs = Math.abs(offsetMin);
   const hh = Math.floor(abs / 60).toString().padStart(2, '0');
   const mm = (abs % 60).toString().padStart(2, '0');
-  return `${sign}${hh}${mm}`;
+  return `${sign}${hh}:${mm}`;
 }
 
 /**
