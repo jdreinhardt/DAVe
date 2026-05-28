@@ -328,7 +328,7 @@ export default function NotesPage() {
 
   // ── Panel resize ──────────────────────────────────────────────────────────
   const PANEL_MIN = 240;
-  const PANEL_MAX = 700;
+  const PANEL_MAX = 1500;
   const [panelWidth, setPanelWidth] = useState<number>(() => loadPref('notes.panelWidth', 440));
   useEffect(() => {
     savePref('notes.panelWidth', panelWidth);
@@ -351,6 +351,32 @@ export default function NotesPage() {
       window.addEventListener('mouseup', onUp);
     },
     [panelWidth],
+  );
+
+  const [detailPanelWidth, setDetailPanelWidth] = useState<number>(() =>
+    loadPref('notes.detailPanelWidth', 440),
+  );
+  useEffect(() => {
+    savePref('notes.detailPanelWidth', detailPanelWidth);
+  }, [detailPanelWidth]);
+
+  const startDetailResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startWidth = detailPanelWidth;
+      const onMove = (ev: MouseEvent) => {
+        const delta = startX - ev.clientX;
+        setDetailPanelWidth(Math.max(PANEL_MIN, Math.min(PANEL_MAX, startWidth + delta)));
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+    [detailPanelWidth],
   );
 
   // Per-note kebab actions
@@ -867,8 +893,7 @@ export default function NotesPage() {
         {/* List/grid pane */}
         <div
           className={cn(
-            'flex flex-col h-full overflow-hidden flex-1',
-            showDetailPanel && !isMobile && 'w-80 shrink-0 border-r border-border',
+            'flex flex-col h-full overflow-hidden flex-1 min-w-75',
             (showDetailPanel || showMultiPanel) && isMobile ? 'hidden' : '',
           )}
         >
@@ -986,26 +1011,54 @@ export default function NotesPage() {
           </div>
         )}
 
-        {/* Detail / edit panel */}
-        {showDetailPanel && (
-          <div
-            className={cn(
-              'flex-1 flex flex-col h-full overflow-hidden bg-background relative',
-              isMobile ? 'w-full absolute inset-0 z-10' : '',
-            )}
-          >
-            {isMobile && (
-              <button
-                onClick={() => {
-                  setSelectedUid(null);
-                  setCreatingNew(false);
-                }}
-                className="flex items-center gap-1 px-3 py-2 text-sm text-muted-foreground hover:text-foreground border-b border-border shrink-0"
-              >
-                ← Back
-              </button>
-            )}
+        {/* Detail / edit panel — desktop */}
+        {showDetailPanel && !isMobile && (
+          <div className="flex shrink-0" style={{ width: detailPanelWidth }}>
+            <div
+              className="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
+              onMouseDown={startDetailResize}
+              title="Drag to resize"
+            />
+            <div className="flex-1 flex flex-col h-full overflow-hidden bg-background border-l border-border">
+              {creatingNew && (
+                <VJournalEditForm
+                  initial={emptyNoteJson(defaultCollectionUrl)}
+                  calendars={vjournalCalendars}
+                  mode="note"
+                  isNew
+                  saving={createMutation.isPending}
+                  onSave={(data) => createMutation.mutate(data)}
+                  onCancel={() => setCreatingNew(false)}
+                />
+              )}
+              {selectedNote && !creatingNew && (
+                <VJournalDetail
+                  note={selectedNote}
+                  mode="note"
+                  calendars={vjournalCalendars}
+                  saving={updateMutation.isPending}
+                  onSave={(uid, data, etag) => updateMutation.mutate({ uid, data, etag })}
+                  onDelete={(uid, etag) => deleteMutation.mutate({ uid, etag })}
+                  onClose={() => setSelectedUid(null)}
+                  onConvertToJournal={handleConvertToJournal}
+                />
+              )}
+            </div>
+          </div>
+        )}
 
+        {/* Detail / edit panel — mobile */}
+        {showDetailPanel && isMobile && (
+          <div className="w-full absolute inset-0 z-10 flex flex-col h-full overflow-hidden bg-background">
+            <button
+              onClick={() => {
+                setSelectedUid(null);
+                setCreatingNew(false);
+              }}
+              className="flex items-center gap-1 px-3 py-2 text-sm text-muted-foreground hover:text-foreground border-b border-border shrink-0"
+            >
+              ← Back
+            </button>
             {creatingNew && (
               <VJournalEditForm
                 initial={emptyNoteJson(defaultCollectionUrl)}
@@ -1017,7 +1070,6 @@ export default function NotesPage() {
                 onCancel={() => setCreatingNew(false)}
               />
             )}
-
             {selectedNote && !creatingNew && (
               <VJournalDetail
                 note={selectedNote}
@@ -1299,7 +1351,10 @@ function NoteCard({
     return (
       <div
         draggable
-        onDragStart={(e) => { e.stopPropagation(); onDragStart(note); }}
+        onDragStart={(e) => {
+          e.stopPropagation();
+          onDragStart(note);
+        }}
         onDragEnd={onDragEnd}
         onClick={handleClick}
         className={cn(
@@ -1459,13 +1514,15 @@ function NoteCard({
   return (
     <div
       draggable
-      onDragStart={(e) => { e.stopPropagation(); onDragStart(note); }}
+      onDragStart={(e) => {
+        e.stopPropagation();
+        onDragStart(note);
+      }}
       onDragEnd={onDragEnd}
       onClick={handleClick}
       className={cn(
-        'group/card flex items-start gap-3 px-3 py-2.5 border-b border-border cursor-pointer transition-colors hover:bg-muted/50',
-        isSelected && 'bg-primary/5',
-        isChecked && 'bg-primary/10',
+        'group/card flex items-start gap-3 px-3 py-3 rounded-md cursor-pointer transition-colors mx-1 my-0.5',
+        isChecked ? 'bg-primary/10' : isSelected ? 'bg-primary/5' : 'hover:bg-muted',
       )}
     >
       {/* Multi-select check indicator */}
