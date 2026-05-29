@@ -6,7 +6,7 @@ import type { SessionData } from '../services/session.js';
 import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson, TaskJson, NoteJson } from '@dave/shared';
 import type { RecurrenceScope, CreateAddressBookRequest, UpdateAddressBookRequest, CreateCalendarRequest, UpdateCalendarRequest } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
-import { parseIcalEvents, serializeIcalEvent, serializeIcalTask, serializeIcalJournal, injectException, addExdate, truncateRrule, updateMasterVevent } from './ical.js';
+import { parseIcalEvents, serializeIcalEvent, serializeIcalTask, serializeIcalJournal, injectException, addExdate, truncateRrule, updateMasterVevent, resetTaskToNeedsAction } from './ical.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
@@ -1163,6 +1163,113 @@ export async function deleteTask(
     const body = await res.text().catch(() => '');
     throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
   }
+}
+
+// ── Baikal archive search ─────────────────────────────────────────────────────
+
+/**
+ * Fetch VTODO objects whose COMPLETED timestamp falls strictly between the
+ * retention window and the max archive age — i.e. tasks that have been evicted
+ * from the local cache but are still within the Baikal search cap.
+ *
+ * time-range start = now - BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS  (oldest to fetch)
+ * time-range end   = now - COMPLETED_TASK_RETENTION_DAYS       (exclude still-cached tasks)
+ *
+ * Per-collection failures are caught and logged so one bad collection
+ * doesn't abort the entire search.
+ */
+export async function fetchArchivedCompletedTasks(
+  session: SessionData,
+  collectionUrls: string[],
+  config: Config,
+): Promise<CalendarObjectRaw[]> {
+  const authHeaders = basicAuthHeader(session);
+  const toIso = (ms: number): string =>
+    new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
+
+  // Oldest tasks to include
+  const startStr = toIso(Date.now() - config.BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS * 86_400_000);
+  // Exclude tasks still within the retention window (they're in the local cache)
+  const endStr = toIso(Date.now() - config.COMPLETED_TASK_RETENTION_DAYS * 86_400_000);
+
+  const results: CalendarObjectRaw[] = [];
+  for (const calUrl of collectionUrls) {
+    try {
+      const objects = await _fetchCalendarObjects({
+        calendar: { url: calUrl },
+        headers: authHeaders,
+        filters: [
+          {
+            'comp-filter': {
+              _attributes: { name: 'VCALENDAR' },
+              'comp-filter': {
+                _attributes: { name: 'VTODO' },
+                'prop-filter': {
+                  _attributes: { name: 'COMPLETED' },
+                  'time-range': { _attributes: { start: startStr, end: endStr } },
+                },
+              },
+            },
+          },
+        ],
+      });
+      for (const obj of objects as TsdavTypes.DAVCalendarObject[]) {
+        if (obj.data) {
+          results.push({ url: obj.url, etag: obj.etag ?? '', rawIcs: obj.data as string });
+        }
+      }
+    } catch (err) {
+      console.warn(`fetchArchivedCompletedTasks: collection ${calUrl} failed`, err);
+    }
+  }
+  return results;
+}
+
+/**
+ * Restore an archived completed task: GET the current ICS from Baikal,
+ * reset STATUS to NEEDS-ACTION, clear COMPLETED and PERCENT-COMPLETE,
+ * then PUT it back. Returns the TaskWriteResult for the caller to cache.
+ */
+export async function restoreArchivedTask(
+  session: SessionData,
+  objectUrl: string,
+  collectionUrl: string,
+  etag: string,
+): Promise<TaskWriteResult> {
+  const authHeaders = basicAuthHeader(session);
+
+  // Fetch latest ICS (in case it changed since the search was run)
+  const getRes = await fetch(objectUrl, { headers: authHeaders });
+  if (!getRes.ok) {
+    throw Object.assign(new Error(`GET failed: ${getRes.status}`), { statusCode: getRes.status });
+  }
+  const rawIcs = await getRes.text();
+  const currentEtag = getRes.headers.get('ETag') ?? etag;
+
+  const restoredIcs = resetTaskToNeedsAction(rawIcs);
+
+  const putRes = await fetch(objectUrl, {
+    method: 'PUT',
+    headers: {
+      ...authHeaders,
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-Match': currentEtag,
+    },
+    body: restoredIcs,
+  });
+
+  if (!putRes.ok) {
+    const body = await putRes.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${putRes.status}`), { statusCode: putRes.status, body });
+  }
+
+  const newEtag = putRes.headers.get('ETag') ?? currentEtag;
+
+  // Extract UID with a simple regex — UUIDs never fold across lines.
+  const uidMatch = restoredIcs.match(/^UID:(.+)$/m);
+  const uid = uidMatch?.[1]?.trim() ?? '';
+
+  return { uid, url: objectUrl, etag: newEtag, collectionUrl, rawIcs: restoredIcs };
 }
 
 // ── Journal (VJOURNAL) write operations ───────────────────────────────────────

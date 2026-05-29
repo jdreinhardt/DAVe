@@ -4,10 +4,10 @@ import type { FastifyInstance } from 'fastify';
 import type { CacheDbInstance } from '../db/cache.js';
 import type { SessionData } from '../services/session.js';
 import type { Config } from '../config.js';
-import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest } from '@dave/shared';
+import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest, ArchivedTask, ArchivedTasksResponse, RestoreArchivedTaskRequest } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
-import { applyCompletion, rollForwardTask, serializeIcalTask } from '../lib/ical.js';
-import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask, createTaskRaw } from '../lib/dav.js';
+import { applyCompletion, rollForwardTask, serializeIcalTask, parseVTodoToTaskJson } from '../lib/ical.js';
+import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask, createTaskRaw, fetchArchivedCompletedTasks, restoreArchivedTask as davRestoreArchivedTask } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import { upsertEntry, deleteEntryByUid } from '../db/cacheOps.js';
 
@@ -379,11 +379,143 @@ function getDescendantUids(cacheDb: CacheDbInstance, parentUid: string, userId: 
   return result;
 }
 
+function matchesQuery(task: ArchivedTask, q: string): boolean {
+  const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const text = [task.data.summary, task.data.description, ...task.data.categories]
+    .join(' ')
+    .toLowerCase();
+  return words.every((w) => text.includes(w));
+}
+
+function objectUrlToCollectionUrl(objectUrl: string, knownCollections: string[]): string {
+  // Try to find the collection URL by prefix-matching against known ones.
+  const match = knownCollections.find((c) => objectUrl.startsWith(c) || objectUrl.startsWith(c.replace(/\/$/, '')));
+  if (match) return match;
+  // Fallback: strip the last path segment.
+  try {
+    const u = new URL(objectUrl);
+    const parts = u.pathname.split('/').filter(Boolean);
+    parts.pop();
+    u.pathname = '/' + parts.join('/') + '/';
+    return u.href;
+  } catch {
+    return objectUrl;
+  }
+}
+
 export async function tasksRoutes(
   app: FastifyInstance,
   opts: { cacheDb: CacheDbInstance; config: Config },
 ) {
   const { cacheDb, config } = opts;
+
+  // ── GET /api/tasks/baikal-search — search Baikal for old completed tasks ────
+  // Registered before /api/tasks/:uid so Fastify's router doesn't capture
+  // "baikal-search" as a UID value (static segments win, but explicit ordering
+  // makes the intent clear).
+
+  app.get<{ Querystring: { q?: string } }>(
+    '/api/tasks/baikal-search',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { q } = req.query;
+      if (!q?.trim()) {
+        return reply.status(400).send({ error: 'q is required', statusCode: 400 });
+      }
+
+      const session = req.sessionData!;
+      const userId = session.username;
+
+      const collectionRows = cacheDb
+        .prepare("SELECT DISTINCT collection_url FROM entries WHERE user_id = ? AND component_type = 'VTODO'")
+        .all(userId) as { collection_url: string }[];
+
+      if (collectionRows.length === 0) {
+        return reply.send({ tasks: [] } as ArchivedTasksResponse);
+      }
+
+      const collectionUrls = collectionRows.map((r) => r.collection_url);
+
+      let rawObjects;
+      try {
+        rawObjects = await fetchArchivedCompletedTasks(session, collectionUrls, config);
+      } catch (err) {
+        app.log.error({ err }, 'Baikal archive search failed');
+        return reply.status(502).send({ error: 'Failed to search Baikal', statusCode: 502 });
+      }
+
+      const tasks: ArchivedTask[] = [];
+      for (const { url, etag, rawIcs } of rawObjects) {
+        const parsed = parseVTodoToTaskJson(rawIcs);
+        if (!parsed || parsed.data.status !== 'COMPLETED') continue;
+        const collectionUrl = objectUrlToCollectionUrl(url, collectionUrls);
+        const task: ArchivedTask = {
+          uid: parsed.uid,
+          etag,
+          url,
+          collectionUrl,
+          collectionId: collectionIdFromUrl(collectionUrl),
+          data: { ...parsed.data, collectionUrl },
+        };
+        if (matchesQuery(task, q)) tasks.push(task);
+      }
+
+      return reply.send({ tasks } as ArchivedTasksResponse);
+    },
+  );
+
+  // ── POST /api/tasks/baikal-restore — restore a completed task to active ─────
+
+  app.post<{ Body: RestoreArchivedTaskRequest }>(
+    '/api/tasks/baikal-restore',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { url: objectUrl, etag, collectionUrl } = req.body ?? {};
+      if (!objectUrl?.trim() || !etag?.trim() || !collectionUrl?.trim()) {
+        return reply.status(400).send({ error: 'url, etag, and collectionUrl are required', statusCode: 400 });
+      }
+
+      const session = req.sessionData!;
+
+      let result;
+      try {
+        result = await davRestoreArchivedTask(session, objectUrl, collectionUrl, etag);
+      } catch (err: unknown) {
+        const e = err as { statusCode?: number };
+        if (e.statusCode === 412) {
+          return reply.status(409).send({ error: 'Task was modified on Baikal — reload and try again', statusCode: 409 });
+        }
+        app.log.error({ err }, 'restoreArchivedTask failed');
+        return reply.status(502).send({ error: 'Failed to restore task', statusCode: 502 });
+      }
+
+      const parsed = parseEntry(result.rawIcs, result.url, result.collectionUrl, session.username, result.etag);
+      if (parsed) {
+        try { upsertEntry(cacheDb, parsed); } catch (e) { app.log.warn({ e }, 'cache upsert failed after restore'); }
+      }
+
+      const taskParsed = parseVTodoToTaskJson(result.rawIcs);
+      const taskData: TaskJson = taskParsed
+        ? { ...taskParsed.data, collectionUrl: result.collectionUrl, alarms: [] }
+        : {
+            uid: result.uid, summary: '', description: '', status: 'NEEDS-ACTION',
+            priority: null, dtstart: null, due: null, completed: null,
+            percentComplete: 0, lastModified: null, categories: [], relations: [],
+            collectionUrl: result.collectionUrl, alarms: [], rrule: null,
+          };
+
+      const response: TaskWriteResponse = {
+        uid: result.uid,
+        url: result.url,
+        etag: result.etag,
+        collectionId: collectionIdFromUrl(result.collectionUrl),
+        collectionUrl: result.collectionUrl,
+        data: taskData,
+      };
+      return reply.send(response);
+    },
+  );
 
   app.get<{ Querystring: TasksQueryParams }>(
     '/api/tasks',

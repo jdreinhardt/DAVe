@@ -361,6 +361,26 @@ export interface DeleteTaskResponse {
   childErrors?: Array<{ uid: string; error: string }>;
 }
 
+/** A completed task found via Baikal archive search (not in the local cache). */
+export interface ArchivedTask {
+  uid: string;
+  etag: string;
+  url: string;           // full Baikal object URL — required for the restore PUT
+  collectionUrl: string;
+  collectionId: string;
+  data: TaskJson;
+}
+
+export interface ArchivedTasksResponse {
+  tasks: ArchivedTask[];
+}
+
+export interface RestoreArchivedTaskRequest {
+  url: string;
+  etag: string;
+  collectionUrl: string;
+}
+
 // ── Notes and Journals ────────────────────────────────────────────────────────
 
 // Both Notes (undated VJOURNAL) and Journals (dated VJOURNAL) share this type.

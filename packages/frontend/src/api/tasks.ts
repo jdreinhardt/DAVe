@@ -1,4 +1,4 @@
-import type { Task, TaskJson, TasksResponse, TasksQueryParams, TaskWriteResponse, DeleteTaskResponse, CreateTaskRequest, UpdateTaskRequest } from '@dave/shared';
+import type { Task, TaskJson, TasksResponse, TasksQueryParams, TaskWriteResponse, DeleteTaskResponse, CreateTaskRequest, UpdateTaskRequest, ArchivedTasksResponse, RestoreArchivedTaskRequest } from '@dave/shared';
 import { apiFetch } from './client.js';
 
 export async function fetchTasks(params?: TasksQueryParams): Promise<TasksResponse> {
@@ -37,6 +37,18 @@ export async function deleteTask(
   if (deleteChildren) qs.set('deleteChildren', 'true');
   return apiFetch<DeleteTaskResponse>(`/api/tasks/${encodeURIComponent(uid)}?${qs.toString()}`, {
     method: 'DELETE',
+  });
+}
+
+export async function searchBaikal(q: string): Promise<ArchivedTasksResponse> {
+  return apiFetch<ArchivedTasksResponse>(`/api/tasks/baikal-search?${new URLSearchParams({ q }).toString()}`);
+}
+
+export async function restoreArchivedTask(req: RestoreArchivedTaskRequest): Promise<TaskWriteResponse> {
+  return apiFetch<TaskWriteResponse>('/api/tasks/baikal-restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
   });
 }
 

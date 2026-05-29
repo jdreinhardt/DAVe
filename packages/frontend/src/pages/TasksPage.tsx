@@ -24,7 +24,7 @@ import {
   X,
   ArrowUpDown,
 } from 'lucide-react';
-import type { Calendar, Task, TaskJson, TasksQueryParams } from '@dave/shared';
+import type { Calendar, Task, TaskJson, TasksQueryParams, ArchivedTask } from '@dave/shared';
 import {
   fetchTasks,
   fetchTask,
@@ -34,6 +34,8 @@ import {
   applyCompletion,
   applyStatusChange,
   triggerTasksSync,
+  searchBaikal,
+  restoreArchivedTask as restoreArchivedTaskApi,
 } from '../api/tasks';
 import { getCalendars } from '../api/collections';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
@@ -838,6 +840,108 @@ function SubtaskItem({
   );
 }
 
+function ArchivedTaskDetailPanel({
+  task,
+  onClose,
+  onRestore,
+  restoring,
+  fullscreen = false,
+}: {
+  task: ArchivedTask;
+  onClose: () => void;
+  onRestore: () => void;
+  restoring: boolean;
+  fullscreen?: boolean;
+}) {
+  const due = dueDateDisplay(task.data.due);
+  const rows: { label: string; value: React.ReactNode }[] = [];
+
+  if (task.data.status)
+    rows.push({ label: 'Status', value: STATUS_LABELS[task.data.status] ?? task.data.status });
+  if (task.data.priority !== null)
+    rows.push({
+      label: 'Priority',
+      value: `${priorityLabel(task.data.priority)} (${task.data.priority})`,
+    });
+  if (due) rows.push({ label: 'Due', value: <span className={due.className}>{due.label}</span> });
+  if (task.data.dtstart)
+    rows.push({ label: 'Start', value: new Date(task.data.dtstart).toLocaleDateString() });
+  if (task.data.completed)
+    rows.push({ label: 'Completed', value: new Date(task.data.completed).toLocaleDateString() });
+  if (task.data.categories.length > 0)
+    rows.push({ label: 'Categories', value: <CategoryChips categories={task.data.categories} /> });
+  if (task.data.lastModified)
+    rows.push({ label: 'Modified', value: new Date(task.data.lastModified).toLocaleString() });
+
+  const panel = (
+    <div
+      className={cn(
+        'bg-card flex flex-col overflow-hidden',
+        fullscreen ? 'flex-1' : 'flex-1 border-l border-border',
+      )}
+    >
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+        {fullscreen && (
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground shrink-0"
+            aria-label="Back to tasks"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+        )}
+        <h2 className="font-semibold text-sm flex-1 truncate min-w-0">
+          {task.data.summary || '(no title)'}
+        </h2>
+        <button
+          onClick={onRestore}
+          disabled={restoring}
+          className="shrink-0 text-xs px-2 py-1 rounded border border-amber-500 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950 disabled:opacity-50 transition-colors"
+        >
+          {restoring ? 'Restoring…' : 'Restore to edit'}
+        </button>
+        {!fullscreen && (
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground shrink-0"
+            aria-label="Close detail"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      {/* Archived banner */}
+      <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-300">
+        This task is archived (not in your local cache). Restore it to make edits.
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        <dl className="space-y-2">
+          {rows.map(({ label, value }) => (
+            <div key={label} className="flex gap-2 text-sm">
+              <dt className="w-24 shrink-0 text-muted-foreground">{label}</dt>
+              <dd className="flex-1 min-w-0">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {task.data.description && (
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1">Description</p>
+            <p className="text-sm whitespace-pre-wrap break-words">{task.data.description}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  return fullscreen ? (
+    <div className="fixed inset-0 z-40 flex flex-col bg-card">{panel}</div>
+  ) : (
+    panel
+  );
+}
+
 function TaskDetailPanel({
   task,
   onClose,
@@ -1348,6 +1452,15 @@ export default function TasksPage() {
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [showCompleted, setShowCompleted] = useState(false);
 
+  // ── Baikal archive search state ───────────────────────────────────────────
+  const [baikalMode, setBaikalMode] = useState(false);
+  const [baikalResults, setBaikalResults] = useState<ArchivedTask[]>([]);
+  const [baikalLoading, setBaikalLoading] = useState(false);
+  const [baikalError, setBaikalError] = useState<string | null>(null);
+  const [selectedArchived, setSelectedArchived] = useState<ArchivedTask | null>(null);
+  const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+
   // ── Edit / create / delete state ──────────────────────────────────────────
   const [editingTaskData, setEditingTaskData] = useState<{ task: Task; fullData: TaskJson } | null>(
     null,
@@ -1396,6 +1509,37 @@ export default function TasksPage() {
     return () => clearTimeout(t);
   }, [rawSearch]);
 
+  // ── Baikal archive search ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!baikalMode || !search.trim()) {
+      if (!baikalMode) {
+        setBaikalResults([]);
+        setBaikalError(null);
+        setSelectedArchived(null);
+      }
+      return;
+    }
+    let cancelled = false;
+    setBaikalLoading(true);
+    setBaikalError(null);
+    searchBaikal(search)
+      .then((res) => {
+        if (!cancelled) {
+          setBaikalResults(res.tasks);
+          setBaikalLoading(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBaikalError('Failed to search Baikal. Check your connection and try again.');
+          setBaikalLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [baikalMode, search]);
+
   // ── Collection data ───────────────────────────────────────────────────────
   const calQuery = useQuery({
     queryKey: ['calendars'],
@@ -1425,6 +1569,35 @@ export default function TasksPage() {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   }, []);
+
+  const handleRestore = useCallback(async () => {
+    if (!selectedArchived) return;
+    setRestoring(true);
+    try {
+      const result = await restoreArchivedTaskApi({
+        url: selectedArchived.url,
+        etag: selectedArchived.etag,
+        collectionUrl: selectedArchived.collectionUrl,
+      });
+      setRestoring(false);
+      setRestoreConfirmOpen(false);
+      setSelectedArchived(null);
+      setBaikalMode(false);
+      setBaikalResults([]);
+      setRawSearch('');
+      invalidateTasks();
+      setSelectedUid(result.uid);
+      showToast('Task restored and added to your task list.');
+    } catch (err: unknown) {
+      setRestoring(false);
+      const e = err as { status?: number };
+      if (e.status === 409) {
+        showToast('Task was modified on Baikal — please search again and retry.');
+      } else {
+        showToast('Failed to restore task. Please try again.');
+      }
+    }
+  }, [selectedArchived, invalidateTasks, showToast]);
 
   const createMutation = useMutation({
     mutationFn: (data: TaskJson) => createTask(data),
@@ -1914,116 +2087,146 @@ export default function TasksPage() {
             )}
           </div>
 
-          {/* Sort */}
-          <select
-            value={sort ?? ''}
-            onChange={(e) => setSort((e.target.value as SortField) || undefined)}
-            className="text-sm rounded-md border border-input bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
-          >
-            <option value="">Default sort</option>
-            <option value="summary">A–Z</option>
-            <option value="due">Due date</option>
-            <option value="priority">Priority</option>
-            <option value="modified">Modified</option>
-            <option value="category">Category</option>
-          </select>
+          {/* Sort — hidden in Baikal mode */}
+          {!baikalMode && (
+            <>
+              <select
+                value={sort ?? ''}
+                onChange={(e) => setSort((e.target.value as SortField) || undefined)}
+                className="text-sm rounded-md border border-input bg-background px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/50"
+              >
+                <option value="">Default sort</option>
+                <option value="summary">A–Z</option>
+                <option value="due">Due date</option>
+                <option value="priority">Priority</option>
+                <option value="modified">Modified</option>
+                <option value="category">Category</option>
+              </select>
 
-          {sort && (
-            <button
-              onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
-              title={`Sort ${order === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <ArrowUpDown className="h-4 w-4" />
-            </button>
+              {sort && (
+                <button
+                  onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
+                  title={`Sort ${order === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <ArrowUpDown className="h-4 w-4" />
+                </button>
+              )}
+
+              {/* Filters */}
+              <div className="flex items-center gap-1">
+                <select
+                  value={filterStatus ?? ''}
+                  onChange={(e) => setFilterStatus((e.target.value as FilterStatus) || undefined)}
+                  className={cn(
+                    'text-sm rounded-md border px-2 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-primary/50',
+                    filterStatus ? 'border-primary text-primary' : 'border-input',
+                  )}
+                >
+                  <option value="">All statuses</option>
+                  <option value="active">Active</option>
+                  {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                    <option key={k} value={k}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={filterDue ?? ''}
+                  onChange={(e) => setFilterDue((e.target.value as FilterDue) || undefined)}
+                  className={cn(
+                    'text-sm rounded-md border px-2 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-primary/50',
+                    filterDue ? 'border-primary text-primary' : 'border-input',
+                  )}
+                >
+                  <option value="">Any due date</option>
+                  <option value="overdue">Overdue</option>
+                  <option value="today">Today</option>
+                  <option value="this_week">This week</option>
+                  <option value="no_due_date">No due date</option>
+                </select>
+
+                <select
+                  value={filterPriority ?? ''}
+                  onChange={(e) =>
+                    setFilterPriority((e.target.value as FilterPriority) || undefined)
+                  }
+                  className={cn(
+                    'text-sm rounded-md border px-2 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-primary/50',
+                    filterPriority ? 'border-primary text-primary' : 'border-input',
+                  )}
+                >
+                  <option value="">Any priority</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                  <option value="none">No priority</option>
+                </select>
+
+                {activeFilters > 0 && (
+                  <button
+                    onClick={() => {
+                      setFilterStatus(undefined);
+                      setFilterDue(undefined);
+                      setFilterPriority(undefined);
+                    }}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                    title="Clear all filters"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Clear
+                  </button>
+                )}
+              </div>
+            </>
           )}
 
-          {/* Filters */}
-          <div className="flex items-center gap-1">
-            <select
-              value={filterStatus ?? ''}
-              onChange={(e) => setFilterStatus((e.target.value as FilterStatus) || undefined)}
-              className={cn(
-                'text-sm rounded-md border px-2 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-primary/50',
-                filterStatus ? 'border-primary text-primary' : 'border-input',
-              )}
-            >
-              <option value="">All statuses</option>
-              <option value="active">Active</option>
-              {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={filterDue ?? ''}
-              onChange={(e) => setFilterDue((e.target.value as FilterDue) || undefined)}
-              className={cn(
-                'text-sm rounded-md border px-2 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-primary/50',
-                filterDue ? 'border-primary text-primary' : 'border-input',
-              )}
-            >
-              <option value="">Any due date</option>
-              <option value="overdue">Overdue</option>
-              <option value="today">Today</option>
-              <option value="this_week">This week</option>
-              <option value="no_due_date">No due date</option>
-            </select>
-
-            <select
-              value={filterPriority ?? ''}
-              onChange={(e) => setFilterPriority((e.target.value as FilterPriority) || undefined)}
-              className={cn(
-                'text-sm rounded-md border px-2 py-1.5 bg-background focus:outline-none focus:ring-2 focus:ring-primary/50',
-                filterPriority ? 'border-primary text-primary' : 'border-input',
-              )}
-            >
-              <option value="">Any priority</option>
-              <option value="high">High</option>
-              <option value="medium">Medium</option>
-              <option value="low">Low</option>
-              <option value="none">No priority</option>
-            </select>
-
-            {activeFilters > 0 && (
-              <button
-                onClick={() => {
-                  setFilterStatus(undefined);
-                  setFilterDue(undefined);
-                  setFilterPriority(undefined);
+          {/* Baikal search toggle — shown when search box has text, or while already active */}
+          {(rawSearch || baikalMode) && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none shrink-0">
+              <input
+                type="checkbox"
+                checked={baikalMode}
+                onChange={(e) => {
+                  setBaikalMode(e.target.checked);
+                  if (!e.target.checked) {
+                    setBaikalResults([]);
+                    setBaikalError(null);
+                    setSelectedArchived(null);
+                  } else {
+                    setSelectedUid(null);
+                  }
                 }}
-                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                title="Clear all filters"
-              >
-                <X className="h-3.5 w-3.5" />
-                Clear
-              </button>
-            )}
-          </div>
+                className="rounded"
+              />
+              Search Archived
+            </label>
+          )}
 
-          {/* Layout toggle — pushed to right; multi-select bar appears below the toolbar */}
-          <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
-            <LayoutToggleButton
-              icon={<List className="h-4 w-4" />}
-              active={layout === 'list'}
-              title="List"
-              onClick={() => setLayout('list')}
-            />
-            <LayoutToggleButton
-              icon={<LayoutGrid className="h-4 w-4" />}
-              active={layout === 'compact'}
-              title="Compact"
-              onClick={() => setLayout('compact')}
-            />
-            <LayoutToggleButton
-              icon={<Columns3 className="h-4 w-4" />}
-              active={layout === 'kanban'}
-              title="Kanban"
-              onClick={() => setLayout('kanban')}
-            />
-          </div>
+          {/* Layout toggle — hidden in Baikal mode; pushed to right */}
+          {!baikalMode && (
+            <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
+              <LayoutToggleButton
+                icon={<List className="h-4 w-4" />}
+                active={layout === 'list'}
+                title="List"
+                onClick={() => setLayout('list')}
+              />
+              <LayoutToggleButton
+                icon={<LayoutGrid className="h-4 w-4" />}
+                active={layout === 'compact'}
+                title="Compact"
+                onClick={() => setLayout('compact')}
+              />
+              <LayoutToggleButton
+                icon={<Columns3 className="h-4 w-4" />}
+                active={layout === 'kanban'}
+                title="Kanban"
+                onClick={() => setLayout('kanban')}
+              />
+            </div>
+          )}
         </div>
 
         {/* Multi-select bar */}
@@ -2056,14 +2259,79 @@ export default function TasksPage() {
 
         {/* Task content */}
         <div ref={boardRef} className="flex-1 overflow-auto">
-          {tasksQuery.isError && (
+          {/* Baikal archive search results */}
+          {baikalMode && (
+            <div className="py-2">
+              {baikalLoading && (
+                <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                  Searching Baikal…
+                </p>
+              )}
+              {!baikalLoading && baikalError && (
+                <div className="flex items-center gap-2 px-4 py-4 text-sm text-destructive">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {baikalError}
+                </div>
+              )}
+              {!baikalLoading && !baikalError && search.trim() === '' && (
+                <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                  Search archived completed tasks on server. This will only return archived tasks.
+                </p>
+              )}
+              {!baikalLoading &&
+                !baikalError &&
+                search.trim() !== '' &&
+                baikalResults.length === 0 && (
+                  <p className="px-4 py-6 text-sm text-muted-foreground text-center">
+                    No archived completed tasks found matching &ldquo;{search}&rdquo;.
+                  </p>
+                )}
+              {!baikalLoading &&
+                baikalResults.map((task) => (
+                  <button
+                    key={task.uid}
+                    onClick={() => {
+                      setSelectedArchived(task);
+                      setSelectedUid(null);
+                    }}
+                    className={cn(
+                      'w-full text-left px-4 py-2.5 flex items-start gap-3 hover:bg-muted/50 transition-colors border-b border-border/50',
+                      selectedArchived?.uid === task.uid && 'bg-muted',
+                    )}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-medium truncate">
+                          {task.data.summary || '(no title)'}
+                        </span>
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 shrink-0">
+                          Archived
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground flex-wrap">
+                        {task.data.completed && (
+                          <span>
+                            Completed {new Date(task.data.completed).toLocaleDateString()}
+                          </span>
+                        )}
+                        {task.data.categories.length > 0 && (
+                          <span>{task.data.categories.slice(0, 3).join(', ')}</span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+            </div>
+          )}
+
+          {!baikalMode && tasksQuery.isError && (
             <div className="flex items-center gap-2 p-4 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               Failed to load tasks.
             </div>
           )}
 
-          {!tasksQuery.isError && layout !== 'kanban' && (
+          {!baikalMode && !tasksQuery.isError && layout !== 'kanban' && (
             <div className="py-2">
               {/* Incomplete tasks */}
               {incompleteTasks.map((task) => (
@@ -2140,7 +2408,7 @@ export default function TasksPage() {
             </div>
           )}
 
-          {!tasksQuery.isError && layout === 'kanban' && (
+          {!baikalMode && !tasksQuery.isError && layout === 'kanban' && (
             <div className="flex flex-col h-full overflow-hidden">
               {kanbanMode !== 'swipe' && (
                 <div
@@ -2295,6 +2563,33 @@ export default function TasksPage() {
         </div>
       )}
 
+      {/* Archived task detail panel */}
+      {selectedArchived && !isMobile && (
+        <div className="flex shrink-0" style={{ width: panelWidth }}>
+          <div
+            className="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
+            onMouseDown={startResize}
+            title="Drag to resize"
+          />
+          <ArchivedTaskDetailPanel
+            task={selectedArchived}
+            onClose={() => setSelectedArchived(null)}
+            onRestore={() => setRestoreConfirmOpen(true)}
+            restoring={restoring}
+            fullscreen={false}
+          />
+        </div>
+      )}
+      {selectedArchived && isMobile && (
+        <ArchivedTaskDetailPanel
+          task={selectedArchived}
+          onClose={() => setSelectedArchived(null)}
+          onRestore={() => setRestoreConfirmOpen(true)}
+          restoring={restoring}
+          fullscreen={true}
+        />
+      )}
+
       {/* Detail panel */}
       {selectedTask && !editingTaskData && !isMobile && selectedUids.size < 2 && (
         <div className="flex shrink-0" style={{ width: panelWidth }}>
@@ -2403,6 +2698,35 @@ export default function TasksPage() {
               }}
               allTasks={allTasks}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Restore archived task confirmation dialog */}
+      {restoreConfirmOpen && selectedArchived && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-card rounded-lg shadow-xl w-full max-w-sm p-6">
+            <h2 className="font-semibold mb-2">Restore task?</h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              &ldquo;{selectedArchived.data.summary || '(no title)'}&rdquo; will be marked as active
+              (Needs Action) and added back to your task list.
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setRestoreConfirmOpen(false)}
+                disabled={restoring}
+                className="px-3 py-1.5 text-sm rounded-md border border-input hover:bg-muted disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRestore}
+                disabled={restoring}
+                className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                {restoring ? 'Restoring…' : 'Restore task'}
+              </button>
+            </div>
           </div>
         </div>
       )}

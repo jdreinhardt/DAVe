@@ -781,6 +781,102 @@ export function applyCompletion(data: TaskJson): TaskJson {
 }
 
 /**
+ * Parse a raw VTODO ICS string into a partial TaskJson plus its UID.
+ * Used by the Baikal archive search to build ArchivedTask objects from raw ICS
+ * without going through the SQLite cache.
+ * The caller is responsible for setting collectionUrl on the returned data.
+ */
+export function parseVTodoToTaskJson(rawIcs: string): { uid: string; data: TaskJson } | null {
+  if (!rawIcs?.trim()) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(ICAL.parse(rawIcs) as any) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return null;
+
+    const uid = vtodo.getFirstPropertyValue('uid') as string | null;
+    if (!uid) return null;
+
+    function dateValToIso(propName: string): string | null {
+      const prop = vtodo.getFirstProperty(propName);
+      if (!prop) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const val: any = prop.getFirstValue();
+      if (!val) return null;
+      if (val.isDate) {
+        const y = String(val.year as number).padStart(4, '0');
+        const mo = String(val.month as number).padStart(2, '0');
+        const d = String(val.day as number).padStart(2, '0');
+        return `${y}-${mo}-${d}`;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (val as any).toJSDate?.()?.toISOString() ?? null;
+    }
+
+    const categories: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const cp of vtodo.getAllProperties('categories') as any[]) {
+      const vals = cp.getValues?.();
+      if (Array.isArray(vals)) {
+        for (const v of vals) {
+          if (typeof v === 'string' && v.trim()) categories.push(v.trim());
+        }
+      }
+    }
+
+    const priority = vtodo.getFirstPropertyValue('priority') as number | null;
+    const percentComplete = vtodo.getFirstPropertyValue('percent-complete') as number | null;
+
+    const data: TaskJson = {
+      uid,
+      summary: String(vtodo.getFirstPropertyValue('summary') ?? ''),
+      description: String(vtodo.getFirstPropertyValue('description') ?? ''),
+      status: vtodo.getFirstPropertyValue('status') as string | null,
+      priority: typeof priority === 'number' ? priority : null,
+      dtstart: dateValToIso('dtstart'),
+      due: dateValToIso('due'),
+      completed: dateValToIso('completed'),
+      percentComplete: typeof percentComplete === 'number' ? percentComplete : null,
+      lastModified: dateValToIso('last-modified'),
+      categories,
+      relations: [],
+      collectionUrl: '',  // set by caller
+      alarms: [],
+      rrule: null,
+    };
+
+    return { uid, data };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Return a copy of a VTODO ICS with STATUS reset to NEEDS-ACTION,
+ * PERCENT-COMPLETE set to 0, and the COMPLETED property removed.
+ * Used when restoring an archived completed task to editable state.
+ */
+export function resetTaskToNeedsAction(rawIcs: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vcal = new ICAL.Component(ICAL.parse(rawIcs) as any) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+  if (!vtodo) throw new Error('No VTODO component in ICS');
+
+  vtodo.updatePropertyWithValue('status', 'NEEDS-ACTION');
+  vtodo.updatePropertyWithValue('percent-complete', 0);
+  vtodo.removeProperty('completed');
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const now: any = ICAL.Time.now();
+  vtodo.updatePropertyWithValue('last-modified', now);
+  vtodo.updatePropertyWithValue('dtstamp', now);
+
+  return vcal.toString() as string;
+}
+
+/**
  * Compute the next occurrence of a recurring VTODO after its current DTSTART.
  *
  * Returns { nextDtstart, nextDue } where nextDue preserves the original
