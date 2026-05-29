@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine, GitMerge, ArrowLeft } from 'lucide-react';
 import type { AddressBook, Contact, ContactJson } from '@dave/shared';
@@ -25,6 +25,7 @@ import BulkEditModal, { applyBulkEdit } from '../components/BulkEditModal';
 import type { BulkEditConfig } from '../components/BulkEditModal';
 import MergeContactsModal, { mergeContactData } from '../components/MergeContactsModal';
 import { useHotkey } from '../hooks/useHotkey';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 // ── Sort / group helpers ──────────────────────────────────────────────────────
 
@@ -98,6 +99,43 @@ export default function ContactsPage() {
   const importFileRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const { hiddenAddressBooks } = useCollectionVisibility();
+
+  const isMobile = useIsMobile();
+
+  const LIST_MIN = 200;
+  const LIST_MAX = 500;
+  const [listWidth, setListWidth] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem('contacts.listWidth');
+      if (raw !== null) {
+        const n = JSON.parse(raw) as number;
+        if (n >= LIST_MIN && n <= LIST_MAX) return n;
+      }
+    } catch { /* ignore */ }
+    return 288;
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('contacts.listWidth', JSON.stringify(listWidth)); } catch { /* ignore */ }
+  }, [listWidth]);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = listWidth;
+      const onMove = (ev: MouseEvent) => {
+        setListWidth(Math.max(LIST_MIN, Math.min(LIST_MAX, startW + (ev.clientX - startX))));
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+    [listWidth],
+  );
 
   const isMultiSelect = selectedIds.size > 0;
 
@@ -503,10 +541,13 @@ export default function ContactsPage() {
   return (
     <div className="flex h-full overflow-hidden">
       {/* ── Left: list pane ── */}
-      <div className={cn(
-        'w-full md:w-72 shrink-0 border-r border-border flex flex-col overflow-hidden',
-        mobileShowingDetail && 'hidden md:flex',
-      )}>
+      <div
+        className={cn(
+          'w-full shrink-0 flex flex-col overflow-hidden',
+          mobileShowingDetail && 'hidden md:flex',
+        )}
+        style={!isMobile ? { width: listWidth } : undefined}
+      >
         {/* Toolbar */}
         <div className="px-3 py-2 border-b border-border space-y-2">
           <div className="relative">
@@ -620,6 +661,15 @@ export default function ContactsPage() {
           ))}
         </div>
       </div>
+
+      {/* Resize handle — desktop only */}
+      {!isMobile && (
+        <div
+          className="w-1 shrink-0 bg-border cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
+          onMouseDown={startResize}
+          title="Drag to resize"
+        />
+      )}
 
       {/* ── Right: detail / edit pane ── */}
       <div className={cn(
