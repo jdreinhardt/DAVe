@@ -1,15 +1,15 @@
 import { useState } from 'react';
-import { X, ArrowUpAZ, ArrowDownAZ, Sun, Moon, Monitor, List, LayoutGrid, Columns3 } from 'lucide-react';
+import { X, ArrowUpAZ, ArrowDownAZ, Sun, Moon, Monitor, List, LayoutGrid, Columns3, Grid, AlignLeft, CalendarDays } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useSettings } from '../contexts/Settings';
-import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode, TaskLayout } from '../contexts/Settings';
+import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode, TaskLayout, NotesView, JournalsView } from '../contexts/Settings';
 
 interface SettingsModalProps {
   onClose: () => void;
 }
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout } =
+  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView } =
     useSettings();
   const [sortBy, setSortBy] = useState<SortBy>(contactSort.sortBy);
   const [sortDir, setSortDir] = useState<SortDir>(contactSort.sortDir);
@@ -17,6 +17,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [mapSvc, setMapSvc] = useState<MapService>(mapService);
   const [dm, setDm] = useState<DarkMode>(darkMode);
   const [taskLayout, setTaskLayout] = useState<TaskLayout>(taskDefaultLayout);
+  const [notesView, setNotesView] = useState<NotesView>(notesDefaultView);
+  const [journalsView, setJournalsView] = useState<JournalsView>(journalsDefaultView);
 
   const handleSave = () => {
     updateContactSort({ sortBy, sortDir });
@@ -24,6 +26,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     updateMapService(mapSvc);
     updateDarkMode(dm);
     updateTaskDefaultLayout(taskLayout);
+    updateNotesDefaultView(notesView);
+    updateJournalsDefaultView(journalsView);
     onClose();
   };
 
@@ -33,7 +37,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     subtitleField !== contactSubtitleField ||
     mapSvc !== mapService ||
     dm !== darkMode ||
-    taskLayout !== taskDefaultLayout;
+    taskLayout !== taskDefaultLayout ||
+    notesView !== notesDefaultView ||
+    journalsView !== journalsDefaultView;
 
   return (
     <div
@@ -167,6 +173,69 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                     className={cn(
                       'flex flex-1 items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs transition-colors',
                       taskLayout === value
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+                    )}
+                  >
+                    {icon}
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {/* Notes */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Notes
+            </h3>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium shrink-0">Default view</span>
+              <div className="flex flex-1 gap-1">
+                {([
+                  { value: 'list', label: 'List', icon: <List className="h-3.5 w-3.5" /> },
+                  { value: 'grid', label: 'Grid', icon: <Grid className="h-3.5 w-3.5" /> },
+                ] as { value: NotesView; label: string; icon: React.ReactNode }[]).map(({ value, label, icon }) => (
+                  <button
+                    key={value}
+                    onClick={() => setNotesView(value)}
+                    className={cn(
+                      'flex flex-1 items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs transition-colors',
+                      notesView === value
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+                    )}
+                  >
+                    {icon}
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {/* Journals */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Journals
+            </h3>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium shrink-0">Default view</span>
+              <div className="flex flex-1 gap-1">
+                {([
+                  { value: 'timeline', label: 'Timeline', icon: <AlignLeft className="h-3.5 w-3.5" /> },
+                  { value: 'list',     label: 'List',     icon: <List className="h-3.5 w-3.5" /> },
+                  { value: 'calendar', label: 'Calendar', icon: <CalendarDays className="h-3.5 w-3.5" /> },
+                ] as { value: JournalsView; label: string; icon: React.ReactNode }[]).map(({ value, label, icon }) => (
+                  <button
+                    key={value}
+                    onClick={() => setJournalsView(value)}
+                    className={cn(
+                      'flex flex-1 items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs transition-colors',
+                      journalsView === value
                         ? 'border-primary bg-primary/10 text-primary'
                         : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
                     )}

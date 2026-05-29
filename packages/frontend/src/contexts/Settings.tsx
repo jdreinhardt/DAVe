@@ -6,6 +6,8 @@ export type ContactSubtitleField = 'nickname' | 'email' | 'phone' | 'organizatio
 export type MapService = 'osm' | 'google' | 'apple';
 export type DarkMode = 'light' | 'dark' | 'system';
 export type TaskLayout = 'list' | 'compact' | 'kanban';
+export type NotesView = 'list' | 'grid';
+export type JournalsView = 'timeline' | 'list' | 'calendar';
 
 export interface ContactSortSettings {
   sortBy: SortBy;
@@ -23,6 +25,10 @@ interface SettingsContextValue {
   updateDarkMode: (m: DarkMode) => void;
   taskDefaultLayout: TaskLayout;
   updateTaskDefaultLayout: (l: TaskLayout) => void;
+  notesDefaultView: NotesView;
+  updateNotesDefaultView: (v: NotesView) => void;
+  journalsDefaultView: JournalsView;
+  updateJournalsDefaultView: (v: JournalsView) => void;
 }
 
 const SORT_KEY = 'dave:settings:contactSort';
@@ -30,11 +36,15 @@ const SUBTITLE_KEY = 'dave:settings:contactSubtitleField';
 const MAP_SERVICE_KEY = 'dave:settings:mapService';
 const DARK_MODE_KEY = 'dave:settings:darkMode';
 const TASK_LAYOUT_KEY = 'dave:settings:taskDefaultLayout';
+const NOTES_VIEW_KEY = 'dave:settings:notesDefaultView';
+const JOURNALS_VIEW_KEY = 'dave:settings:journalsDefaultView';
 
 const VALID_SUBTITLE_FIELDS: ContactSubtitleField[] = ['nickname', 'email', 'phone', 'organization', 'title', ''];
 const VALID_MAP_SERVICES: MapService[] = ['osm', 'google', 'apple'];
 const VALID_DARK_MODES: DarkMode[] = ['light', 'dark', 'system'];
 const VALID_TASK_LAYOUTS: TaskLayout[] = ['list', 'compact', 'kanban'];
+const VALID_NOTES_VIEWS: NotesView[] = ['list', 'grid'];
+const VALID_JOURNALS_VIEWS: JournalsView[] = ['timeline', 'list', 'calendar'];
 
 function loadDarkMode(): DarkMode {
   try {
@@ -99,6 +109,30 @@ function loadTaskDefaultLayout(): TaskLayout {
   return 'list';
 }
 
+function loadNotesDefaultView(): NotesView {
+  try {
+    const raw = localStorage.getItem(NOTES_VIEW_KEY);
+    if (raw !== null && VALID_NOTES_VIEWS.includes(raw as NotesView)) {
+      return raw as NotesView;
+    }
+  } catch {
+    // ignore corrupt storage
+  }
+  return 'list';
+}
+
+function loadJournalsDefaultView(): JournalsView {
+  try {
+    const raw = localStorage.getItem(JOURNALS_VIEW_KEY);
+    if (raw !== null && VALID_JOURNALS_VIEWS.includes(raw as JournalsView)) {
+      return raw as JournalsView;
+    }
+  } catch {
+    // ignore corrupt storage
+  }
+  return 'timeline';
+}
+
 const SettingsContext = createContext<SettingsContextValue | null>(null);
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
@@ -107,6 +141,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [mapService, setMapService] = useState<MapService>(loadMapService);
   const [darkMode, setDarkMode] = useState<DarkMode>(loadDarkMode);
   const [taskDefaultLayout, setTaskDefaultLayout] = useState<TaskLayout>(loadTaskDefaultLayout);
+  const [notesDefaultView, setNotesDefaultView] = useState<NotesView>(loadNotesDefaultView);
+  const [journalsDefaultView, setJournalsDefaultView] = useState<JournalsView>(loadJournalsDefaultView);
 
   const updateContactSort = useCallback((s: ContactSortSettings) => {
     setContactSort(s);
@@ -153,6 +189,24 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const updateNotesDefaultView = useCallback((v: NotesView) => {
+    setNotesDefaultView(v);
+    try {
+      localStorage.setItem(NOTES_VIEW_KEY, v);
+    } catch {
+      // ignore write failures (private browsing quota)
+    }
+  }, []);
+
+  const updateJournalsDefaultView = useCallback((v: JournalsView) => {
+    setJournalsDefaultView(v);
+    try {
+      localStorage.setItem(JOURNALS_VIEW_KEY, v);
+    } catch {
+      // ignore write failures (private browsing quota)
+    }
+  }, []);
+
   // Apply .dark class to <html> and keep it in sync with system preference.
   useEffect(() => {
     const apply = () => {
@@ -173,7 +227,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [darkMode]);
 
   return (
-    <SettingsContext.Provider value={{ contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout }}>
+    <SettingsContext.Provider value={{ contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView }}>
       {children}
     </SettingsContext.Provider>
   );

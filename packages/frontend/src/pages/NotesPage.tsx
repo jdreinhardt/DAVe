@@ -31,6 +31,7 @@ import NoteBulkEditModal, {
 } from '../components/NoteBulkEditModal';
 import TagInput from '../components/TagInput';
 import TagFilterButton from '../components/TagFilterButton';
+import { useSettings } from '../contexts/Settings';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -300,9 +301,11 @@ export default function NotesPage() {
   const navigate = useNavigate();
   const { startDrag, endDrag } = useNoteDrag();
 
-  // Preferences persisted in localStorage
+  const { notesDefaultView } = useSettings();
+
+  // Preferences persisted in localStorage; fall back to Settings default if no stored pref.
   const [view, setView] = useState<'list' | 'grid'>(() =>
-    loadPref('notes.view', 'list' as 'list' | 'grid'),
+    loadPref('notes.view', notesDefaultView),
   );
   const [sort, setSort] = useState<NotesQueryParams['sort']>(() =>
     loadPref('notes.sort', 'modified' as NotesQueryParams['sort']),

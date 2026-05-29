@@ -45,6 +45,7 @@ import NoteBulkEditModal, {
 } from '../components/NoteBulkEditModal';
 import TagInput from '../components/TagInput';
 import TagFilterButton from '../components/TagFilterButton';
+import { useSettings } from '../contexts/Settings';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
 
@@ -954,8 +955,11 @@ export default function JournalsPage() {
   const navigate = useNavigate();
   const { startDrag, endDrag } = useNoteDrag();
 
+  const { journalsDefaultView } = useSettings();
+
+  // Fall back to Settings default if no stored pref.
   const [view, setView] = useState<'timeline' | 'list' | 'calendar'>(() =>
-    loadPref('journals.view', 'timeline' as 'timeline' | 'list' | 'calendar'),
+    loadPref('journals.view', journalsDefaultView),
   );
   const [sort, setSort] = useState<JournalsQueryParams['sort']>(() =>
     loadPref('journals.sort', 'journal_date' as JournalsQueryParams['sort']),
