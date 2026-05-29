@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -1447,9 +1448,22 @@ export default function TasksPage() {
   );
 
   // ── Ephemeral UI state ────────────────────────────────────────────────────
+  const location = useLocation();
+  const navigate = useNavigate();
   const [rawSearch, setRawSearch] = useState('');
   const [search, setSearch] = useState('');
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  const [pendingSelectUid, setPendingSelectUid] = useState<string | null>(null);
+
+  // Step 1: capture uid from navigation state and clear it from the router immediately.
+  // Depends on location so it fires on both fresh navigation and same-page navigation.
+  useEffect(() => {
+    const uid = (location.state as { selectUid?: string } | null)?.selectUid;
+    if (!uid) return;
+    setPendingSelectUid(uid);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
   const [showCompleted, setShowCompleted] = useState(false);
 
   // ── Baikal archive search state ───────────────────────────────────────────
@@ -1837,6 +1851,13 @@ export default function TasksPage() {
   });
 
   const allTasks = useMemo(() => tasksQuery.data?.tasks ?? [], [tasksQuery.data]);
+
+  // Step 2: once data arrives, resolve the pending selection.
+  useEffect(() => {
+    if (!pendingSelectUid || allTasks.length === 0) return;
+    setPendingSelectUid(null);
+    if (allTasks.some((t) => t.uid === pendingSelectUid)) setSelectedUid(pendingSelectUid);
+  }, [pendingSelectUid, allTasks]);
 
   // ── Build tree ────────────────────────────────────────────────────────────
   const { roots, childrenOf, orphanedParentUid, parentOf } = useMemo(

@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import type { Note, NoteJson, NotesQueryParams, Calendar } from '@dave/shared';
 import { fetchNotes, createNote, updateNote, deleteNote, triggerNotesSync } from '../api/notes';
 import { getCalendars } from '../api/collections';
@@ -321,8 +321,18 @@ export default function NotesPage() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
   // UI state
+  const location = useLocation();
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  const [pendingSelectUid, setPendingSelectUid] = useState<string | null>(null);
   const [creatingNew, setCreatingNew] = useState(false);
+
+  useEffect(() => {
+    const uid = (location.state as { selectUid?: string } | null)?.selectUid;
+    if (!uid) return;
+    setPendingSelectUid(uid);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const [showBulkDelete, setShowBulkDelete] = useState(false);
   const [showBulkEdit, setShowBulkEdit] = useState(false);
@@ -453,6 +463,12 @@ export default function NotesPage() {
   });
 
   const notes = useMemo(() => notesQuery.data?.notes ?? [], [notesQuery.data]);
+
+  useEffect(() => {
+    if (!pendingSelectUid || notes.length === 0) return;
+    setPendingSelectUid(null);
+    if (notes.some((n) => n.uid === pendingSelectUid)) { setSelectedUid(pendingSelectUid); setCreatingNew(false); }
+  }, [pendingSelectUid, notes]);
 
   // Kick off initial sync on first load
   useEffect(() => {

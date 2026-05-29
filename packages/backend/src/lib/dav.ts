@@ -1226,6 +1226,57 @@ export async function fetchArchivedCompletedTasks(
 }
 
 /**
+ * Fetch VEVENT objects from the given calendar collections within ±rangeDays of
+ * today. Used by the global search endpoint to search calendar events.
+ *
+ * Each collection failure is caught individually so one bad calendar doesn't
+ * abort the entire search. The caller is responsible for text-filtering and
+ * capping results.
+ */
+export async function fetchEventsForSearch(
+  session: SessionData,
+  calendars: Array<{ id: string; url: string }>,
+  rangeDays: number,
+): Promise<Array<{ url: string; etag: string; rawIcs: string; calendarId: string }>> {
+  const authHeaders = basicAuthHeader(session);
+  const toIso = (ms: number): string =>
+    new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
+
+  const now = Date.now();
+  const startStr = toIso(now - rangeDays * 86_400_000);
+  const endStr = toIso(now + rangeDays * 86_400_000);
+
+  const results: Array<{ url: string; etag: string; rawIcs: string; calendarId: string }> = [];
+  for (const cal of calendars) {
+    try {
+      const objects = await _fetchCalendarObjects({
+        calendar: { url: cal.url },
+        headers: authHeaders,
+        filters: [
+          {
+            'comp-filter': {
+              _attributes: { name: 'VCALENDAR' },
+              'comp-filter': {
+                _attributes: { name: 'VEVENT' },
+                'time-range': { _attributes: { start: startStr, end: endStr } },
+              },
+            },
+          },
+        ],
+      });
+      for (const obj of objects as TsdavTypes.DAVCalendarObject[]) {
+        if (obj.data) {
+          results.push({ url: obj.url, etag: obj.etag ?? '', rawIcs: obj.data as string, calendarId: cal.id });
+        }
+      }
+    } catch (err) {
+      console.warn(`fetchEventsForSearch: collection ${cal.url} failed`, err);
+    }
+  }
+  return results;
+}
+
+/**
  * Restore an archived completed task: GET the current ICS from Baikal,
  * reset STATUS to NEEDS-ACTION, clear COMPLETED and PERCENT-COMPLETE,
  * then PUT it back. Returns the TaskWriteResult for the caller to cache.

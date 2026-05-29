@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BookUser, Calendar, Check, CheckSquare, LogOut, NotebookPen, Pencil, Plus, RefreshCw, Settings, ScrollText } from 'lucide-react';
+import { BookUser, Calendar, Check, CheckSquare, LogOut, NotebookPen, Pencil, Plus, RefreshCw, Search, Settings, ScrollText } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import AddressBookModal from './AddressBookModal';
 import CalendarModal from './CalendarModal';
@@ -20,9 +20,10 @@ interface SidebarProps {
   me: MeResponse;
   isOpen: boolean;
   onClose: () => void;
+  onOpenSearch: () => void;
 }
 
-export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
+export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarProps) {
   const queryClient = useQueryClient();
   const [showSettings, setShowSettings] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -75,9 +76,17 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
         // Desktop: static in normal flow, always visible
         'md:static md:translate-x-0',
       )}>
-      {/* App name + sync indicator */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <span className="font-semibold text-foreground">DAVe</span>
+      {/* App name + search + sync indicator */}
+      <div className="flex items-center gap-1 px-4 py-3 border-b border-border">
+        <span className="font-semibold text-foreground flex-1">DAVe</span>
+        <button
+          onClick={onOpenSearch}
+          className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+          title="Search (⌘K)"
+          aria-label="Search"
+        >
+          <Search className="h-3.5 w-3.5" />
+        </button>
         {isLoading && (
           <RefreshCw className="h-3 w-3 text-muted-foreground animate-spin" />
         )}

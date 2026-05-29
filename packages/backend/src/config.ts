@@ -22,6 +22,7 @@ const schema = z.object({
   MAX_CACHED_ENTRIES_PER_USER: z.coerce.number().int().positive().default(10000),
   COMPLETED_TASK_RETENTION_DAYS: z.coerce.number().int().min(1).max(90).default(7),
   BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: z.coerce.number().int().positive().default(365),
+  EVENT_SEARCH_RANGE_DAYS: z.coerce.number().int().positive().default(60),
 });
 
 export type Config = z.infer<typeof schema>;

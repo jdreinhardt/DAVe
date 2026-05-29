@@ -21,7 +21,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import type { Note, NoteJson, JournalsQueryParams, Calendar } from '@dave/shared';
 import {
   fetchJournals,
@@ -974,8 +974,18 @@ export default function JournalsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
+  const location = useLocation();
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  const [pendingSelectUid, setPendingSelectUid] = useState<string | null>(null);
   const [creatingNew, setCreatingNew] = useState(false);
+
+  useEffect(() => {
+    const uid = (location.state as { selectUid?: string } | null)?.selectUid;
+    if (!uid) return;
+    setPendingSelectUid(uid);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
   const [newJournalDefaultDate, setNewJournalDefaultDate] = useState<string | null>(null);
   const [calendarViewRange, setCalendarViewRange] = useState<{ from: string; to: string } | null>(
     null,
@@ -1128,6 +1138,12 @@ export default function JournalsPage() {
   });
 
   const journals = useMemo(() => journalsQuery.data?.journals ?? [], [journalsQuery.data]);
+
+  useEffect(() => {
+    if (!pendingSelectUid || journals.length === 0) return;
+    setPendingSelectUid(null);
+    if (journals.some((j) => j.uid === pendingSelectUid)) { setSelectedUid(pendingSelectUid); setCreatingNew(false); }
+  }, [pendingSelectUid, journals]);
 
   const calendarJournalsQuery = useQuery({
     queryKey: ['journals', 'calendar', calendarParams],

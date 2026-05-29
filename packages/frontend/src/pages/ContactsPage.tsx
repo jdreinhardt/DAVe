@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine, GitMerge, ArrowLeft } from 'lucide-react';
 import type { AddressBook, Contact, ContactJson } from '@dave/shared';
@@ -85,10 +86,21 @@ export default function ContactsPage() {
   const { startDrag, endDrag } = useContactDrag();
   const { contactSort } = useSettings();
 
+  const location = useLocation();
+  const navigate = useNavigate();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pendingSelectId, setPendingSelectId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [panel, setPanel] = useState<Panel>({ mode: 'empty' });
+
+  useEffect(() => {
+    const id = (location.state as { selectId?: string } | null)?.selectId;
+    if (!id) return;
+    setPendingSelectId(id);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
   const [createAbId, setCreateAbId] = useState<string>('');
@@ -204,6 +216,13 @@ export default function ContactsPage() {
     });
     return entries;
   }, [filtered, contactSort]);
+
+  useEffect(() => {
+    if (!pendingSelectId || allContacts.length === 0) return;
+    const contact = allContacts.find((c) => c.id === pendingSelectId);
+    setPendingSelectId(null);
+    if (contact) { setSelectedId(pendingSelectId); setPanel({ mode: 'detail', contact }); }
+  }, [pendingSelectId, allContacts]);
 
   const selectedContact = allContacts.find((c) => c.id === selectedId) ?? null;
 

@@ -21,6 +21,7 @@ import { tasksRoutes } from './routes/tasks.js';
 import { notesRoutes } from './routes/notes.js';
 import { journalsRoutes } from './routes/journals.js';
 import { settingsRoutes } from './routes/settings.js';
+import { searchRoutes } from './routes/search.js';
 
 const config = loadConfig();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,6 +61,7 @@ await app.register(tasksRoutes, { cacheDb, config });
 await app.register(notesRoutes, { cacheDb });
 await app.register(journalsRoutes, { cacheDb });
 await app.register(settingsRoutes, { db });
+await app.register(searchRoutes, { cacheDb, config });
 
 // ── Static frontend (production only) ────────────────────────────────────────
 

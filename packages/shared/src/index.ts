@@ -456,6 +456,32 @@ export interface JournalsResponse {
   total: number;
 }
 
+// ── Global search ─────────────────────────────────────────────────────────────
+
+export type SearchResultType = 'task' | 'note' | 'journal' | 'event';
+
+export interface GlobalSearchResult {
+  type: SearchResultType;
+  uid: string;
+  summary: string;
+  /** First ~120 chars of description; empty string if none. */
+  snippet: string;
+  categories: string[];
+  /** due for tasks, dtstart for journals/events, null for notes */
+  date: string | null;
+  collectionId: string;
+  collectionUrl: string;
+  /** ISO datetime of event start — only set when type='event', for CalendarPage navigation. */
+  eventStart?: string;
+}
+
+export interface GlobalSearchResponse {
+  tasks: GlobalSearchResult[];
+  notes: GlobalSearchResult[];
+  journals: GlobalSearchResult[];
+  events: GlobalSearchResult[];
+}
+
 // ── API error shape ───────────────────────────────────────────────────────────
 
 export interface ApiError {

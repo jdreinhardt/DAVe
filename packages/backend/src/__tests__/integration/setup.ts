@@ -39,6 +39,7 @@ export const integrationConfig: Config = {
   MAX_CACHED_ENTRIES_PER_USER: 10000,
   COMPLETED_TASK_RETENTION_DAYS: 7,
   BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
+  EVENT_SEARCH_RANGE_DAYS: 60,
 };
 
 let _db: DbInstance | null = null;
