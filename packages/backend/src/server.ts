@@ -20,6 +20,7 @@ import { syncRoutes } from './routes/sync.js';
 import { tasksRoutes } from './routes/tasks.js';
 import { notesRoutes } from './routes/notes.js';
 import { journalsRoutes } from './routes/journals.js';
+import { settingsRoutes } from './routes/settings.js';
 
 const config = loadConfig();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,6 +59,7 @@ await app.register(syncRoutes, { config, db, cacheDb, syncWorker });
 await app.register(tasksRoutes, { cacheDb, config });
 await app.register(notesRoutes, { cacheDb });
 await app.register(journalsRoutes, { cacheDb });
+await app.register(settingsRoutes, { db });
 
 // ── Static frontend (production only) ────────────────────────────────────────
 
