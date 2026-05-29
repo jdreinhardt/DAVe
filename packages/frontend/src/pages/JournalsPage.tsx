@@ -1205,9 +1205,9 @@ export default function JournalsPage() {
     return [...cats].sort();
   }, [journals, calendarJournals, view, categoryFilter]);
 
-  // Timeline grouping (only computed when view === 'timeline')
+  // Timeline grouping (computed for timeline and calendar views — calendar may auto-switch to timeline)
   const monthGroups = useMemo(
-    () => (view === 'timeline' ? groupByMonthDay(journals) : []),
+    () => (view !== 'list' ? groupByMonthDay(journals) : []),
     [journals, view],
   );
 
@@ -1479,6 +1479,11 @@ export default function JournalsPage() {
   const isMultiSelect = selectedUids.size > 0;
   const showMultiPanel = isMultiSelect && !creatingNew;
   const showDetailPanel = (selectedJournal && !creatingNew && !isMultiSelect) || creatingNew;
+
+  // When a journal is selected in calendar view, switch to timeline so the split layout isn't cramped.
+  // The user's `view` preference is preserved — effectiveView reverts automatically when the panel closes.
+  const effectiveView: 'timeline' | 'list' | 'calendar' =
+    view === 'calendar' && selectedJournal && !creatingNew && !isMultiSelect ? 'timeline' : view;
   const defaultCollectionUrl =
     vjournalCalendars.find((c) => !hiddenVJournalCollections.has(c.id))?.url ??
     vjournalCalendars[0]?.url ??
@@ -1521,7 +1526,7 @@ export default function JournalsPage() {
         </div>
 
         {/* Sort controls — list view only */}
-        {view === 'list' && (
+        {effectiveView === 'list' && (
           <>
             <select
               value={sort ?? ''}
@@ -1551,8 +1556,8 @@ export default function JournalsPage() {
         )}
 
         {/* Date jumper — timeline and calendar views */}
-        {(view === 'timeline' || view === 'calendar') && (
-          <DateJumperButton view={view} monthGroups={monthGroups} calendarRef={calendarRef} />
+        {(effectiveView === 'timeline' || effectiveView === 'calendar') && (
+          <DateJumperButton view={effectiveView} monthGroups={monthGroups} calendarRef={calendarRef} />
         )}
 
         <TagFilterButton
@@ -1644,9 +1649,9 @@ export default function JournalsPage() {
           )}
 
           <div
-            className={cn('flex-1', view === 'calendar' ? 'overflow-hidden' : 'overflow-y-auto')}
+            className={cn('flex-1', effectiveView === 'calendar' ? 'overflow-hidden' : 'overflow-y-auto')}
           >
-            {view === 'timeline' ? (
+            {effectiveView === 'timeline' ? (
               <TimelineView
                 monthGroups={monthGroups}
                 selectedUid={selectedUid}
@@ -1671,7 +1676,7 @@ export default function JournalsPage() {
                 isEmpty={!journalsQuery.isLoading && journals.length === 0}
                 hasSearch={!!(debouncedQuery || categoryFilter.length > 0)}
               />
-            ) : view === 'calendar' ? (
+            ) : effectiveView === 'calendar' ? (
               <JournalCalendarView
                 journals={calendarJournals}
                 collectionColorMap={collectionColorMap}
