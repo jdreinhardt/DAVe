@@ -49,6 +49,13 @@ export function getDb(config: Config): DbInstance {
       journals_view    TEXT    NOT NULL DEFAULT 'timeline',
       updated_at       INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS address_book_colors (
+      username        TEXT NOT NULL,
+      address_book_id TEXT NOT NULL,
+      color           TEXT NOT NULL,
+      PRIMARY KEY (username, address_book_id)
+    );
   `);
 
   return _db;

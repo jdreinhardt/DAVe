@@ -25,7 +25,10 @@ export interface AddressBook {
   url: string;
   displayName: string;
   description: string;
-  color: string;
+  /** Resolved display color. null = no color preference (gray/default styling). */
+  color: string | null;
+  /** true = color was auto-generated from the address book ID; false = user-set or user-removed. */
+  colorIsAuto: boolean;
   ctag: string;
   syncToken: string;
 }
@@ -50,6 +53,8 @@ export interface CreateAddressBookRequest {
 export interface UpdateAddressBookRequest {
   displayName: string;
   description?: string;
+  /** null = reset to auto; 'none' = remove color (gray); '#RRGGBB' = custom color. Absent = no change. */
+  color?: string | null;
 }
 
 export interface CreateCalendarRequest {

@@ -3,6 +3,7 @@ import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
+import type { DbInstance } from '../db/index.js';
 import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson, TaskJson, NoteJson } from '@dave/shared';
 import type { RecurrenceScope, CreateAddressBookRequest, UpdateAddressBookRequest, CreateCalendarRequest, UpdateCalendarRequest } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
@@ -42,6 +43,22 @@ function collectionId(url: string): string {
   } catch {
     return url;
   }
+}
+
+// ── Address book color ────────────────────────────────────────────────────────
+
+const AB_COLOR_PALETTE = [
+  '#0082C9', '#3498DB', '#1ABC9C', '#2ECC71',
+  '#F1C40F', '#E67E22', '#E74C3C', '#E91E63',
+  '#9B59B6', '#795548', '#607D8B', '#34495E',
+];
+
+function deterministicAddressBookColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    h = (Math.imul(31, h) + id.charCodeAt(i)) | 0;
+  }
+  return AB_COLOR_PALETTE[Math.abs(h) % AB_COLOR_PALETTE.length]!;
 }
 
 // ── Login / discovery ─────────────────────────────────────────────────────────
@@ -133,6 +150,7 @@ export async function listCalendars(
 export async function listAddressBooks(
   session: SessionData,
   config: Config,
+  db: DbInstance,
 ): Promise<AddressBook[]> {
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
   const account = cardAccount(session, config);
@@ -152,6 +170,11 @@ export async function listAddressBooks(
     headers: authHeaders,
   });
 
+  const colorRows = db.prepare(
+    'SELECT address_book_id, color FROM address_book_colors WHERE username = ?',
+  ).all(session.username) as Array<{ address_book_id: string; color: string }>;
+  const colorMap = new Map(colorRows.map((r) => [r.address_book_id, r.color]));
+
   return (results as TsdavTypes.DAVResponse[])
     .filter((r) => {
       const rt = (r.props as Record<string, unknown> | undefined)?.resourcetype;
@@ -161,12 +184,23 @@ export async function listAddressBooks(
       const props = (rs.props ?? {}) as Record<string, unknown>;
       const rawUrl = typeof rs.href === 'string' ? rs.href : '';
       const fullUrl = new URL(rawUrl, account.rootUrl ?? config.BAIKAL_BASE_URL).href;
+      const id = collectionId(fullUrl);
+
+      const stored = colorMap.get(id);
+      const colorIsAuto = stored === undefined;
+      const color = stored === undefined
+        ? deterministicAddressBookColor(id)   // auto: deterministic from ID
+        : stored === 'none'
+          ? null                               // user removed color
+          : stored;                            // user-set custom hex
+
       return {
-        id: collectionId(fullUrl),
+        id,
         url: fullUrl,
         displayName: str(props.displayname, fullUrl),
         description: str(props.addressbookDescription, ''),
-        color: '#6C757D',
+        color,
+        colorIsAuto,
         ctag: str(props.getctag),
         syncToken: str(props.syncToken),
       };

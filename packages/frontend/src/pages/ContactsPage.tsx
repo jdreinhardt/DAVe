@@ -557,6 +557,12 @@ export default function ContactsPage() {
 
   const addressBooks = abQuery.data ?? [];
 
+  const addressBookColorMap = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const ab of abQuery.data ?? []) map.set(ab.id, ab.color);
+    return map;
+  }, [abQuery.data]);
+
   return (
     <div className="flex h-full overflow-hidden">
       {/* ── Left: list pane ── */}
@@ -657,6 +663,7 @@ export default function ContactsPage() {
                   selected={c.id === selectedId}
                   isChecked={selectedIds.has(c.id)}
                   isMultiSelect={isMultiSelect}
+                  addressBookColor={addressBookColorMap.get(c.addressBookId) ?? null}
                   onClick={() => handleSelectContact(c)}
                   onToggleSelect={() => toggleSelect(c.id)}
                   onDragStart={() => {
@@ -812,7 +819,10 @@ export default function ContactsPage() {
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
-                  <ContactDetail contact={selectedContact} />
+                  <ContactDetail
+                    contact={selectedContact}
+                    addressBookColor={addressBookColorMap.get(selectedContact.addressBookId) ?? null}
+                  />
                 </div>
               </>
             )}
@@ -939,6 +949,7 @@ function ContactListItem({
   onToggleSelect,
   onDragStart,
   onDragEnd,
+  addressBookColor,
 }: {
   contact: Contact;
   selected: boolean;
@@ -948,6 +959,7 @@ function ContactListItem({
   onToggleSelect: () => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
+  addressBookColor?: string | null;
 }) {
   const { contactSubtitleField } = useSettings();
   const name =
@@ -980,7 +992,7 @@ function ContactListItem({
             isChecked ? 'opacity-30' : 'group-hover:opacity-30',
           )}
         >
-          <Avatar contact={contact} size="sm" />
+          <Avatar contact={contact} size="sm" addressBookColor={addressBookColor} />
         </div>
         {/* Checkbox appears on hover or in multi-select mode */}
         <label
@@ -1194,7 +1206,11 @@ function MultiContactPanel({
                   'text-center hover:bg-muted hover:border-primary/30 transition-colors',
                 )}
               >
-                <Avatar contact={c} size="lg" />
+                <Avatar
+                  contact={c}
+                  size="lg"
+                  addressBookColor={addressBooks.find((ab) => ab.id === c.addressBookId)?.color ?? null}
+                />
                 <div className="w-full min-w-0 space-y-0.5">
                   <p className="text-sm font-medium truncate">{name}</p>
                   {subtitle && (

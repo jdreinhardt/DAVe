@@ -6,9 +6,10 @@ import { cn, buildMapUrl } from '../lib/utils';
 
 interface ContactDetailProps {
   contact: Contact;
+  addressBookColor?: string | null;
 }
 
-export default function ContactDetail({ contact }: ContactDetailProps) {
+export default function ContactDetail({ contact, addressBookColor }: ContactDetailProps) {
   const { data } = contact;
   const { mapService } = useSettings();
 
@@ -23,7 +24,7 @@ export default function ContactDetail({ contact }: ContactDetailProps) {
     <div className="p-6 max-w-2xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-start gap-4">
-        <Avatar contact={contact} size="lg" />
+        <Avatar contact={contact} size="lg" addressBookColor={addressBookColor} />
         <div className="min-w-0">
           <h2 className="text-2xl font-bold text-foreground leading-tight">{displayName}</h2>
           {data.title && <p className="text-sm text-muted-foreground mt-0.5">{data.title}</p>}
@@ -214,9 +215,11 @@ function AddressBlock({ address, mapService }: { address: VCardAddress; mapServi
 export function Avatar({
   contact,
   size = 'md',
+  addressBookColor,
 }: {
   contact: Contact;
   size?: 'sm' | 'md' | 'lg';
+  addressBookColor?: string | null;
 }) {
   const { data } = contact;
   const sizeClass = { sm: 'h-8 w-8 text-xs', md: 'h-10 w-10 text-sm', lg: 'h-16 w-16 text-xl' }[
@@ -234,13 +237,16 @@ export function Avatar({
   }
 
   const initials = getInitials(data.name.given, data.name.family, data.fullName);
+  const hasColor = addressBookColor != null;
+
   return (
     <div
       className={cn(
-        'rounded-full shrink-0 flex items-center justify-center font-semibold',
-        'bg-primary/10 text-primary select-none',
+        'rounded-full shrink-0 flex items-center justify-center font-semibold select-none',
+        hasColor ? '' : 'bg-primary/10 text-primary',
         sizeClass,
       )}
+      style={hasColor ? { backgroundColor: addressBookColor + '33', color: addressBookColor } : undefined}
     >
       {initials || <User className="h-1/2 w-1/2" />}
     </div>
