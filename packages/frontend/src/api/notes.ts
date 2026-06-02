@@ -7,7 +7,7 @@ import type {
   CreateNoteRequest,
   UpdateNoteRequest,
 } from '@dave/shared';
-import { apiFetch } from './client.js';
+import { apiFetch, buildQueryString } from './client.js';
 
 export async function fetchNotes(params?: NotesQueryParams): Promise<NotesResponse> {
   const qs = params ? buildQueryString(params) : '';
@@ -47,10 +47,3 @@ export async function triggerNotesSync(): Promise<void> {
   await apiFetch<{ ok: true }>('/api/sync/notes', { method: 'POST' });
 }
 
-function buildQueryString(params: NotesQueryParams): string {
-  const q = new URLSearchParams();
-  for (const [key, val] of Object.entries(params)) {
-    if (val !== undefined && val !== '') q.set(key, String(val));
-  }
-  return q.toString();
-}

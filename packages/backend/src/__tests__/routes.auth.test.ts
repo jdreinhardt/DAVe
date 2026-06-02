@@ -74,7 +74,7 @@ describe('POST /api/auth/login', () => {
       payload: { username: 'alice', password: 'wrong' },
     });
     expect(res.statusCode).toBe(401);
-    expect(res.json().error).toContain('Invalid credentials');
+    expect(res.json().error).toContain('Incorrect username or password');
   });
 
   it('returns 502 on ECONNREFUSED', async () => {

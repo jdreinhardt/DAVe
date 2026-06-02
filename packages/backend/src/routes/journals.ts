@@ -1,10 +1,8 @@
-import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { CacheDbInstance } from '../db/cache.js';
 import type { SessionData } from '../services/session.js';
 import type {
-  Note,
   NoteJson,
   JournalsQueryParams,
   JournalsResponse,
@@ -22,109 +20,14 @@ import {
 } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import { upsertEntry, deleteEntryByUid } from '../db/cacheOps.js';
-
-const _req = createRequire(import.meta.url);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ICAL = _req('ical.js') as any;
-
-interface EntryRow {
-  id: number;
-  uid: string;
-  etag: string;
-  collection_url: string;
-  object_url: string;
-  summary: string;
-  description: string;
-  dtstart: number | null;
-  last_modified: number | null;
-  raw_ics: string | null;
-}
-
-interface CategoryRow {
-  entry_id: number;
-  category: string;
-}
-
-interface RelationRow {
-  entry_id: number;
-  related_uid: string;
-  reltype: string;
-}
-
-function collectionIdFromUrl(url: string): string {
-  try {
-    const seg = new URL(url).pathname.replace(/\/$/, '').split('/').filter(Boolean);
-    return seg[seg.length - 1] ?? url;
-  } catch {
-    return url;
-  }
-}
-
-function msToIso(ms: number | null | undefined): string | null {
-  if (ms == null) return null;
-  return new Date(ms).toISOString();
-}
-
-// Re-parse dtstart from the raw ICS to preserve DATE vs DATE-TIME distinction.
-function parseDtstartFromIcs(rawIcs: string | null): string | null {
-  if (!rawIcs) return null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jcal: any = ICAL.parse(rawIcs);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vcal = new ICAL.Component(jcal) as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vjournal: any = vcal.getFirstSubcomponent('vjournal');
-    if (!vjournal) return null;
-    const prop = vjournal.getFirstProperty('dtstart');
-    if (!prop) return null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const val: any = prop.getFirstValue();
-    if (!val) return null;
-    if (val.isDate) {
-      const y = String(val.year as number).padStart(4, '0');
-      const mo = String(val.month as number).padStart(2, '0');
-      const d = String(val.day as number).padStart(2, '0');
-      return `${y}-${mo}-${d}`;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jsDate: Date | undefined = (val as any).toJSDate?.();
-    return jsDate ? jsDate.toISOString() : null;
-  } catch {
-    return null;
-  }
-}
-
-function buildFtsQuery(q: string): string {
-  const words = q.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return '""';
-  return words.map((w) => `"${w.replace(/"/g, '""')}"*`).join(' ');
-}
-
-function rowToJournal(
-  row: EntryRow,
-  categories: string[],
-  relations: TaskRelation[],
-): Note {
-  const dtstart = parseDtstartFromIcs(row.raw_ics ?? null) ?? msToIso(row.dtstart);
-  const data: NoteJson = {
-    uid: row.uid,
-    summary: row.summary,
-    description: row.description,
-    dtstart,
-    lastModified: msToIso(row.last_modified),
-    categories,
-    relations,
-    collectionUrl: row.collection_url,
-  };
-  return {
-    uid: row.uid,
-    etag: row.etag,
-    collectionUrl: row.collection_url,
-    collectionId: collectionIdFromUrl(row.collection_url),
-    data,
-  };
-}
+import {
+  collectionIdFromUrl,
+  buildFtsQuery,
+  rowToVJournalEntry,
+  type VJournalEntryRow,
+  type CategoryRow,
+  type RelationRow,
+} from '../lib/routeUtils.js';
 
 type SqlValue = string | number | null;
 
@@ -241,10 +144,10 @@ export async function journalsRoutes(
       const userId = req.sessionData!.username;
       const { sql, values } = buildJournalsQuery(userId, req.query);
 
-      let rows: EntryRow[];
+      let rows: VJournalEntryRow[];
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        rows = (cacheDb.prepare(sql).all(...values as any[]) as unknown) as EntryRow[];
+        rows = (cacheDb.prepare(sql).all(...values as any[]) as unknown) as VJournalEntryRow[];
       } catch (err) {
         app.log.warn({ err }, 'journals query failed');
         return reply.status(500).send({ error: 'Cache query failed', statusCode: 500 });
@@ -281,7 +184,7 @@ export async function journalsRoutes(
       }
 
       const journals = rows.map((row) =>
-        rowToJournal(row, catMap.get(row.id) ?? [], relMap.get(row.id) ?? []),
+        rowToVJournalEntry(row, catMap.get(row.id) ?? [], relMap.get(row.id) ?? []),
       );
 
       const response: JournalsResponse = { journals, total: journals.length };
@@ -303,7 +206,7 @@ export async function journalsRoutes(
                summary, description, dtstart, last_modified, raw_ics
         FROM entries
         WHERE uid = ? AND user_id = ? AND component_type = 'VJOURNAL' AND dtstart_present = 1
-      `).get(uid, userId) as EntryRow | undefined;
+      `).get(uid, userId) as VJournalEntryRow | undefined;
 
       if (!row) {
         return reply.status(404).send({ error: 'Journal not found', statusCode: 404 });
@@ -317,7 +220,7 @@ export async function journalsRoutes(
         'SELECT related_uid, reltype FROM entry_relations WHERE entry_id = ?',
       ).all(row.id) as { related_uid: string; reltype: string }[];
 
-      const journal = rowToJournal(
+      const journal = rowToVJournalEntry(
         row,
         catRows.map((c) => c.category),
         relRows.map((r) => ({ relatedUid: r.related_uid, reltype: r.reltype })),

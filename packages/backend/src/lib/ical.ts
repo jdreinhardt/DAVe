@@ -998,6 +998,139 @@ function applyDueDelta(nextDtstart: string, origDtstart: string, origDue: string
   return new Date(new Date(nextDtstart).getTime() + deltaMs).toISOString();
 }
 
+// ── Route-level ICS parsing helpers ───────────────────────────────────────────
+// These read a single cached ICS string and extract one or more properties.
+// They live here so the createRequire(ical.js) load stays in one place.
+
+// Re-parse dtstart from a VJOURNAL ICS to preserve DATE vs DATE-TIME distinction.
+// The cache stores dtstart as Unix ms which loses the all-day flag.
+export function parseDtstartFromVJournalIcs(rawIcs: string | null): string | null {
+  if (!rawIcs) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vjournal: any = vcal.getFirstSubcomponent('vjournal');
+    if (!vjournal) return null;
+    const prop = vjournal.getFirstProperty('dtstart');
+    if (!prop) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const val: any = prop.getFirstValue();
+    if (!val) return null;
+    if (val.isDate) {
+      const y = String(val.year as number).padStart(4, '0');
+      const mo = String(val.month as number).padStart(2, '0');
+      const d = String(val.day as number).padStart(2, '0');
+      return `${y}-${mo}-${d}`;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jsDate: Date | undefined = (val as any).toJSDate?.();
+    return jsDate ? jsDate.toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Re-parse dtstart and due from a VTODO ICS to preserve DATE vs DATE-TIME distinction.
+export function parseDateStringsFromIcs(rawIcs: string | null): { dtstart: string | null; due: string | null } {
+  if (!rawIcs) return { dtstart: null, due: null };
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return { dtstart: null, due: null };
+
+    function propToStr(propName: string): string | null {
+      const prop = vtodo.getFirstProperty(propName);
+      if (!prop) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const val: any = prop.getFirstValue();
+      if (!val) return null;
+      if (val.isDate) {
+        const y = String(val.year as number).padStart(4, '0');
+        const mo = String(val.month as number).padStart(2, '0');
+        const d = String(val.day as number).padStart(2, '0');
+        return `${y}-${mo}-${d}`;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jsDate: Date | undefined = (val as any).toJSDate?.();
+      return jsDate ? jsDate.toISOString() : null;
+    }
+
+    return { dtstart: propToStr('dtstart'), due: propToStr('due') };
+  } catch { return { dtstart: null, due: null }; }
+}
+
+export function parseAlarmsFromIcs(rawIcs: string | null): AlarmJson[] {
+  if (!rawIcs) return [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const valarms: any[] = vtodo.getAllSubcomponents('valarm');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return valarms.flatMap((valarm: any) => {
+      try {
+        const rawAction = String(valarm.getFirstPropertyValue('action') ?? 'DISPLAY').toUpperCase();
+        const action: 'DISPLAY' | 'EMAIL' = rawAction === 'EMAIL' ? 'EMAIL' : 'DISPLAY';
+        const triggerProp = valarm.getFirstProperty('trigger');
+        const triggerVal = triggerProp?.getFirstValue();
+        let trigger = '';
+        if (triggerVal != null && typeof triggerVal.toICALString === 'function') {
+          trigger = String(triggerVal.toICALString());
+        } else if (triggerVal != null) {
+          trigger = String(triggerVal);
+        }
+        const description = String(valarm.getFirstPropertyValue('description') ?? '');
+        return [{ action, trigger, description }];
+      } catch { return []; }
+    });
+  } catch { return []; }
+}
+
+export function parseRruleFromIcs(rawIcs: string | null): string | null {
+  if (!rawIcs) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return null;
+    const rruleProp = vtodo.getFirstProperty('rrule');
+    if (!rruleProp) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const val: any = rruleProp.getFirstValue();
+    return val ? String(val.toString()) : null;
+  } catch { return null; }
+}
+
+export function parseRecurringInstanceFromIcs(rawIcs: string | null): boolean {
+  if (!rawIcs) return false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return false;
+    const val = vtodo.getFirstPropertyValue('x-dave-recurring-instance');
+    return String(val ?? '').toUpperCase() === 'TRUE';
+  } catch { return false; }
+}
+
 // Decrement the COUNT in a raw RRULE string by 1 (floor 1).
 // When no COUNT is present the string is returned unchanged.
 function decrementCount(rrule: string): string {

@@ -5,32 +5,13 @@ import type { GlobalSearchResult, GlobalSearchResponse } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
 import { listCalendars, fetchEventsForSearch } from '../lib/dav.js';
 import { parseIcalEvents } from '../lib/ical.js';
+import { collectionIdFromUrl, msToIso, buildFtsQuery } from '../lib/routeUtils.js';
 
 type SqlValue = string | number | null;
-
-function buildFtsQuery(q: string): string {
-  const words = q.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return '""';
-  return words.map((w) => `"${w.replace(/"/g, '""')}"*`).join(' ');
-}
-
-function collectionIdFromUrl(url: string): string {
-  try {
-    const seg = new URL(url).pathname.replace(/\/$/, '').split('/').filter(Boolean);
-    return seg[seg.length - 1] ?? url;
-  } catch {
-    return url;
-  }
-}
 
 function snippet(description: string): string {
   const trimmed = description.trim();
   return trimmed.length <= 120 ? trimmed : trimmed.slice(0, 120) + '…';
-}
-
-function msToIso(ms: number | null | undefined): string | null {
-  if (ms == null) return null;
-  return new Date(ms).toISOString();
 }
 
 interface CacheRow {

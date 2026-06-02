@@ -1,4 +1,3 @@
-import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { CacheDbInstance } from '../db/cache.js';
@@ -6,14 +5,14 @@ import type { SessionData } from '../services/session.js';
 import type { Config } from '../config.js';
 import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest, ArchivedTask, ArchivedTasksResponse, RestoreArchivedTaskRequest } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
-import { applyCompletion, rollForwardTask, serializeIcalTask, parseVTodoToTaskJson } from '../lib/ical.js';
+import {
+  applyCompletion, rollForwardTask, serializeIcalTask, parseVTodoToTaskJson,
+  parseDateStringsFromIcs, parseAlarmsFromIcs, parseRruleFromIcs, parseRecurringInstanceFromIcs,
+} from '../lib/ical.js';
 import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask, createTaskRaw, fetchArchivedCompletedTasks, restoreArchivedTask as davRestoreArchivedTask } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import { upsertEntry, deleteEntryByUid } from '../db/cacheOps.js';
-
-const _req = createRequire(import.meta.url);
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const ICAL = _req('ical.js') as any;
+import { collectionIdFromUrl, msToIso, buildFtsQuery, type CategoryRow, type RelationRow } from '../lib/routeUtils.js';
 
 interface EntryRow {
   id: number;
@@ -34,141 +33,6 @@ interface EntryRow {
   rrule: string | null;
 }
 
-interface CategoryRow {
-  entry_id: number;
-  category: string;
-}
-
-interface RelationRow {
-  entry_id: number;
-  related_uid: string;
-  reltype: string;
-}
-
-function collectionIdFromUrl(url: string): string {
-  try {
-    const seg = new URL(url).pathname.replace(/\/$/, '').split('/').filter(Boolean);
-    return seg[seg.length - 1] ?? url;
-  } catch {
-    return url;
-  }
-}
-
-function msToIso(ms: number | null | undefined): string | null {
-  if (ms == null) return null;
-  return new Date(ms).toISOString();
-}
-
-// Re-parse dtstart/due directly from the ICS so we preserve DATE vs DATE-TIME.
-// Storing only Unix ms in the cache loses the all-day distinction; reading val.isDate
-// from the original ICS is the same approach the calendar section uses.
-function parseDateStringsFromIcs(rawIcs: string | null): { dtstart: string | null; due: string | null } {
-  if (!rawIcs) return { dtstart: null, due: null };
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jcal: any = ICAL.parse(rawIcs);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vcal = new ICAL.Component(jcal) as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
-    if (!vtodo) return { dtstart: null, due: null };
-
-    function propToStr(propName: string): string | null {
-      const prop = vtodo.getFirstProperty(propName);
-      if (!prop) return null;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const val: any = prop.getFirstValue();
-      if (!val) return null;
-      if (val.isDate) {
-        // DATE (all-day): format as "YYYY-MM-DD" with no time component
-        const y = String(val.year as number).padStart(4, '0');
-        const mo = String(val.month as number).padStart(2, '0');
-        const d = String(val.day as number).padStart(2, '0');
-        return `${y}-${mo}-${d}`;
-      }
-      // DATE-TIME: convert to UTC ISO string
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const jsDate: Date | undefined = (val as any).toJSDate?.();
-      return jsDate ? jsDate.toISOString() : null;
-    }
-
-    return { dtstart: propToStr('dtstart'), due: propToStr('due') };
-  } catch { return { dtstart: null, due: null }; }
-}
-
-// Escape a user query string for FTS5 MATCH: wrap each word as a phrase-prefix term.
-function buildFtsQuery(q: string): string {
-  const words = q.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return '""';
-  return words
-    .map((w) => `"${w.replace(/"/g, '""')}"*`)
-    .join(' ');
-}
-
-function parseAlarmsFromIcs(rawIcs: string | null): AlarmJson[] {
-  if (!rawIcs) return [];
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jcal: any = ICAL.parse(rawIcs);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vcal = new ICAL.Component(jcal) as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
-    if (!vtodo) return [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const valarms: any[] = vtodo.getAllSubcomponents('valarm');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return valarms.flatMap((valarm: any) => {
-      try {
-        const rawAction = String(valarm.getFirstPropertyValue('action') ?? 'DISPLAY').toUpperCase();
-        const action: 'DISPLAY' | 'EMAIL' = rawAction === 'EMAIL' ? 'EMAIL' : 'DISPLAY';
-        const triggerProp = valarm.getFirstProperty('trigger');
-        const triggerVal = triggerProp?.getFirstValue();
-        let trigger = '';
-        if (triggerVal != null && typeof triggerVal.toICALString === 'function') {
-          trigger = String(triggerVal.toICALString());
-        } else if (triggerVal != null) {
-          trigger = String(triggerVal);
-        }
-        const description = String(valarm.getFirstPropertyValue('description') ?? '');
-        return [{ action, trigger, description }];
-      } catch { return []; }
-    });
-  } catch { return []; }
-}
-
-function parseRruleFromIcs(rawIcs: string | null): string | null {
-  if (!rawIcs) return null;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jcal: any = ICAL.parse(rawIcs);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vcal = new ICAL.Component(jcal) as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
-    if (!vtodo) return null;
-    const rruleProp = vtodo.getFirstProperty('rrule');
-    if (!rruleProp) return null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const val: any = rruleProp.getFirstValue();
-    return val ? String(val.toString()) : null;
-  } catch { return null; }
-}
-
-function parseRecurringInstanceFromIcs(rawIcs: string | null): boolean {
-  if (!rawIcs) return false;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const jcal: any = ICAL.parse(rawIcs);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vcal = new ICAL.Component(jcal) as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
-    if (!vtodo) return false;
-    const val = vtodo.getFirstPropertyValue('x-dave-recurring-instance');
-    return String(val ?? '').toUpperCase() === 'TRUE';
-  } catch { return false; }
-}
 
 function rowToTask(
   row: EntryRow,

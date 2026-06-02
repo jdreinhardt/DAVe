@@ -1,5 +1,5 @@
 import type { Task, TaskJson, TasksResponse, TasksQueryParams, TaskWriteResponse, DeleteTaskResponse, CreateTaskRequest, UpdateTaskRequest, ArchivedTasksResponse, RestoreArchivedTaskRequest } from '@dave/shared';
-import { apiFetch } from './client.js';
+import { apiFetch, buildQueryString } from './client.js';
 
 export async function fetchTasks(params?: TasksQueryParams): Promise<TasksResponse> {
   const qs = params ? buildQueryString(params) : '';
@@ -93,10 +93,3 @@ export function applyCompletion(data: TaskJson, completed: boolean): TaskJson {
   return result;
 }
 
-function buildQueryString(params: TasksQueryParams): string {
-  const q = new URLSearchParams();
-  for (const [key, val] of Object.entries(params)) {
-    if (val !== undefined && val !== '') q.set(key, String(val));
-  }
-  return q.toString();
-}
