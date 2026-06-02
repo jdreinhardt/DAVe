@@ -9,7 +9,10 @@ const schema = z.object({
   SESSION_TTL_HOURS: z.coerce.number().int().positive().default(168),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   BIND_ADDRESS: z.string().default('0.0.0.0'),
-  TRUST_PROXY: z.coerce.boolean().default(false),
+  TRUST_PROXY: z
+    .string()
+    .optional()
+    .transform((v) => v === '1' || v === 'true'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   // Path to the compiled frontend build; used in production to serve the SPA.
   FRONTEND_DIST: z.string().optional(),
