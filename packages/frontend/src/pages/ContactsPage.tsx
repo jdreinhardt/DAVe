@@ -220,8 +220,15 @@ export default function ContactsPage() {
   useEffect(() => {
     if (!pendingSelectId || allContacts.length === 0) return;
     const contact = allContacts.find((c) => c.id === pendingSelectId);
+    const id = pendingSelectId;
     setPendingSelectId(null);
-    if (contact) { setSelectedId(pendingSelectId); setPanel({ mode: 'detail', contact }); }
+    if (contact) {
+      setSelectedId(id);
+      setPanel({ mode: 'detail', contact });
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(`[data-uid="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    }
   }, [pendingSelectId, allContacts]);
 
   const selectedContact = allContacts.find((c) => c.id === selectedId) ?? null;
@@ -973,6 +980,7 @@ function ContactListItem({
       role="button"
       tabIndex={0}
       draggable
+      data-uid={contact.id}
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart?.(); }}
       onDragEnd={onDragEnd}
       onClick={onClick}

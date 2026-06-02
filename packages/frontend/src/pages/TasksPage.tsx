@@ -269,6 +269,7 @@ function TaskRow({
   return (
     <>
       <div
+        data-uid={task.uid}
         className={cn(
           'group flex items-start gap-2 px-3 pr-1 rounded-md cursor-pointer transition-colors mx-1 my-0.5',
           compact ? 'py-1.5' : 'py-3',
@@ -1855,8 +1856,14 @@ export default function TasksPage() {
   // Step 2: once data arrives, resolve the pending selection.
   useEffect(() => {
     if (!pendingSelectUid || allTasks.length === 0) return;
+    const uid = pendingSelectUid;
     setPendingSelectUid(null);
-    if (allTasks.some((t) => t.uid === pendingSelectUid)) setSelectedUid(pendingSelectUid);
+    if (allTasks.some((t) => t.uid === uid)) {
+      setSelectedUid(uid);
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(`[data-uid="${uid}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    }
   }, [pendingSelectUid, allTasks]);
 
   // ── Build tree ────────────────────────────────────────────────────────────

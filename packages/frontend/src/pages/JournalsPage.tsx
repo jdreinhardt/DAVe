@@ -556,6 +556,7 @@ function JournalCard({
     return (
       <div
         draggable
+        data-uid={journal.uid}
         onDragStart={(e) => {
           e.stopPropagation();
           onDragStart(journal);
@@ -616,6 +617,7 @@ function JournalCard({
   return (
     <div
       draggable
+      data-uid={journal.uid}
       onDragStart={(e) => {
         e.stopPropagation();
         onDragStart(journal);
@@ -1141,8 +1143,15 @@ export default function JournalsPage() {
 
   useEffect(() => {
     if (!pendingSelectUid || journals.length === 0) return;
+    const uid = pendingSelectUid;
     setPendingSelectUid(null);
-    if (journals.some((j) => j.uid === pendingSelectUid)) { setSelectedUid(pendingSelectUid); setCreatingNew(false); }
+    if (journals.some((j) => j.uid === uid)) {
+      setSelectedUid(uid);
+      setCreatingNew(false);
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(`[data-uid="${uid}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    }
   }, [pendingSelectUid, journals]);
 
   const calendarJournalsQuery = useQuery({

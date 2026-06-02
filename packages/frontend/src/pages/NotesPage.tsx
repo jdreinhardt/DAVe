@@ -466,8 +466,15 @@ export default function NotesPage() {
 
   useEffect(() => {
     if (!pendingSelectUid || notes.length === 0) return;
+    const uid = pendingSelectUid;
     setPendingSelectUid(null);
-    if (notes.some((n) => n.uid === pendingSelectUid)) { setSelectedUid(pendingSelectUid); setCreatingNew(false); }
+    if (notes.some((n) => n.uid === uid)) {
+      setSelectedUid(uid);
+      setCreatingNew(false);
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(`[data-uid="${uid}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    }
   }, [pendingSelectUid, notes]);
 
   // Kick off initial sync on first load
@@ -1349,6 +1356,7 @@ function NoteCard({
     return (
       <div
         draggable
+        data-uid={note.uid}
         onDragStart={(e) => {
           e.stopPropagation();
           onDragStart(note);
@@ -1512,6 +1520,7 @@ function NoteCard({
   return (
     <div
       draggable
+      data-uid={note.uid}
       onDragStart={(e) => {
         e.stopPropagation();
         onDragStart(note);
