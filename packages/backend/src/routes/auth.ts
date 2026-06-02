@@ -34,9 +34,18 @@ export async function authRoutes(
         discovery = await discoverAndValidate(username, password, config);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        // tsdav surfaces 401 in the error message or as an HTTP status.
-        if (msg.includes('401') || msg.toLowerCase().includes('unauthorized')) {
-          return reply.status(401).send({ error: 'Invalid credentials', statusCode: 401 });
+        const msgLower = msg.toLowerCase();
+        // tsdav surfaces a 401 either explicitly in the message, or implicitly:
+        // when Baikal rejects credentials it returns a 401 error page that has no
+        // DAV properties, so tsdav throws "cannot find principalUrl" instead of a
+        // proper 401 error. Treat that the same as a credential failure.
+        if (
+          msg.includes('401') ||
+          msgLower.includes('unauthorized') ||
+          msgLower.includes('principalurl') ||
+          msgLower.includes('not authenticated')
+        ) {
+          return reply.status(401).send({ error: 'Incorrect username or password.', statusCode: 401 });
         }
         app.log.error({ err: e }, 'DAV discovery failed');
         // ECONNREFUSED / ENOTFOUND → server is not reachable at all.
@@ -46,8 +55,7 @@ export async function authRoutes(
           ('code' in e
             ? (e as NodeJS.ErrnoException).code === 'ECONNREFUSED' ||
               (e as NodeJS.ErrnoException).code === 'ENOTFOUND'
-            : msg.toLowerCase().includes('econnrefused') ||
-              msg.toLowerCase().includes('enotfound'));
+            : msgLower.includes('econnrefused') || msgLower.includes('enotfound'));
         const errorText = isNetworkError
           ? 'Could not reach the Baikal server — check BAIKAL_BASE_URL and that Baikal is running'
           : 'Baikal responded unexpectedly — make sure the Baikal admin setup wizard has been completed';
