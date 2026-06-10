@@ -523,7 +523,11 @@ export default function CalendarPage() {
         setEditModal(null);
         return;
       }
-      updateMutation.mutate({ ev, data, scope });
+      // scope=all: the form's initial data had recurrenceId stripped (to enable
+      // the RecurrenceEditor), but the backend needs the clicked occurrence's
+      // original start to compute the time shift to apply to the master.
+      const payload = scope === 'all' ? { ...data, recurrenceId: ev.data.recurrenceId } : data;
+      updateMutation.mutate({ ev, data: payload, scope });
     } else {
       createMutation.mutate({ calId: data.calendarId || editModal?.calendarId || '', data });
     }

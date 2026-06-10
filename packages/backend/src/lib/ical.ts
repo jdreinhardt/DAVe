@@ -519,9 +519,12 @@ export function truncateRrule(rawIcs: string, beforeIso: string, allDay: boolean
  * Used for scope="all" edits.
  *
  * IMPORTANT: `event` carries times from whichever occurrence the user clicked,
- * not from the master. We must preserve the master's original DTSTART date so
- * earlier occurrences are not cut off. We do apply the user's duration change
- * (e.g. 1-hour → 2-hour events) by computing DTEND = original DTSTART + Δ.
+ * not from the master. Replacing DTSTART with the occurrence's date would
+ * silently delete all earlier occurrences, so the new DTSTART is the master's
+ * original start shifted by the user's edit: `event.recurrenceId` holds the
+ * clicked occurrence's original start, so (start − recurrenceId) is exactly
+ * the time/date change the user made (zero when only other fields changed).
+ * Duration changes are carried over via DTEND = new DTSTART + (end − start).
  */
 export function updateMasterVevent(rawIcs: string, event: EventJson): string {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -552,25 +555,40 @@ export function updateMasterVevent(rawIcs: string, event: EventJson): string {
     if (origDtstartVal) {
       if (event.allDay) {
         const origDateStr = icaltimeToDateString(origDtstartVal);
-        // Preserve original start date; carry over duration (in days).
         const durationDays = Math.round(
           (new Date(event.end + 'T00:00:00Z').getTime() -
            new Date(event.start + 'T00:00:00Z').getTime()) / 86_400_000,
         );
-        const endD = new Date(origDateStr + 'T00:00:00Z');
+        // Shift the original date by the user's edit (occurrence date → new date).
+        const deltaDays = event.recurrenceId
+          ? Math.round(
+              (new Date(event.start.substring(0, 10) + 'T00:00:00Z').getTime() -
+               new Date(event.recurrenceId.substring(0, 10) + 'T00:00:00Z').getTime()) / 86_400_000,
+            )
+          : 0;
+        const startD = new Date(origDateStr + 'T00:00:00Z');
+        startD.setUTCDate(startD.getUTCDate() + deltaDays);
+        const endD = new Date(startD);
         endD.setUTCDate(endD.getUTCDate() + durationDays);
         anchoredEvent = {
           ...anchoredEvent,
-          start: origDateStr,
+          start: startD.toISOString().substring(0, 10),
           end: endD.toISOString().substring(0, 10),
         };
       } else {
-        // Preserve original UTC instant; carry over duration (in ms).
-        const origStartIso: string = origDtstartVal.toJSDate().toISOString();
+        // Shift the original instant by the user's edit; carry over duration (in ms).
+        const origStartMs: number = origDtstartVal.toJSDate().getTime();
+        const deltaMs = event.recurrenceId
+          ? new Date(event.start).getTime() - new Date(event.recurrenceId).getTime()
+          : 0;
         const durationMs =
           new Date(event.end).getTime() - new Date(event.start).getTime();
-        const newEndIso = new Date(new Date(origStartIso).getTime() + durationMs).toISOString();
-        anchoredEvent = { ...anchoredEvent, start: origStartIso, end: newEndIso };
+        const newStartMs = origStartMs + deltaMs;
+        anchoredEvent = {
+          ...anchoredEvent,
+          start: new Date(newStartMs).toISOString(),
+          end: new Date(newStartMs + durationMs).toISOString(),
+        };
       }
     }
   }

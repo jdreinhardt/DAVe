@@ -575,7 +575,7 @@ export async function moveEvent(
     // Fetch raw from old calendar, rewrite master VEVENT, PUT to new calendar, then DELETE old.
     const masterData: EventJson = { ...data, calendarId: newCalendarId, recurrenceId: null };
     const { raw, etag: freshEtag } = await fetchRawEvent(session, oldCalendarId, id);
-    const updatedIcs = updateMasterVevent(raw, masterData);
+    const updatedIcs = updateMasterVevent(raw, { ...data, calendarId: newCalendarId });
     const newUrl = calendarObjectUrl(session, newCalendarId, id);
     const putRes = await davFetch(newUrl, {
       method: 'PUT',
@@ -701,9 +701,11 @@ export async function updateEventScoped(
   if (scope === 'all') {
     // Fetch the raw ICS so we can preserve existing exception VEVENTs (unless
     // the RRULE changes, in which case updateMasterVevent clears them).
+    // Keep data.recurrenceId — updateMasterVevent needs the occurrence's
+    // original start to compute the time shift the user made.
     const masterData: EventJson = { ...data, recurrenceId: null };
     const { raw, etag: freshEtag } = await fetchRawEvent(session, calendarId, id);
-    const updatedIcs = updateMasterVevent(raw, masterData);
+    const updatedIcs = updateMasterVevent(raw, data);
     const newEtag = await putRawIcs(session, url, updatedIcs, freshEtag);
     return { id, url, etag: newEtag, calendarId, data: masterData };
   }

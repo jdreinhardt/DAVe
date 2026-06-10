@@ -221,6 +221,76 @@ describe('updateMasterVevent', () => {
     expect(result).toContain('DTSTART:20240101T090000Z');
   });
 
+  it('applies a time-of-day change to the whole series, anchored to the master date', () => {
+    const event: EventJson = {
+      uid: 'master-1',
+      summary: 'Daily Standup',
+      description: '',
+      location: '',
+      // User clicked the Jan 3 occurrence (originally 09:00) and moved it to 11:00.
+      start: '2024-01-03T11:00:00.000Z',
+      end: '2024-01-03T11:30:00.000Z',
+      allDay: false,
+      tzid: null,
+      recurrenceRule: { freq: 'DAILY', raw: 'FREQ=DAILY' },
+      recurrenceId: '2024-01-03T09:00:00.000Z',
+      alarms: [],
+      attendees: [],
+      calendarId: CAL_ID,
+      color: null,
+    };
+
+    const result = updateMasterVevent(recurringIcs(), event);
+    // Master keeps its Jan 1 date but picks up the new 11:00 time.
+    expect(result).toContain('DTSTART:20240101T110000Z');
+    expect(result).toContain('DTEND:20240101T113000Z');
+    const events = parseIcalEvents(result, CAL_ID, '2024-01-01T00:00:00Z', '2024-01-05T00:00:00Z');
+    expect(events.map((e) => e.start)).toEqual([
+      '2024-01-01T11:00:00.000Z',
+      '2024-01-02T11:00:00.000Z',
+      '2024-01-03T11:00:00.000Z',
+      '2024-01-04T11:00:00.000Z',
+    ]);
+  });
+
+  it('shifts an all-day series when the occurrence date is moved', () => {
+    const allDayIcs = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//test//EN',
+      'BEGIN:VEVENT',
+      'UID:allday-1',
+      'SUMMARY:Weekly All-Day',
+      'DTSTART;VALUE=DATE:20240101',
+      'DTEND;VALUE=DATE:20240102',
+      'RRULE:FREQ=WEEKLY',
+      'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+
+    const event: EventJson = {
+      uid: 'allday-1',
+      summary: 'Weekly All-Day',
+      description: '',
+      location: '',
+      // User moved the Jan 8 occurrence one day later, to Jan 9.
+      start: '2024-01-09',
+      end: '2024-01-10',
+      allDay: true,
+      tzid: null,
+      recurrenceRule: { freq: 'WEEKLY', raw: 'FREQ=WEEKLY' },
+      recurrenceId: '2024-01-08',
+      alarms: [],
+      attendees: [],
+      calendarId: CAL_ID,
+      color: null,
+    };
+
+    const result = updateMasterVevent(allDayIcs, event);
+    // Master shifts from Jan 1 to Jan 2; series cadence preserved.
+    expect(result).toContain('DTSTART;VALUE=DATE:20240102');
+  });
+
   it('clears exception VEVENTs when RRULE changes', () => {
     const withException = [
       'BEGIN:VCALENDAR',
