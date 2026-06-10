@@ -6,6 +6,9 @@ A self-hosted web client for [Baikal](https://sabre.io/baikal/) (CalDAV + CardDA
 **DAV:** [tsdav](https://github.com/natelindev/tsdav) · [ical.js](https://github.com/kewisch/ical.js)
 
 ---
+![calendar](docs/images/calendar.png)
+
+---
 
 ## Features
 
