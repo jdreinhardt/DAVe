@@ -344,7 +344,7 @@ export async function tasksRoutes(
 
       let result;
       try {
-        result = await davRestoreArchivedTask(session, objectUrl, collectionUrl, etag);
+        result = await davRestoreArchivedTask(session, objectUrl, collectionUrl, etag, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
         if (e.statusCode === 412) {
@@ -512,7 +512,7 @@ export async function tasksRoutes(
 
       let result;
       try {
-        result = await davCreateTask(session, data.collectionUrl, taskData);
+        result = await davCreateTask(session, data.collectionUrl, taskData, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
         if (e.statusCode === 409) {
@@ -583,7 +583,7 @@ export async function tasksRoutes(
             alarms: [],             // no alarms needed on a completed copy
           };
           try {
-            const copyResult = await davCreateTask(session, completedCopy.collectionUrl, completedCopy);
+            const copyResult = await davCreateTask(session, completedCopy.collectionUrl, completedCopy, config);
             // Upsert into local cache immediately so the copy appears in the
             // next GET without waiting for a background sync.
             const copyParsed = parseEntry(
@@ -612,7 +612,7 @@ export async function tasksRoutes(
         if (isMove) {
           // Move = delete from old collection + create in new.
           await davDeleteTask(session, existing.object_url, etag);
-          result = await davCreateTask(session, data.collectionUrl, taskData);
+          result = await davCreateTask(session, data.collectionUrl, taskData, config);
         } else {
           result = await davUpdateTask(
             session,
@@ -655,7 +655,7 @@ export async function tasksRoutes(
           if (!childRow?.raw_ics) continue;
 
           try {
-            const newChild = await createTaskRaw(session, data.collectionUrl, childUid, childRow.raw_ics);
+            const newChild = await createTaskRaw(session, data.collectionUrl, childUid, childRow.raw_ics, config);
             await davDeleteTask(session, childRow.object_url, childRow.etag);
             const childParsed = parseEntry(childRow.raw_ics, newChild.url, data.collectionUrl, session.username, newChild.etag);
             if (childParsed) {

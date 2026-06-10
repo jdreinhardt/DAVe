@@ -256,6 +256,29 @@ function basicAuthHeader(session: SessionData): Record<string, string> {
   return _getBasicAuthHeaders({ username: session.username, password: session.password });
 }
 
+/**
+ * Guard against SSRF: client-supplied collection/object URLs are fetched
+ * directly (raw PUT/GET) with the user's Baikal credentials attached, so we
+ * must confirm they point at the configured Baikal server. Reject anything
+ * whose scheme/host/port differs from BAIKAL_BASE_URL — otherwise an
+ * authenticated user could redirect the request (and the Authorization header)
+ * to an arbitrary internal or external host.
+ */
+function assertBaikalOrigin(targetUrl: string, config: Config): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    throw Object.assign(new Error('Invalid target URL'), { statusCode: 400 });
+  }
+  const base = new URL(config.BAIKAL_BASE_URL);
+  if (parsed.origin !== base.origin) {
+    throw Object.assign(new Error('Target URL host is not the configured Baikal server'), {
+      statusCode: 400,
+    });
+  }
+}
+
 export interface ContactWriteResult {
   id: string;
   url: string;
@@ -1126,7 +1149,9 @@ export async function createTask(
   session: SessionData,
   collectionUrl: string,
   data: TaskJson,
+  config: Config,
 ): Promise<TaskWriteResult> {
+  assertBaikalOrigin(collectionUrl, config);
   const uid = data.uid || crypto.randomUUID();
   const taskData: TaskJson = { ...data, uid };
   const icsStr = serializeIcalTask(taskData);
@@ -1140,6 +1165,9 @@ export async function createTask(
       'If-None-Match': '*',
     },
     body: icsStr,
+    // Never follow a redirect off the validated Baikal origin — it could carry
+    // the Authorization header to another host. Treat any redirect as an error.
+    redirect: 'error',
   });
 
   if (!res.ok) {
@@ -1320,11 +1348,13 @@ export async function restoreArchivedTask(
   objectUrl: string,
   collectionUrl: string,
   etag: string,
+  config: Config,
 ): Promise<TaskWriteResult> {
+  assertBaikalOrigin(objectUrl, config);
   const authHeaders = basicAuthHeader(session);
 
   // Fetch latest ICS (in case it changed since the search was run)
-  const getRes = await fetch(objectUrl, { headers: authHeaders });
+  const getRes = await fetch(objectUrl, { headers: authHeaders, redirect: 'error' });
   if (!getRes.ok) {
     throw Object.assign(new Error(`GET failed: ${getRes.status}`), { statusCode: getRes.status });
   }
@@ -1341,6 +1371,7 @@ export async function restoreArchivedTask(
       'If-Match': currentEtag,
     },
     body: restoredIcs,
+    redirect: 'error',
   });
 
   if (!putRes.ok) {
@@ -1371,7 +1402,9 @@ export async function createJournal(
   session: SessionData,
   collectionUrl: string,
   data: NoteJson,
+  config: Config,
 ): Promise<JournalWriteResult> {
+  assertBaikalOrigin(collectionUrl, config);
   const uid = data.uid || crypto.randomUUID();
   const entryData: NoteJson = { ...data, uid };
   const icsStr = serializeIcalJournal(entryData);
@@ -1385,6 +1418,7 @@ export async function createJournal(
       'If-None-Match': '*',
     },
     body: icsStr,
+    redirect: 'error',
   });
 
   if (!res.ok) {
@@ -1450,7 +1484,9 @@ export async function createTaskRaw(
   collectionUrl: string,
   uid: string,
   rawIcs: string,
+  config: Config,
 ): Promise<{ url: string; etag: string; collectionUrl: string }> {
+  assertBaikalOrigin(collectionUrl, config);
   const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
   const res = await fetch(url, {
     method: 'PUT',
@@ -1460,6 +1496,7 @@ export async function createTaskRaw(
       'If-None-Match': '*',
     },
     body: rawIcs,
+    redirect: 'error',
   });
 
   if (!res.ok) {

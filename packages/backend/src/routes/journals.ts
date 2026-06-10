@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { CacheDbInstance } from '../db/cache.js';
+import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
 import type {
   NoteJson,
@@ -131,9 +132,9 @@ function buildJournalsQuery(
 
 export async function journalsRoutes(
   app: FastifyInstance,
-  opts: { cacheDb: CacheDbInstance },
+  opts: { cacheDb: CacheDbInstance; config: Config },
 ) {
-  const { cacheDb } = opts;
+  const { cacheDb, config } = opts;
 
   // ── GET /api/journals ───────────────────────────────────────────────────────
 
@@ -253,7 +254,7 @@ export async function journalsRoutes(
 
       let result;
       try {
-        result = await davCreateJournal(session, data.collectionUrl, journalData);
+        result = await davCreateJournal(session, data.collectionUrl, journalData, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
         if (e.statusCode === 409) {
@@ -314,7 +315,7 @@ export async function journalsRoutes(
       try {
         if (isMove) {
           await davDeleteJournal(session, existing.object_url, etag);
-          result = await davCreateJournal(session, data.collectionUrl, entryData);
+          result = await davCreateJournal(session, data.collectionUrl, entryData, config);
         } else {
           result = await davUpdateJournal(
             session,

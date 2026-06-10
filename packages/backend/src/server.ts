@@ -58,8 +58,8 @@ await app.register(contactsRoutes, { config, db });
 await app.register(eventsRoutes, { config, db });
 await app.register(syncRoutes, { config, db, cacheDb, syncWorker });
 await app.register(tasksRoutes, { cacheDb, config });
-await app.register(notesRoutes, { cacheDb });
-await app.register(journalsRoutes, { cacheDb });
+await app.register(notesRoutes, { cacheDb, config });
+await app.register(journalsRoutes, { cacheDb, config });
 await app.register(settingsRoutes, { db });
 await app.register(searchRoutes, { cacheDb, config });
 
