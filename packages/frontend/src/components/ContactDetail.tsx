@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Mail, MessageSquare, Phone, MapPin, Globe, Cake, StickyNote, Tag, User } from 'lucide-react';
 import type { Contact, VCardAddress } from '@dave/shared';
 import { useSettings } from '../contexts/Settings';
@@ -12,6 +13,7 @@ interface ContactDetailProps {
 export default function ContactDetail({ contact, addressBookColor }: ContactDetailProps) {
   const { data } = contact;
   const { mapService } = useSettings();
+  const [openPhonePopup, setOpenPhonePopup] = useState<number | null>(null);
 
   const displayName =
     data.fullName ||
@@ -40,25 +42,50 @@ export default function ContactDetail({ contact, addressBookColor }: ContactDeta
       {/* Phones */}
       {data.phones.length > 0 && (
         <Section icon={<Phone className="h-4 w-4" />} title="Phone">
-          {data.phones.map((p, i) => (
-            <FieldRow key={i} label={typeLabel(p.types, 'Phone')} preferred={p.preferred}>
-              <span className="flex items-center gap-2">
-                <a href={`tel:${p.value}`} className="text-primary hover:underline">
-                  {p.value}
-                </a>
-                {p.types.some((t) => t === 'CELL' || t === 'MOBILE') && (
-                  <a
-                    href={`sms:${p.value}`}
-                    className="text-muted-foreground hover:text-primary"
-                    title="Send SMS"
-                    aria-label="Send SMS"
-                  >
-                    <MessageSquare className="h-4 w-4" />
+          {data.phones.map((p, i) => {
+            const isMobile = p.types.some((t) => t === 'CELL' || t === 'MOBILE');
+            return (
+              <FieldRow key={i} label={typeLabel(p.types, 'Phone')} preferred={p.preferred}>
+                {isMobile ? (
+                  <div className="relative inline-block">
+                    <button
+                      onClick={() => setOpenPhonePopup(openPhonePopup === i ? null : i)}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      {p.value}
+                    </button>
+                    {openPhonePopup === i && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setOpenPhonePopup(null)} />
+                        <div className="absolute left-0 top-full mt-1 z-20 w-36 rounded-md border border-border bg-background shadow-lg py-1">
+                          <a
+                            href={`tel:${p.value}`}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
+                            onClick={() => setOpenPhonePopup(null)}
+                          >
+                            <Phone className="h-4 w-4 text-muted-foreground" />
+                            Call
+                          </a>
+                          <a
+                            href={`sms:${p.value}`}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted"
+                            onClick={() => setOpenPhonePopup(null)}
+                          >
+                            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                            Message
+                          </a>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <a href={`tel:${p.value}`} className="text-sm text-primary hover:underline">
+                    {p.value}
                   </a>
                 )}
-              </span>
-            </FieldRow>
-          ))}
+              </FieldRow>
+            );
+          })}
         </Section>
       )}
 
