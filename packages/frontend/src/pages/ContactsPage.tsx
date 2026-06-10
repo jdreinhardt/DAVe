@@ -808,7 +808,7 @@ export default function ContactsPage() {
                         handleExport(ab, [selectedContact.id], `${name}.vcf`);
                       }
                     }}
-                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                    className="md:ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
                   >
                     <Download className="h-3.5 w-3.5" /> Export
                   </button>

@@ -1,4 +1,4 @@
-import { Mail, Phone, MapPin, Globe, Cake, StickyNote, Tag, User } from 'lucide-react';
+import { Mail, MessageSquare, Phone, MapPin, Globe, Cake, StickyNote, Tag, User } from 'lucide-react';
 import type { Contact, VCardAddress } from '@dave/shared';
 import { useSettings } from '../contexts/Settings';
 import type { MapService } from '../contexts/Settings';
@@ -42,12 +42,21 @@ export default function ContactDetail({ contact, addressBookColor }: ContactDeta
         <Section icon={<Phone className="h-4 w-4" />} title="Phone">
           {data.phones.map((p, i) => (
             <FieldRow key={i} label={typeLabel(p.types, 'Phone')} preferred={p.preferred}>
-              <a
-                href={`tel:${p.value}`}
-                className="text-primary hover:underline"
-              >
-                {p.value}
-              </a>
+              <span className="flex items-center gap-2">
+                <a href={`tel:${p.value}`} className="text-primary hover:underline">
+                  {p.value}
+                </a>
+                {p.types.some((t) => t === 'CELL' || t === 'MOBILE') && (
+                  <a
+                    href={`sms:${p.value}`}
+                    className="text-muted-foreground hover:text-primary"
+                    title="Send SMS"
+                    aria-label="Send SMS"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                  </a>
+                )}
+              </span>
             </FieldRow>
           ))}
         </Section>
