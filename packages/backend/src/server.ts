@@ -61,7 +61,7 @@ await app.register(fastifyCookie);
 // proxy this is the X-Forwarded-For address only when TRUST_PROXY is enabled.
 await app.register(fastifyRateLimit, {
   global: true,
-  max: 300,
+  max: 1000,
   timeWindow: '1 minute',
 });
 
