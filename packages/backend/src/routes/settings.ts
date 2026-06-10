@@ -1,4 +1,8 @@
 import type { FastifyInstance } from 'fastify';
+import {
+  SORT_BY, SORT_DIR, CONTACT_SUBTITLE_FIELDS, MAP_SERVICES,
+  DARK_MODES, TASK_LAYOUTS, NOTES_VIEWS, JOURNALS_VIEWS,
+} from '@dave/shared';
 import type { DbInstance } from '../db/index.js';
 import { requireAuth } from '../plugins/session.js';
 
@@ -61,15 +65,17 @@ export async function settingsRoutes(
       body: {
         type: 'object',
         additionalProperties: false,
+        // enums come from @dave/shared so they can't drift from the frontend
+        // types. Spread into a mutable array — the shared consts are readonly.
         properties: {
-          contactSortBy:   { type: 'string', enum: ['first', 'last'] },
-          contactSortDir:  { type: 'string', enum: ['asc', 'desc'] },
-          contactSubtitle: { type: 'string', enum: ['nickname', 'email', 'phone', 'organization', 'title', ''] },
-          mapService:      { type: 'string', enum: ['osm', 'google', 'apple'] },
-          darkMode:        { type: 'string', enum: ['light', 'dark', 'system'] },
-          taskLayout:      { type: 'string', enum: ['list', 'compact', 'kanban'] },
-          notesView:       { type: 'string', enum: ['list', 'grid'] },
-          journalsView:    { type: 'string', enum: ['timeline', 'list', 'calendar'] },
+          contactSortBy:   { type: 'string', enum: [...SORT_BY] },
+          contactSortDir:  { type: 'string', enum: [...SORT_DIR] },
+          contactSubtitle: { type: 'string', enum: [...CONTACT_SUBTITLE_FIELDS] },
+          mapService:      { type: 'string', enum: [...MAP_SERVICES] },
+          darkMode:        { type: 'string', enum: [...DARK_MODES] },
+          taskLayout:      { type: 'string', enum: [...TASK_LAYOUTS] },
+          notesView:       { type: 'string', enum: [...NOTES_VIEWS] },
+          journalsView:    { type: 'string', enum: [...JOURNALS_VIEWS] },
           updatedAt:       { type: 'integer', minimum: 0 },
         },
       },

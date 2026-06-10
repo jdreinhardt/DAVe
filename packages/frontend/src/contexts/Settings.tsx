@@ -1,15 +1,22 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import {
+  SORT_BY, SORT_DIR, CONTACT_SUBTITLE_FIELDS, MAP_SERVICES,
+  DARK_MODES, TASK_LAYOUTS, NOTES_VIEWS, JOURNALS_VIEWS,
+} from '@dave/shared';
 import { fetchServerSettings, pushServerSettings } from '../api/settings.js';
 import type { ServerSettings } from '../api/settings.js';
 
-export type SortBy = 'first' | 'last';
-export type SortDir = 'asc' | 'desc';
-export type ContactSubtitleField = 'nickname' | 'email' | 'phone' | 'organization' | 'title' | '';
-export type MapService = 'osm' | 'google' | 'apple';
-export type DarkMode = 'light' | 'dark' | 'system';
-export type TaskLayout = 'list' | 'compact' | 'kanban';
-export type NotesView = 'list' | 'grid';
-export type JournalsView = 'timeline' | 'list' | 'calendar';
+// Setting value types now live in @dave/shared so the backend validation and
+// these types share one definition. Re-exported here so existing
+// `import { MapService } from '../contexts/Settings'` call sites keep working.
+export type {
+  SortBy, SortDir, ContactSubtitleField, MapService,
+  DarkMode, TaskLayout, NotesView, JournalsView,
+} from '@dave/shared';
+import type {
+  SortBy, SortDir, ContactSubtitleField, MapService,
+  DarkMode, TaskLayout, NotesView, JournalsView,
+} from '@dave/shared';
 
 export interface ContactSortSettings {
   sortBy: SortBy;
@@ -42,12 +49,14 @@ const NOTES_VIEW_KEY   = 'dave:settings:notesDefaultView';
 const JOURNALS_VIEW_KEY = 'dave:settings:journalsDefaultView';
 const UPDATED_AT_KEY   = 'dave:settings:updatedAt';
 
-const VALID_SUBTITLE_FIELDS: ContactSubtitleField[] = ['nickname', 'email', 'phone', 'organization', 'title', ''];
-const VALID_MAP_SERVICES: MapService[] = ['osm', 'google', 'apple'];
-const VALID_DARK_MODES: DarkMode[] = ['light', 'dark', 'system'];
-const VALID_TASK_LAYOUTS: TaskLayout[] = ['list', 'compact', 'kanban'];
-const VALID_NOTES_VIEWS: NotesView[] = ['list', 'grid'];
-const VALID_JOURNALS_VIEWS: JournalsView[] = ['timeline', 'list', 'calendar'];
+// Aliases to the shared value sets (kept under the original names so the
+// load*/validate call sites below read unchanged).
+const VALID_SUBTITLE_FIELDS = CONTACT_SUBTITLE_FIELDS;
+const VALID_MAP_SERVICES = MAP_SERVICES;
+const VALID_DARK_MODES = DARK_MODES;
+const VALID_TASK_LAYOUTS = TASK_LAYOUTS;
+const VALID_NOTES_VIEWS = NOTES_VIEWS;
+const VALID_JOURNALS_VIEWS = JOURNALS_VIEWS;
 
 // ── localStorage helpers ───────────────────────────────────────────────────────
 
@@ -140,7 +149,7 @@ function readAllFromStorage(): Omit<ServerSettings, 'updatedAt'> {
   };
 }
 
-function validateOr<T extends string>(val: string, valid: T[], fallback: T): T {
+function validateOr<T extends string>(val: string, valid: readonly T[], fallback: T): T {
   return valid.includes(val as T) ? (val as T) : fallback;
 }
 
@@ -228,8 +237,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
   const applyFromServer = useCallback((server: ServerSettings) => {
     const sort: ContactSortSettings = {
-      sortBy:  validateOr(server.contactSortBy,  ['first', 'last'] as SortBy[], 'last'),
-      sortDir: validateOr(server.contactSortDir, ['asc', 'desc'] as SortDir[], 'asc'),
+      sortBy:  validateOr(server.contactSortBy,  SORT_BY, 'last'),
+      sortDir: validateOr(server.contactSortDir, SORT_DIR, 'asc'),
     };
     setContactSort(sort);
     try { localStorage.setItem(SORT_KEY, JSON.stringify(sort)); } catch { /* ignore */ }
