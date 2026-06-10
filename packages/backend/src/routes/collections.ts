@@ -61,7 +61,7 @@ export async function collectionsRoutes(
 
   app.get('/api/addressbooks', { preHandler: requireAuth }, async (req, reply) => {
     try {
-      const books = await listAddressBooks(req.sessionData!, config);
+      const books = await listAddressBooks(req.sessionData!, config, db);
       return reply.send(books as AddressBook[]);
     } catch (e) {
       await handleDavError(e, req, reply, app, db);
@@ -119,7 +119,7 @@ export async function collectionsRoutes(
       }
       try {
         await createAddressBook(req.sessionData!, { displayName: displayName.trim(), description }, config);
-        const books = await listAddressBooks(req.sessionData!, config);
+        const books = await listAddressBooks(req.sessionData!, config, db);
         return reply.status(201).send(books as AddressBook[]);
       } catch (e) {
         await handleDavError(e, req, reply, app, db);
@@ -131,13 +131,29 @@ export async function collectionsRoutes(
     '/api/addressbooks/:id',
     { preHandler: requireAuth },
     async (req, reply) => {
-      const { displayName, description } = req.body ?? {};
+      const { displayName, description, color } = req.body ?? {};
       if (!displayName?.trim()) {
         return reply.status(400).send({ error: 'displayName is required', statusCode: 400 });
       }
       try {
         await updateAddressBook(req.sessionData!, req.params.id, { displayName: displayName.trim(), description }, config);
-        const books = await listAddressBooks(req.sessionData!, config);
+
+        if ('color' in (req.body ?? {})) {
+          const username = req.sessionData!.username;
+          const abId = req.params.id;
+          if (color === null) {
+            // Reset to auto — remove any stored preference
+            db.prepare('DELETE FROM address_book_colors WHERE username = ? AND address_book_id = ?')
+              .run(username, abId);
+          } else if (typeof color === 'string') {
+            // 'none' or a custom hex — store it
+            db.prepare(
+              'INSERT OR REPLACE INTO address_book_colors (username, address_book_id, color) VALUES (?, ?, ?)',
+            ).run(username, abId, color);
+          }
+        }
+
+        const books = await listAddressBooks(req.sessionData!, config, db);
         return reply.send(books as AddressBook[]);
       } catch (e) {
         await handleDavError(e, req, reply, app, db);
@@ -151,6 +167,8 @@ export async function collectionsRoutes(
     async (req, reply) => {
       try {
         await deleteAddressBook(req.sessionData!, req.params.id, config);
+        db.prepare('DELETE FROM address_book_colors WHERE username = ? AND address_book_id = ?')
+          .run(req.sessionData!.username, req.params.id);
         return reply.status(204).send();
       } catch (e) {
         await handleDavError(e, req, reply, app, db);

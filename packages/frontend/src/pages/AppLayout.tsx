@@ -5,8 +5,10 @@ import { Menu } from 'lucide-react';
 import { getMe } from '../api/auth';
 import { ApiError } from '../api/client';
 import Sidebar from '../components/Sidebar';
+import GlobalSearchModal from '../components/GlobalSearchModal';
 import { CollectionVisibilityProvider } from '../contexts/CollectionVisibility';
 import { ContactDragProvider } from '../contexts/ContactDrag';
+import { NoteDragProvider } from '../contexts/NoteDrag';
 import { SettingsProvider } from '../contexts/Settings';
 import { useSyncCollections } from '../hooks/useSyncCollections';
 
@@ -27,14 +29,35 @@ export default function AppLayout() {
   });
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const { pathname } = useLocation();
+
+  // Cmd+K / Ctrl+K opens global search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setSearchOpen((o) => !o);
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
 
   // Close drawer on navigation
   useEffect(() => {
     setSidebarOpen(false);
   }, [pathname]);
 
-  const pageTitle = pathname.startsWith('/contacts') ? 'Contacts' : 'Calendar';
+  const pageTitle = pathname.startsWith('/contacts')
+    ? 'Contacts'
+    : pathname.startsWith('/tasks')
+      ? 'Tasks'
+      : pathname.startsWith('/notes')
+        ? 'Notes'
+        : pathname.startsWith('/journals')
+          ? 'Journals'
+          : 'Calendar';
 
   if (meQuery.isLoading) {
     return (
@@ -52,13 +75,16 @@ export default function AppLayout() {
     <SettingsProvider>
       <CollectionVisibilityProvider>
         <ContactDragProvider>
+          <NoteDragProvider>
           <SyncPoller />
           <div className="flex h-screen overflow-hidden bg-background">
             <Sidebar
               me={meQuery.data!}
               isOpen={sidebarOpen}
               onClose={() => setSidebarOpen(false)}
+              onOpenSearch={() => setSearchOpen(true)}
             />
+            <GlobalSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
             <div className="flex-1 flex flex-col overflow-hidden min-w-0">
               {/* Mobile-only header */}
               <header className="md:hidden flex items-center gap-3 px-4 py-3 border-b border-border bg-card shrink-0">
@@ -76,6 +102,7 @@ export default function AppLayout() {
               </main>
             </div>
           </div>
+          </NoteDragProvider>
         </ContactDragProvider>
       </CollectionVisibilityProvider>
     </SettingsProvider>

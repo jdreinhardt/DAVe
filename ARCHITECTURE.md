@@ -52,8 +52,8 @@ config.ts        Zod-validated environment variables
 Sessions are stored in a local SQLite database (not in Baikal). On login:
 
 1. The backend makes a PROPFIND to Baikal with the supplied credentials to verify they work.
-2. If successful, the credentials are encrypted with AES-256-GCM (key derived from `SESSION_SECRET` via SHA-256) and stored in the `sessions` table alongside a random session ID.
-3. The session ID is set as an `HttpOnly; SameSite=Strict` cookie.
+2. If successful, the credentials are encrypted with AES-256-GCM (key derived from `SESSION_SECRET` via HKDF-SHA256 with a random per-record salt) and stored in the `sessions` table alongside a random session ID.
+3. The session ID is set as an `HttpOnly; SameSite=Lax` cookie (also `Secure` when `TRUST_PROXY=1`).
 
 On each authenticated request, the session plugin decrypts the stored credentials and creates a fresh `tsdav` client scoped to that request. Sessions use a sliding TTL (`SESSION_TTL_HOURS`, default 7 days) updated on every authenticated request.
 

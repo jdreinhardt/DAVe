@@ -44,3 +44,11 @@ export async function apiPost<T>(url: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
 }
+
+export function buildQueryString(params: object): string {
+  const q = new URLSearchParams();
+  for (const [key, val] of Object.entries(params)) {
+    if (val !== undefined && val !== '') q.set(key, String(val));
+  }
+  return q.toString();
+}

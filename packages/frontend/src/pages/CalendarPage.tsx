@@ -1,5 +1,6 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -18,21 +19,9 @@ import {
 import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useSettings } from '../contexts/Settings';
-import type { MapService } from '../contexts/Settings';
-import { cn } from '../lib/utils';
+import { cn, buildMapUrl } from '../lib/utils';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
 import { useHotkey } from '../hooks/useHotkey';
-
-// ── Map helpers ───────────────────────────────────────────────────────────────
-
-function buildMapUrl(location: string, service: MapService): string {
-  const q = encodeURIComponent(location);
-  switch (service) {
-    case 'google': return `https://www.google.com/maps/search/?api=1&query=${q}`;
-    case 'apple':  return `https://maps.apple.com/?q=${q}`;
-    default:       return `https://www.openstreetmap.org/search?query=${q}`;
-  }
-}
 
 function formatAlarmTrigger(trigger: string): string {
   const negative = trigger.startsWith('-');
@@ -219,6 +208,11 @@ export default function CalendarPage() {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
+  const location = useLocation();
+  const navigate = useNavigate();
+  const calRef = useRef<FullCalendar>(null);
+  const [pendingSelectEventId, setPendingSelectEventId] = useState<string | null>(null);
+
   const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
   const [popup, setPopup] = useState<PopupData | null>(null);
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
@@ -234,6 +228,16 @@ export default function CalendarPage() {
     pendingData?: EventJson;
     revert?: () => void;
   } | null>(null);
+
+  // Capture event selection from global search; navigate calendar to target date.
+  useEffect(() => {
+    const state = location.state as { selectEventId?: string; eventStart?: string } | null;
+    if (!state?.selectEventId) return;
+    setPendingSelectEventId(state.selectEventId);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+    if (state.eventStart) calRef.current?.getApi().gotoDate(state.eventStart);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
 
   const calQuery = useQuery({
     queryKey: ['calendars'],
@@ -279,11 +283,15 @@ export default function CalendarPage() {
 
   const updateMutation = useMutation({
     mutationFn: ({ ev, data, scope }: { ev: CalendarEvent; data: EventJson; scope?: RecurrenceScope }) =>
-      updateCalendarEvent(ev.id, data, ev.etag, scope),
-    onSuccess: (result) => {
+      updateCalendarEvent(ev.id, data, ev.etag, scope, ev.calendarId),
+    onSuccess: (result, { ev }) => {
       queryClient.invalidateQueries({ queryKey: ['events', result.calendarId] });
       if (result.continuation) {
         queryClient.invalidateQueries({ queryKey: ['events', result.continuation.calendarId] });
+      }
+      // When the event moved calendars, also flush the source calendar's cache.
+      if (ev.calendarId !== result.calendarId) {
+        queryClient.invalidateQueries({ queryKey: ['events', ev.calendarId] });
       }
       setEditModal(null);
       setPopup(null);
@@ -341,6 +349,21 @@ export default function CalendarPage() {
       showToast(errorMessage(e, true), 'err');
     },
   });
+
+  const allLoadedEvents = useMemo(
+    () => visibleCalendars.flatMap((cal, i) => (eventQueries[i]?.data ?? []).map((ev) => ({ cal, ev }))),
+    [eventQueries, visibleCalendars],
+  );
+  // Open popup for an event arriving from global search once the date's events are loaded.
+  useEffect(() => {
+    if (!pendingSelectEventId || allLoadedEvents.length === 0) return;
+    const match = allLoadedEvents.find(({ ev }) => ev.data.uid === pendingSelectEventId);
+    if (match) {
+      setPendingSelectEventId(null);
+      const calendar = visibleCalendars.find((c) => c.id === match.cal.id) ?? match.cal;
+      setPopup({ calendarEvent: match.ev, calendar });
+    }
+  }, [pendingSelectEventId, allLoadedEvents, visibleCalendars]);
 
   // ── FullCalendar event mapping ─────────────────────────────────────────────
 
@@ -558,6 +581,7 @@ export default function CalendarPage() {
 
       <div className="flex-1 overflow-hidden">
         <FullCalendar
+          ref={calRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
           initialView="dayGridMonth"
           headerToolbar={isMobile ? {

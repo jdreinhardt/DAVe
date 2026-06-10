@@ -41,19 +41,33 @@ describe('encrypt / decrypt', () => {
   });
 
   it('throws on malformed ciphertext (wrong number of parts)', () => {
-    expect(() => decrypt('not.a.valid.ciphertext.here', SECRET)).toThrow('Malformed ciphertext');
+    expect(() => decrypt('a.b.c.d.e', SECRET)).toThrow('Malformed ciphertext');
     expect(() => decrypt('onlyonepart', SECRET)).toThrow('Malformed ciphertext');
     expect(() => decrypt('two.parts', SECRET)).toThrow('Malformed ciphertext');
+    // Legacy unsalted 3-part format (iv.tag.data) is no longer accepted —
+    // stale sessions are dropped on read rather than decrypted.
+    expect(() => decrypt('aaa.bbb.ccc', SECRET)).toThrow('Malformed ciphertext');
+  });
+
+  it('produces the 4-part salt.iv.tag.data format', () => {
+    expect(encrypt('x', SECRET).split('.')).toHaveLength(4);
+  });
+
+  it('uses a distinct per-record salt each call', () => {
+    const salt1 = encrypt('same', SECRET).split('.')[0];
+    const salt2 = encrypt('same', SECRET).split('.')[0];
+    expect(salt1).not.toBe(salt2);
   });
 
   it('throws on tampered auth tag (GCM integrity check)', () => {
     const ct = encrypt('data', SECRET);
     const parts = ct.split('.');
-    // Flip the first character of the auth tag — first char is never padding so
-    // this always changes the decoded bytes and triggers GCM verification failure.
-    const tag = parts[1]!;
+    // Flip the first character of the auth tag (parts[2] in salt.iv.tag.data) —
+    // first char is never padding so this always changes the decoded bytes and
+    // triggers GCM verification failure.
+    const tag = parts[2]!;
     const flipped = (tag[0] === 'A' ? 'B' : 'A') + tag.slice(1);
-    const tampered = [parts[0], flipped, parts[2]].join('.');
+    const tampered = [parts[0], parts[1], flipped, parts[3]].join('.');
     expect(() => decrypt(tampered, SECRET)).toThrow();
   });
 });

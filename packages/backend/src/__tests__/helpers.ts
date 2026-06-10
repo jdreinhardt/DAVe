@@ -3,6 +3,8 @@ import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import type { DbInstance } from '../db/index.js';
+import type { CacheDbInstance } from '../db/cache.js';
+import { applySchema } from '../db/cache.js';
 import type { Config } from '../config.js';
 import sessionPlugin from '../plugins/session.js';
 
@@ -21,6 +23,11 @@ export const testConfig: Config = {
   TRUST_PROXY: false,
   NODE_ENV: 'test',
   DATA_DIR: '/tmp/test-dave',
+  SYNC_INTERVAL_SECONDS: 60,
+  MAX_CACHED_ENTRIES_PER_USER: 10000,
+  COMPLETED_TASK_RETENTION_DAYS: 7,
+  BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
+  EVENT_SEARCH_RANGE_DAYS: 60,
 };
 
 /** Create an in-memory SQLite DB with the sessions table schema. */
@@ -36,6 +43,13 @@ export function makeDb(): DbInstance {
     CREATE INDEX IF NOT EXISTS idx_sessions_last_activity
       ON sessions(last_activity_at);
   `);
+  return db;
+}
+
+/** Create an in-memory SQLite DB with the cache schema. */
+export function makeCacheDb(): CacheDbInstance {
+  const db = new DatabaseSync(':memory:');
+  applySchema(db);
   return db;
 }
 

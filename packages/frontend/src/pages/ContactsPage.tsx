@@ -1,4 +1,5 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine, GitMerge, ArrowLeft } from 'lucide-react';
 import type { AddressBook, Contact, ContactJson } from '@dave/shared';
@@ -25,6 +26,7 @@ import BulkEditModal, { applyBulkEdit } from '../components/BulkEditModal';
 import type { BulkEditConfig } from '../components/BulkEditModal';
 import MergeContactsModal, { mergeContactData } from '../components/MergeContactsModal';
 import { useHotkey } from '../hooks/useHotkey';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 // ── Sort / group helpers ──────────────────────────────────────────────────────
 
@@ -84,10 +86,21 @@ export default function ContactsPage() {
   const { startDrag, endDrag } = useContactDrag();
   const { contactSort } = useSettings();
 
+  const location = useLocation();
+  const navigate = useNavigate();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pendingSelectId, setPendingSelectId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [panel, setPanel] = useState<Panel>({ mode: 'empty' });
+
+  useEffect(() => {
+    const id = (location.state as { selectId?: string } | null)?.selectId;
+    if (!id) return;
+    setPendingSelectId(id);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location]);
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
   const [createAbId, setCreateAbId] = useState<string>('');
@@ -98,6 +111,43 @@ export default function ContactsPage() {
   const importFileRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const { hiddenAddressBooks } = useCollectionVisibility();
+
+  const isMobile = useIsMobile();
+
+  const LIST_MIN = 200;
+  const LIST_MAX = 500;
+  const [listWidth, setListWidth] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem('contacts.listWidth');
+      if (raw !== null) {
+        const n = JSON.parse(raw) as number;
+        if (n >= LIST_MIN && n <= LIST_MAX) return n;
+      }
+    } catch { /* ignore */ }
+    return 288;
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem('contacts.listWidth', JSON.stringify(listWidth)); } catch { /* ignore */ }
+  }, [listWidth]);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = listWidth;
+      const onMove = (ev: MouseEvent) => {
+        setListWidth(Math.max(LIST_MIN, Math.min(LIST_MAX, startW + (ev.clientX - startX))));
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    },
+    [listWidth],
+  );
 
   const isMultiSelect = selectedIds.size > 0;
 
@@ -166,6 +216,20 @@ export default function ContactsPage() {
     });
     return entries;
   }, [filtered, contactSort]);
+
+  useEffect(() => {
+    if (!pendingSelectId || allContacts.length === 0) return;
+    const contact = allContacts.find((c) => c.id === pendingSelectId);
+    const id = pendingSelectId;
+    setPendingSelectId(null);
+    if (contact) {
+      setSelectedId(id);
+      setPanel({ mode: 'detail', contact });
+      requestAnimationFrame(() => {
+        document.querySelector<HTMLElement>(`[data-uid="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    }
+  }, [pendingSelectId, allContacts]);
 
   const selectedContact = allContacts.find((c) => c.id === selectedId) ?? null;
 
@@ -500,13 +564,22 @@ export default function ContactsPage() {
 
   const addressBooks = abQuery.data ?? [];
 
+  const addressBookColorMap = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const ab of abQuery.data ?? []) map.set(ab.id, ab.color);
+    return map;
+  }, [abQuery.data]);
+
   return (
     <div className="flex h-full overflow-hidden">
       {/* ── Left: list pane ── */}
-      <div className={cn(
-        'w-full md:w-72 shrink-0 border-r border-border flex flex-col overflow-hidden',
-        mobileShowingDetail && 'hidden md:flex',
-      )}>
+      <div
+        className={cn(
+          'w-full shrink-0 flex flex-col overflow-hidden',
+          mobileShowingDetail && 'hidden md:flex',
+        )}
+        style={!isMobile ? { width: listWidth } : undefined}
+      >
         {/* Toolbar */}
         <div className="px-3 py-2 border-b border-border space-y-2">
           <div className="relative">
@@ -597,6 +670,7 @@ export default function ContactsPage() {
                   selected={c.id === selectedId}
                   isChecked={selectedIds.has(c.id)}
                   isMultiSelect={isMultiSelect}
+                  addressBookColor={addressBookColorMap.get(c.addressBookId) ?? null}
                   onClick={() => handleSelectContact(c)}
                   onToggleSelect={() => toggleSelect(c.id)}
                   onDragStart={() => {
@@ -620,6 +694,15 @@ export default function ContactsPage() {
           ))}
         </div>
       </div>
+
+      {/* Resize handle — desktop only */}
+      {!isMobile && (
+        <div
+          className="w-1 shrink-0 bg-border cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
+          onMouseDown={startResize}
+          title="Drag to resize"
+        />
+      )}
 
       {/* ── Right: detail / edit pane ── */}
       <div className={cn(
@@ -725,7 +808,7 @@ export default function ContactsPage() {
                         handleExport(ab, [selectedContact.id], `${name}.vcf`);
                       }
                     }}
-                    className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+                    className="md:ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
                   >
                     <Download className="h-3.5 w-3.5" /> Export
                   </button>
@@ -743,7 +826,10 @@ export default function ContactsPage() {
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto">
-                  <ContactDetail contact={selectedContact} />
+                  <ContactDetail
+                    contact={selectedContact}
+                    addressBookColor={addressBookColorMap.get(selectedContact.addressBookId) ?? null}
+                  />
                 </div>
               </>
             )}
@@ -870,6 +956,7 @@ function ContactListItem({
   onToggleSelect,
   onDragStart,
   onDragEnd,
+  addressBookColor,
 }: {
   contact: Contact;
   selected: boolean;
@@ -879,6 +966,7 @@ function ContactListItem({
   onToggleSelect: () => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
+  addressBookColor?: string | null;
 }) {
   const { contactSubtitleField } = useSettings();
   const name =
@@ -892,6 +980,7 @@ function ContactListItem({
       role="button"
       tabIndex={0}
       draggable
+      data-uid={contact.id}
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart?.(); }}
       onDragEnd={onDragEnd}
       onClick={onClick}
@@ -911,7 +1000,7 @@ function ContactListItem({
             isChecked ? 'opacity-30' : 'group-hover:opacity-30',
           )}
         >
-          <Avatar contact={contact} size="sm" />
+          <Avatar contact={contact} size="sm" addressBookColor={addressBookColor} />
         </div>
         {/* Checkbox appears on hover or in multi-select mode */}
         <label
@@ -1125,7 +1214,11 @@ function MultiContactPanel({
                   'text-center hover:bg-muted hover:border-primary/30 transition-colors',
                 )}
               >
-                <Avatar contact={c} size="lg" />
+                <Avatar
+                  contact={c}
+                  size="lg"
+                  addressBookColor={addressBooks.find((ab) => ab.id === c.addressBookId)?.color ?? null}
+                />
                 <div className="w-full min-w-0 space-y-0.5">
                   <p className="text-sm font-medium truncate">{name}</p>
                   {subtitle && (

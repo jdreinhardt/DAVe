@@ -15,6 +15,14 @@ export async function authRoutes(
   app.post<{ Body: { username: string; password: string } }>(
     '/api/auth/login',
     {
+      // Tight limit on the credential-brute-force surface, well below the loose
+      // global cap. Keyed per-IP by @fastify/rate-limit (see server.ts).
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: '15 minutes',
+        },
+      },
       schema: {
         body: {
           type: 'object',
@@ -34,11 +42,22 @@ export async function authRoutes(
         discovery = await discoverAndValidate(username, password, config);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        // tsdav surfaces 401 in the error message or as an HTTP status.
-        if (msg.includes('401') || msg.toLowerCase().includes('unauthorized')) {
-          return reply.status(401).send({ error: 'Invalid credentials', statusCode: 401 });
+        const msgLower = msg.toLowerCase();
+        // tsdav surfaces a 401 either explicitly in the message, or implicitly:
+        // when Baikal rejects credentials it returns a 401 error page that has no
+        // DAV properties, so tsdav throws "cannot find principalUrl" instead of a
+        // proper 401 error. Treat that the same as a credential failure.
+        if (
+          msg.includes('401') ||
+          msgLower.includes('unauthorized') ||
+          msgLower.includes('principalurl') ||
+          msgLower.includes('not authenticated')
+        ) {
+          return reply.status(401).send({ error: 'Incorrect username or password.', statusCode: 401 });
         }
-        app.log.error({ err: e }, 'DAV discovery failed');
+        // Log only the sanitized message — never the raw error, which can carry
+        // the basic-auth Authorization header from the underlying DAV request.
+        app.log.error({ msg }, 'DAV discovery failed');
         // ECONNREFUSED / ENOTFOUND → server is not reachable at all.
         // Anything else (e.g. Baikal setup wizard returning HTML) → reachable but not ready.
         const isNetworkError =
@@ -46,8 +65,7 @@ export async function authRoutes(
           ('code' in e
             ? (e as NodeJS.ErrnoException).code === 'ECONNREFUSED' ||
               (e as NodeJS.ErrnoException).code === 'ENOTFOUND'
-            : msg.toLowerCase().includes('econnrefused') ||
-              msg.toLowerCase().includes('enotfound'));
+            : msgLower.includes('econnrefused') || msgLower.includes('enotfound'));
         const errorText = isNetworkError
           ? 'Could not reach the Baikal server — check BAIKAL_BASE_URL and that Baikal is running'
           : 'Baikal responded unexpectedly — make sure the Baikal admin setup wizard has been completed';
@@ -70,6 +88,9 @@ export async function authRoutes(
       reply.setCookie(COOKIE_NAME, sessionId, {
         httpOnly: true,
         secure: config.TRUST_PROXY, // only set Secure when behind HTTPS proxy
+        // SameSite=lax is the app's only CSRF defense: it keeps the cookie off
+        // cross-site POST/PUT/DELETE, and there are no state-changing GET routes.
+        // Do NOT relax this to 'none' without adding CSRF tokens.
         sameSite: 'lax',
         path: '/',
       });

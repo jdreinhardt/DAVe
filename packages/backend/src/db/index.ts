@@ -36,6 +36,26 @@ export function getDb(config: Config): DbInstance {
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_last_activity
       ON sessions(last_activity_at);
+
+    CREATE TABLE IF NOT EXISTS user_settings (
+      username         TEXT    PRIMARY KEY,
+      contact_sort_by  TEXT    NOT NULL DEFAULT 'last',
+      contact_sort_dir TEXT    NOT NULL DEFAULT 'asc',
+      contact_subtitle TEXT    NOT NULL DEFAULT '',
+      map_service      TEXT    NOT NULL DEFAULT 'osm',
+      dark_mode        TEXT    NOT NULL DEFAULT 'system',
+      task_layout      TEXT    NOT NULL DEFAULT 'list',
+      notes_view       TEXT    NOT NULL DEFAULT 'list',
+      journals_view    TEXT    NOT NULL DEFAULT 'timeline',
+      updated_at       INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS address_book_colors (
+      username        TEXT NOT NULL,
+      address_book_id TEXT NOT NULL,
+      color           TEXT NOT NULL,
+      PRIMARY KEY (username, address_book_id)
+    );
   `);
 
   return _db;

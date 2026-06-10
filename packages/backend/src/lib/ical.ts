@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import type { EventJson, AlarmJson, AttendeeJson, RecurrenceRule } from '@dave/shared';
+import type { EventJson, AlarmJson, AttendeeJson, RecurrenceRule, TaskJson, NoteJson } from '@dave/shared';
 // crypto is available as a global in Node 19+; the import keeps older Node happy.
 import { randomUUID } from 'node:crypto';
 
@@ -615,7 +615,10 @@ export function updateMasterVevent(rawIcs: string, event: EventJson): string {
 
 /**
  * Return the UTC offset for a given IANA timezone at the instant described by
- * isoStr, as a ±HHMM string suitable for VTIMEZONE TZOFFSETFROM/TZOFFSETTO.
+ * isoStr, as a jCal ±HH:MM string for use with addPropertyWithValue on
+ * TZOFFSETFROM/TZOFFSETTO. ical.js's toICAL() expects this colon-separated
+ * form and strips the colon when emitting ICAL; passing ±HHMM would cause
+ * toICAL to mis-slice and produce a truncated value like -050.
  * Uses Intl so no tz database is needed.
  */
 function utcOffsetString(isoStr: string, tzid: string): string {
@@ -639,7 +642,7 @@ function utcOffsetString(isoStr: string, tzid: string): string {
   const abs = Math.abs(offsetMin);
   const hh = Math.floor(abs / 60).toString().padStart(2, '0');
   const mm = (abs % 60).toString().padStart(2, '0');
-  return `${sign}${hh}${mm}`;
+  return `${sign}${hh}:${mm}`;
 }
 
 /**
@@ -745,3 +748,660 @@ function parseRRule(vevent: any): RecurrenceRule | null {
     return null;
   }
 }
+
+// ── Task helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Enforce the three-property coherence rule for task completion (spec §5.6):
+ * STATUS=COMPLETED ↔ PERCENT-COMPLETE=100 ↔ COMPLETED timestamp.
+ * STATUS=CANCELLED clears COMPLETED but leaves PERCENT-COMPLETE alone.
+ * Setting PERCENT-COMPLETE=100 on an otherwise non-complete task triggers completion.
+ */
+export function applyCompletion(data: TaskJson): TaskJson {
+  const result = { ...data };
+
+  // Percent-complete=100 implies completion regardless of status field.
+  if (result.percentComplete === 100 && result.status !== 'CANCELLED') {
+    result.status = 'COMPLETED';
+  }
+
+  if (result.status === 'COMPLETED') {
+    result.percentComplete = 100;
+    if (!result.completed) result.completed = new Date().toISOString();
+  } else if (result.status === 'CANCELLED') {
+    result.completed = null;
+    // percent-complete left as-is per spec
+  } else {
+    // Any active status — clear completed timestamp and percent if they signal completion.
+    if (result.percentComplete === 100) result.percentComplete = 0;
+    result.completed = null;
+  }
+
+  return result;
+}
+
+/**
+ * Parse a raw VTODO ICS string into a partial TaskJson plus its UID.
+ * Used by the Baikal archive search to build ArchivedTask objects from raw ICS
+ * without going through the SQLite cache.
+ * The caller is responsible for setting collectionUrl on the returned data.
+ */
+export function parseVTodoToTaskJson(rawIcs: string): { uid: string; data: TaskJson } | null {
+  if (!rawIcs?.trim()) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(ICAL.parse(rawIcs) as any) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return null;
+
+    const uid = vtodo.getFirstPropertyValue('uid') as string | null;
+    if (!uid) return null;
+
+    function dateValToIso(propName: string): string | null {
+      const prop = vtodo.getFirstProperty(propName);
+      if (!prop) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const val: any = prop.getFirstValue();
+      if (!val) return null;
+      if (val.isDate) {
+        const y = String(val.year as number).padStart(4, '0');
+        const mo = String(val.month as number).padStart(2, '0');
+        const d = String(val.day as number).padStart(2, '0');
+        return `${y}-${mo}-${d}`;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (val as any).toJSDate?.()?.toISOString() ?? null;
+    }
+
+    const categories: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const cp of vtodo.getAllProperties('categories') as any[]) {
+      const vals = cp.getValues?.();
+      if (Array.isArray(vals)) {
+        for (const v of vals) {
+          if (typeof v === 'string' && v.trim()) categories.push(v.trim());
+        }
+      }
+    }
+
+    const priority = vtodo.getFirstPropertyValue('priority') as number | null;
+    const percentComplete = vtodo.getFirstPropertyValue('percent-complete') as number | null;
+
+    const data: TaskJson = {
+      uid,
+      summary: String(vtodo.getFirstPropertyValue('summary') ?? ''),
+      description: String(vtodo.getFirstPropertyValue('description') ?? ''),
+      status: vtodo.getFirstPropertyValue('status') as string | null,
+      priority: typeof priority === 'number' ? priority : null,
+      dtstart: dateValToIso('dtstart'),
+      due: dateValToIso('due'),
+      completed: dateValToIso('completed'),
+      percentComplete: typeof percentComplete === 'number' ? percentComplete : null,
+      lastModified: dateValToIso('last-modified'),
+      categories,
+      relations: [],
+      collectionUrl: '',  // set by caller
+      alarms: [],
+      rrule: null,
+    };
+
+    return { uid, data };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Return a copy of a VTODO ICS with STATUS reset to NEEDS-ACTION,
+ * PERCENT-COMPLETE set to 0, and the COMPLETED property removed.
+ * Used when restoring an archived completed task to editable state.
+ */
+export function resetTaskToNeedsAction(rawIcs: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vcal = new ICAL.Component(ICAL.parse(rawIcs) as any) as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+  if (!vtodo) throw new Error('No VTODO component in ICS');
+
+  vtodo.updatePropertyWithValue('status', 'NEEDS-ACTION');
+  vtodo.updatePropertyWithValue('percent-complete', 0);
+  vtodo.removeProperty('completed');
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const now: any = ICAL.Time.now();
+  vtodo.updatePropertyWithValue('last-modified', now);
+  vtodo.updatePropertyWithValue('dtstamp', now);
+
+  return vcal.toString() as string;
+}
+
+/**
+ * Compute the next occurrence of a recurring VTODO after its current DTSTART.
+ *
+ * Returns { nextDtstart, nextDue } where nextDue preserves the original
+ * DTSTART→DUE duration. Returns null when no further occurrences exist
+ * (COUNT exhausted or UNTIL passed).
+ *
+ * When the VTODO has no DTSTART (DUE-only), DUE is used as the expansion
+ * anchor and nextDtstart is null in the return value.
+ *
+ * afterDate (optional): when provided, the result is the first occurrence
+ * strictly after max(anchor, afterDate). Pass today's date when completing
+ * an overdue task so the next due always lands in the future.
+ */
+export function computeNextOccurrence(
+  rawIcs: string,
+  currentDtstart: string | null,
+  currentDue: string | null,
+  afterDate?: string | null,
+): { nextDtstart: string | null; nextDue: string | null } | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vtodo: any;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(ICAL.parse(rawIcs) as any);
+    vtodo = vcal.getFirstSubcomponent('vtodo');
+  } catch {
+    return null;
+  }
+  if (!vtodo) return null;
+
+  const rruleProp = vtodo.getFirstProperty('rrule');
+  if (!rruleProp) return null;
+
+  // Prefer DTSTART from the parsed ICS; fall back to the TaskJson value (handles
+  // tasks created without an explicit DTSTART in the ICS).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let anchorTime: any = vtodo.getFirstPropertyValue('dtstart');
+  if (!anchorTime && currentDtstart) {
+    anchorTime = /^\d{4}-\d{2}-\d{2}$/.test(currentDtstart)
+      ? ICAL.Time.fromDateString(currentDtstart)
+      : ICAL.Time.fromJSDate(new Date(currentDtstart), true);
+  }
+  const usingDue = !anchorTime;
+
+  if (usingDue) {
+    if (!currentDue) return null;
+    anchorTime = /^\d{4}-\d{2}-\d{2}$/.test(currentDue)
+      ? ICAL.Time.fromDateString(currentDue)
+      : ICAL.Time.fromJSDate(new Date(currentDue), true);
+  }
+
+  // Build an expansion component. For DUE-only tasks, create a minimal one
+  // with an injected DTSTART so RecurExpansion has an anchor.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let expansionComp: any = vtodo;
+  if (usingDue) {
+    expansionComp = new ICAL.Component('vtodo');
+    const dp = new ICAL.Property('dtstart');
+    dp.resetType(anchorTime.isDate ? 'date' : 'date-time');
+    dp.setValue(anchorTime);
+    expansionComp.addProperty(dp);
+    const newRruleProp = new ICAL.Property('rrule');
+    newRruleProp.setValue(rruleProp.getFirstValue());
+    expansionComp.addProperty(newRruleProp);
+  }
+
+  const expansion = new ICAL.RecurExpansion({
+    component: expansionComp,
+    dtstart: anchorTime,
+  });
+
+  // Find the first occurrence strictly after max(anchorTime, afterDate).
+  // When afterDate is later than the anchor (e.g. today for an overdue task),
+  // we keep iterating until we clear that date so the result is always future.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let stopAfter: any = anchorTime;
+  if (afterDate) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const afterTime: any = /^\d{4}-\d{2}-\d{2}$/.test(afterDate)
+      ? ICAL.Time.fromDateString(afterDate)
+      : ICAL.Time.fromJSDate(new Date(afterDate), true);
+    if ((afterTime.compare(anchorTime) as number) > 0) stopAfter = afterTime;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let next: any = expansion.next();
+  while (next) {
+    if ((next.compare(stopAfter) as number) > 0) break;
+    next = expansion.next();
+  }
+
+  if (!next) return null;
+
+  const nextStr: string = next.isDate
+    ? (next.toString() as string).substring(0, 10)
+    : (next.toJSDate() as Date).toISOString();
+
+  if (!usingDue) {
+    const origDtstart: string = anchorTime.isDate
+      ? (anchorTime.toString() as string).substring(0, 10)
+      : (anchorTime.toJSDate() as Date).toISOString();
+    const nextDue = currentDue ? applyDueDelta(nextStr, origDtstart, currentDue) : null;
+    return { nextDtstart: nextStr, nextDue };
+  }
+
+  return { nextDtstart: null, nextDue: nextStr };
+}
+
+// Shift origDue by the same delta that separates nextDtstart from origDtstart.
+function applyDueDelta(nextDtstart: string, origDtstart: string, origDue: string): string {
+  const isAllDay = /^\d{4}-\d{2}-\d{2}$/.test(origDtstart);
+  if (isAllDay) {
+    const startMs = new Date(origDtstart + 'T00:00:00Z').getTime();
+    const dueMs = new Date(origDue + 'T00:00:00Z').getTime();
+    const nextStartMs = new Date(nextDtstart + 'T00:00:00Z').getTime();
+    return new Date(nextStartMs + (dueMs - startMs)).toISOString().substring(0, 10);
+  }
+  const deltaMs = new Date(origDue).getTime() - new Date(origDtstart).getTime();
+  return new Date(new Date(nextDtstart).getTime() + deltaMs).toISOString();
+}
+
+// ── Route-level ICS parsing helpers ───────────────────────────────────────────
+// These read a single cached ICS string and extract one or more properties.
+// They live here so the createRequire(ical.js) load stays in one place.
+
+// Re-parse dtstart from a VJOURNAL ICS to preserve DATE vs DATE-TIME distinction.
+// The cache stores dtstart as Unix ms which loses the all-day flag.
+export function parseDtstartFromVJournalIcs(rawIcs: string | null): string | null {
+  if (!rawIcs) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vjournal: any = vcal.getFirstSubcomponent('vjournal');
+    if (!vjournal) return null;
+    const prop = vjournal.getFirstProperty('dtstart');
+    if (!prop) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const val: any = prop.getFirstValue();
+    if (!val) return null;
+    if (val.isDate) {
+      const y = String(val.year as number).padStart(4, '0');
+      const mo = String(val.month as number).padStart(2, '0');
+      const d = String(val.day as number).padStart(2, '0');
+      return `${y}-${mo}-${d}`;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jsDate: Date | undefined = (val as any).toJSDate?.();
+    return jsDate ? jsDate.toISOString() : null;
+  } catch {
+    return null;
+  }
+}
+
+// Re-parse dtstart and due from a VTODO ICS to preserve DATE vs DATE-TIME distinction.
+export function parseDateStringsFromIcs(rawIcs: string | null): { dtstart: string | null; due: string | null } {
+  if (!rawIcs) return { dtstart: null, due: null };
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return { dtstart: null, due: null };
+
+    function propToStr(propName: string): string | null {
+      const prop = vtodo.getFirstProperty(propName);
+      if (!prop) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const val: any = prop.getFirstValue();
+      if (!val) return null;
+      if (val.isDate) {
+        const y = String(val.year as number).padStart(4, '0');
+        const mo = String(val.month as number).padStart(2, '0');
+        const d = String(val.day as number).padStart(2, '0');
+        return `${y}-${mo}-${d}`;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jsDate: Date | undefined = (val as any).toJSDate?.();
+      return jsDate ? jsDate.toISOString() : null;
+    }
+
+    return { dtstart: propToStr('dtstart'), due: propToStr('due') };
+  } catch { return { dtstart: null, due: null }; }
+}
+
+export function parseAlarmsFromIcs(rawIcs: string | null): AlarmJson[] {
+  if (!rawIcs) return [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const valarms: any[] = vtodo.getAllSubcomponents('valarm');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return valarms.flatMap((valarm: any) => {
+      try {
+        const rawAction = String(valarm.getFirstPropertyValue('action') ?? 'DISPLAY').toUpperCase();
+        const action: 'DISPLAY' | 'EMAIL' = rawAction === 'EMAIL' ? 'EMAIL' : 'DISPLAY';
+        const triggerProp = valarm.getFirstProperty('trigger');
+        const triggerVal = triggerProp?.getFirstValue();
+        let trigger = '';
+        if (triggerVal != null && typeof triggerVal.toICALString === 'function') {
+          trigger = String(triggerVal.toICALString());
+        } else if (triggerVal != null) {
+          trigger = String(triggerVal);
+        }
+        const description = String(valarm.getFirstPropertyValue('description') ?? '');
+        return [{ action, trigger, description }];
+      } catch { return []; }
+    });
+  } catch { return []; }
+}
+
+export function parseRruleFromIcs(rawIcs: string | null): string | null {
+  if (!rawIcs) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return null;
+    const rruleProp = vtodo.getFirstProperty('rrule');
+    if (!rruleProp) return null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const val: any = rruleProp.getFirstValue();
+    return val ? String(val.toString()) : null;
+  } catch { return null; }
+}
+
+export function parseRecurringInstanceFromIcs(rawIcs: string | null): boolean {
+  if (!rawIcs) return false;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const jcal: any = ICAL.parse(rawIcs);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vcal = new ICAL.Component(jcal) as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const vtodo: any = vcal.getFirstSubcomponent('vtodo');
+    if (!vtodo) return false;
+    const val = vtodo.getFirstPropertyValue('x-dave-recurring-instance');
+    return String(val ?? '').toUpperCase() === 'TRUE';
+  } catch { return false; }
+}
+
+// Decrement the COUNT in a raw RRULE string by 1 (floor 1).
+// When no COUNT is present the string is returned unchanged.
+function decrementCount(rrule: string): string {
+  return rrule.replace(/COUNT=(\d+)/, (_, n) => `COUNT=${Math.max(1, parseInt(n) - 1)}`);
+}
+
+/**
+ * If task has an RRULE and there is a next occurrence, return a copy of the
+ * task rolled forward to that occurrence (per spec §5.5):
+ * - DTSTART and DUE advanced to next occurrence
+ * - STATUS reset to NEEDS-ACTION
+ * - PERCENT-COMPLETE reset to 0, COMPLETED cleared
+ * - COUNT decremented so future expansions don't over-count
+ *
+ * Returns null when there are no further occurrences; the caller should then
+ * proceed with normal completion.
+ */
+export function rollForwardTask(
+  task: TaskJson,
+  rawIcs: string,
+  completionDate?: string | null,
+): TaskJson | null {
+  if (!task.rrule) return null;
+
+  const result = computeNextOccurrence(rawIcs, task.dtstart, task.due, completionDate);
+  if (!result) return null;
+
+  // When there is no explicit DUE, set it equal to the next DTSTART so the task
+  // always shows a visible due date in the list after roll-forward.
+  const nextDue = result.nextDue ?? result.nextDtstart;
+
+  return {
+    ...task,
+    dtstart: result.nextDtstart,
+    due: nextDue,
+    rrule: decrementCount(task.rrule),
+    status: 'NEEDS-ACTION',
+    percentComplete: 0,
+    completed: null,
+  };
+}
+
+/**
+ * Serialize a TaskJson into a VCALENDAR > VTODO ICS string.
+ *
+ * When rawIcs is provided (update path), the existing ICS is parsed and only
+ * the managed properties are replaced — unknown X- properties and any other
+ * fields we don't render are preserved verbatim (round-trip fidelity).
+ *
+ * When rawIcs is absent (create path), a fresh VCALENDAR is built.
+ */
+export function serializeIcalTask(task: TaskJson, rawIcs?: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vcal: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vtodo: any;
+
+  if (rawIcs) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jcal: any = ICAL.parse(rawIcs);
+      vcal = new ICAL.Component(jcal);
+      vtodo = vcal.getFirstSubcomponent('vtodo');
+    } catch {
+      rawIcs = undefined; // fall through to create path
+    }
+  }
+
+  if (!vtodo) {
+    // Create path.
+    vcal = new ICAL.Component(['vcalendar', [], []]);
+    vcal.addPropertyWithValue('version', '2.0');
+    vcal.addPropertyWithValue('prodid', '-//dave//EN');
+    vcal.addPropertyWithValue('calscale', 'GREGORIAN');
+    vtodo = new ICAL.Component('vtodo');
+    vcal.addSubcomponent(vtodo);
+  }
+
+  const uid = task.uid || randomUUID();
+
+  vtodo.removeAllProperties('uid');
+  vtodo.addPropertyWithValue('uid', uid);
+
+  // DTSTAMP — always refresh
+  vtodo.removeAllProperties('dtstamp');
+  vtodo.addPropertyWithValue('dtstamp', ICAL.Time.fromJSDate(new Date(), true));
+
+  // LAST-MODIFIED — always refresh
+  vtodo.removeAllProperties('last-modified');
+  vtodo.addPropertyWithValue('last-modified', ICAL.Time.fromJSDate(new Date(), true));
+
+  setPropText(vtodo, 'summary', task.summary);
+  setPropText(vtodo, 'description', task.description || null);
+
+  if (task.status) {
+    setPropText(vtodo, 'status', task.status.toUpperCase());
+  } else {
+    vtodo.removeAllProperties('status');
+  }
+
+  if (task.priority != null) {
+    vtodo.removeAllProperties('priority');
+    vtodo.addPropertyWithValue('priority', task.priority);
+  } else {
+    vtodo.removeAllProperties('priority');
+  }
+
+  if (task.percentComplete != null) {
+    vtodo.removeAllProperties('percent-complete');
+    vtodo.addPropertyWithValue('percent-complete', task.percentComplete);
+  } else {
+    vtodo.removeAllProperties('percent-complete');
+  }
+
+  // DTSTART — date-only if the value is a date string (no T), otherwise datetime
+  setDateOrDatetime(vtodo, 'dtstart', task.dtstart);
+  setDateOrDatetime(vtodo, 'due', task.due);
+  setDateOrDatetime(vtodo, 'completed', task.completed);
+
+  // CATEGORIES — one CATEGORIES property with all values
+  vtodo.removeAllProperties('categories');
+  if (task.categories.length > 0) {
+    const catProp = new ICAL.Property('categories');
+    catProp.setValues(task.categories);
+    vtodo.addProperty(catProp);
+  }
+
+  // RELATED-TO — one property per relation
+  vtodo.removeAllProperties('related-to');
+  for (const rel of task.relations) {
+    const relProp = new ICAL.Property('related-to');
+    if (rel.reltype && rel.reltype !== 'UNKNOWN') {
+      relProp.setParameter('reltype', rel.reltype);
+    }
+    relProp.setValue(rel.relatedUid);
+    vtodo.addProperty(relProp);
+  }
+
+  // RRULE — preserve existing if task.rrule is null (we don't edit it in M3),
+  // or update if a value is explicitly provided.
+  if (task.rrule !== null && task.rrule !== undefined) {
+    vtodo.removeAllProperties('rrule');
+    if (task.rrule) {
+      const rruleProp = new ICAL.Property('rrule');
+      rruleProp.setValue(ICAL.Recur.fromString(task.rrule));
+      vtodo.addProperty(rruleProp);
+    }
+  }
+  // If task.rrule is null/undefined (not sent by client), leave any existing RRULE alone.
+
+  // VALARMs: replace only when the caller provides alarms data (non-empty).
+  // An empty array on an update path means "alarms weren't included in this
+  // request" (e.g. a list-response status toggle), so we leave existing
+  // VALARMs intact to avoid silent data loss. The full edit form always sends
+  // the real alarm list fetched from the single-task endpoint.
+  if (!rawIcs || (task.alarms && task.alarms.length > 0)) {
+    for (const sub of vtodo.getAllSubcomponents('valarm')) {
+      vtodo.removeSubcomponent(sub);
+    }
+    for (const alarm of task.alarms ?? []) {
+      serializeAlarm(vtodo, alarm, task.summary);
+    }
+  }
+
+  // Mark completed history copies of recurring tasks so they can be identified
+  // in list views without ambiguity.
+  vtodo.removeAllProperties('x-dave-recurring-instance');
+  if (task.recurringInstance) {
+    vtodo.addPropertyWithValue('x-dave-recurring-instance', 'TRUE');
+  }
+
+  return vcal.toString();
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function setPropText(comp: any, propName: string, value: string | null): void {
+  comp.removeAllProperties(propName);
+  if (value != null && value !== '') {
+    comp.addPropertyWithValue(propName, value);
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function setDateOrDatetime(comp: any, propName: string, isoStr: string | null): void {
+  comp.removeAllProperties(propName);
+  if (!isoStr) return;
+  const prop = new ICAL.Property(propName);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoStr)) {
+    prop.resetType('date');
+    prop.setValue(ICAL.Time.fromDateString(isoStr));
+  } else {
+    prop.resetType('date-time');
+    prop.setValue(ICAL.Time.fromJSDate(new Date(isoStr), true));
+  }
+  comp.addProperty(prop);
+}
+
+/**
+ * Serialize a NoteJson into a VCALENDAR > VJOURNAL ICS string.
+ *
+ * When rawIcs is provided (update path), the existing ICS is parsed and only
+ * the managed properties are replaced — unknown X- properties are preserved
+ * verbatim (round-trip fidelity, same principle as serializeIcalTask).
+ *
+ * When rawIcs is absent (create path), a fresh VCALENDAR is built.
+ *
+ * Notes have no DTSTART; journals have one. The presence of entry.dtstart is
+ * the sole discriminator — do not set it to distinguish the two component types.
+ */
+export function serializeIcalJournal(entry: NoteJson, rawIcs?: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vcal: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let vjournal: any;
+
+  if (rawIcs) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const jcal: any = ICAL.parse(rawIcs);
+      vcal = new ICAL.Component(jcal);
+      vjournal = vcal.getFirstSubcomponent('vjournal');
+    } catch {
+      rawIcs = undefined;
+    }
+  }
+
+  if (!vjournal) {
+    vcal = new ICAL.Component(['vcalendar', [], []]);
+    vcal.addPropertyWithValue('version', '2.0');
+    vcal.addPropertyWithValue('prodid', '-//dave//EN');
+    vcal.addPropertyWithValue('calscale', 'GREGORIAN');
+    vjournal = new ICAL.Component('vjournal');
+    vcal.addSubcomponent(vjournal);
+  }
+
+  const uid = entry.uid || randomUUID();
+
+  vjournal.removeAllProperties('uid');
+  vjournal.addPropertyWithValue('uid', uid);
+
+  vjournal.removeAllProperties('dtstamp');
+  vjournal.addPropertyWithValue('dtstamp', ICAL.Time.fromJSDate(new Date(), true));
+
+  vjournal.removeAllProperties('last-modified');
+  vjournal.addPropertyWithValue('last-modified', ICAL.Time.fromJSDate(new Date(), true));
+
+  setPropText(vjournal, 'summary', entry.summary);
+  setPropText(vjournal, 'description', entry.description || null);
+
+  // DTSTART — present for journals (dated), absent for notes (undated)
+  setDateOrDatetime(vjournal, 'dtstart', entry.dtstart);
+
+  // CATEGORIES — one CATEGORIES property with all values
+  vjournal.removeAllProperties('categories');
+  if (entry.categories.length > 0) {
+    const catProp = new ICAL.Property('categories');
+    catProp.setValues(entry.categories);
+    vjournal.addProperty(catProp);
+  }
+
+  // RELATED-TO — one property per relation; preserve unknown reltypes
+  vjournal.removeAllProperties('related-to');
+  for (const rel of entry.relations) {
+    const relProp = new ICAL.Property('related-to');
+    if (rel.reltype && rel.reltype !== 'UNKNOWN') {
+      relProp.setParameter('reltype', rel.reltype);
+    }
+    relProp.setValue(rel.relatedUid);
+    vjournal.addProperty(relProp);
+  }
+
+  return vcal.toString();
+}
+

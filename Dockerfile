@@ -14,6 +14,12 @@ COPY packages/backend  ./packages/backend
 COPY packages/frontend ./packages/frontend
 RUN npm run build
 
+# Strip devDependencies so only production node_modules are copied to the
+# runtime stage. tsdav and other npm deps are loaded at runtime via ESM
+# imports in the compiled bundle (tsup bundles local TS but keeps npm
+# packages as external imports — they must be present in node_modules).
+RUN npm prune --omit=dev
+
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
 FROM node:22-alpine AS runner
 ENV NODE_ENV=production
@@ -22,14 +28,21 @@ WORKDIR /app
 # Non-root user
 RUN addgroup -S dave && adduser -S dave -G dave
 
-# Backend is a self-contained ESM bundle (no node_modules needed at runtime
-# because node:sqlite is built into Node and all other deps are bundled by tsup).
-COPY --from=builder /app/packages/backend/dist/server.js  ./server.js
+# Production node_modules — required because the backend bundle imports npm
+# packages (fastify, tsdav, ical.js, etc.) as external ESM modules.
+COPY --from=builder /app/node_modules ./node_modules
+
+# Root package.json — Node uses "type":"module" here to parse server.js as ESM.
+COPY --from=builder /app/package.json ./package.json
+
+# Backend compiled bundle (local TS and @dave/shared are inlined by tsup;
+# npm deps are resolved from node_modules above).
+COPY --from=builder /app/packages/backend/dist/server.js ./server.js
 
 # Frontend SPA served as static files.
-COPY --from=builder /app/packages/frontend/dist           ./public
+COPY --from=builder /app/packages/frontend/dist ./public
 
-# Persistent volume for the SQLite session store.
+# Persistent volume for the SQLite session and cache stores.
 RUN mkdir -p /data && chown dave:dave /data
 VOLUME ["/data"]
 

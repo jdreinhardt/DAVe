@@ -3,10 +3,11 @@ import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
 import type { SessionData } from '../services/session.js';
-import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson } from '@dave/shared';
+import type { DbInstance } from '../db/index.js';
+import type { Calendar, AddressBook, Contact, ContactJson, CalendarEvent, EventJson, TaskJson, NoteJson } from '@dave/shared';
 import type { RecurrenceScope, CreateAddressBookRequest, UpdateAddressBookRequest, CreateCalendarRequest, UpdateCalendarRequest } from '@dave/shared';
 import { parseVCard, serializeVCard } from './vcard.js';
-import { parseIcalEvents, serializeIcalEvent, injectException, addExdate, truncateRrule, updateMasterVevent } from './ical.js';
+import { parseIcalEvents, serializeIcalEvent, serializeIcalTask, serializeIcalJournal, injectException, addExdate, truncateRrule, updateMasterVevent, resetTaskToNeedsAction } from './ical.js';
 
 // Node.js 22 treats tsdav.esm.js as CJS (no "type":"module" in tsdav's package.json)
 // and fails to parse its ESM syntax. createRequire loads the proper CJS build instead.
@@ -23,6 +24,18 @@ const {
 } = _req('tsdav') as typeof TsdavTypes;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * All authenticated DAV requests go through this wrapper so the SSRF defense is
+ * the default, not something each call site has to remember. `redirect: 'error'`
+ * ensures a 3xx from Baikal is never followed — otherwise the user's basic-auth
+ * Authorization header could be replayed to an arbitrary redirect target.
+ * Listed first so it can't be silently dropped, but still overridable if a
+ * future caller has a genuine reason.
+ */
+function davFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { redirect: 'error', ...init });
+}
 
 // Coerce a tsdav displayName (can be string or object with a #text key) to string.
 function str(v: unknown, fallback = ''): string {
@@ -42,6 +55,22 @@ function collectionId(url: string): string {
   } catch {
     return url;
   }
+}
+
+// ── Address book color ────────────────────────────────────────────────────────
+
+const AB_COLOR_PALETTE = [
+  '#0082C9', '#3498DB', '#1ABC9C', '#2ECC71',
+  '#F1C40F', '#E67E22', '#E74C3C', '#E91E63',
+  '#9B59B6', '#795548', '#607D8B', '#34495E',
+];
+
+function deterministicAddressBookColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    h = (Math.imul(31, h) + id.charCodeAt(i)) | 0;
+  }
+  return AB_COLOR_PALETTE[Math.abs(h) % AB_COLOR_PALETTE.length]!;
 }
 
 // ── Login / discovery ─────────────────────────────────────────────────────────
@@ -133,6 +162,7 @@ export async function listCalendars(
 export async function listAddressBooks(
   session: SessionData,
   config: Config,
+  db: DbInstance,
 ): Promise<AddressBook[]> {
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
   const account = cardAccount(session, config);
@@ -152,6 +182,11 @@ export async function listAddressBooks(
     headers: authHeaders,
   });
 
+  const colorRows = db.prepare(
+    'SELECT address_book_id, color FROM address_book_colors WHERE username = ?',
+  ).all(session.username) as Array<{ address_book_id: string; color: string }>;
+  const colorMap = new Map(colorRows.map((r) => [r.address_book_id, r.color]));
+
   return (results as TsdavTypes.DAVResponse[])
     .filter((r) => {
       const rt = (r.props as Record<string, unknown> | undefined)?.resourcetype;
@@ -161,12 +196,23 @@ export async function listAddressBooks(
       const props = (rs.props ?? {}) as Record<string, unknown>;
       const rawUrl = typeof rs.href === 'string' ? rs.href : '';
       const fullUrl = new URL(rawUrl, account.rootUrl ?? config.BAIKAL_BASE_URL).href;
+      const id = collectionId(fullUrl);
+
+      const stored = colorMap.get(id);
+      const colorIsAuto = stored === undefined;
+      const color = stored === undefined
+        ? deterministicAddressBookColor(id)   // auto: deterministic from ID
+        : stored === 'none'
+          ? null                               // user removed color
+          : stored;                            // user-set custom hex
+
       return {
-        id: collectionId(fullUrl),
+        id,
         url: fullUrl,
         displayName: str(props.displayname, fullUrl),
         description: str(props.addressbookDescription, ''),
-        color: '#6C757D',
+        color,
+        colorIsAuto,
         ctag: str(props.getctag),
         syncToken: str(props.syncToken),
       };
@@ -222,6 +268,29 @@ function basicAuthHeader(session: SessionData): Record<string, string> {
   return _getBasicAuthHeaders({ username: session.username, password: session.password });
 }
 
+/**
+ * Guard against SSRF: client-supplied collection/object URLs are fetched
+ * directly (raw PUT/GET) with the user's Baikal credentials attached, so we
+ * must confirm they point at the configured Baikal server. Reject anything
+ * whose scheme/host/port differs from BAIKAL_BASE_URL — otherwise an
+ * authenticated user could redirect the request (and the Authorization header)
+ * to an arbitrary internal or external host.
+ */
+function assertBaikalOrigin(targetUrl: string, config: Config): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    throw Object.assign(new Error('Invalid target URL'), { statusCode: 400 });
+  }
+  const base = new URL(config.BAIKAL_BASE_URL);
+  if (parsed.origin !== base.origin) {
+    throw Object.assign(new Error('Target URL host is not the configured Baikal server'), {
+      statusCode: 400,
+    });
+  }
+}
+
 export interface ContactWriteResult {
   id: string;
   url: string;
@@ -241,7 +310,7 @@ export async function createContact(
   const vcardStr = serializeVCard(contactData);
   const url = contactUrl(session, addressBookId, uid);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -271,7 +340,7 @@ export async function updateContact(
   const vcardStr = serializeVCard(data);
   const url = contactUrl(session, addressBookId, id);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -299,7 +368,7 @@ export async function deleteContact(
 ): Promise<void> {
   const url = contactUrl(session, addressBookId, id);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'DELETE',
     headers: {
       ...basicAuthHeader(session),
@@ -403,7 +472,7 @@ export async function createEvent(
   const icsStr = serializeIcalEvent(eventData);
   const url = calendarObjectUrl(session, calendarId, uid);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -435,7 +504,7 @@ export async function updateEvent(
   const icsStr = serializeIcalEvent(eventData);
   const url = calendarObjectUrl(session, calendarId, id);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -454,6 +523,100 @@ export async function updateEvent(
   return { id, url, etag: newEtag, calendarId, data: eventData };
 }
 
+/**
+ * Move an event from one calendar to another, applying any edits in the same operation.
+ *
+ * scope=undefined / non-recurring: serialize updated ICS, PUT to new calendar, DELETE from old.
+ * scope='all':  fetch raw ICS from old calendar, update master VEVENT, PUT to new, DELETE old.
+ * scope='following': truncate original series in old calendar, create continuation in new calendar.
+ * scope='this': moving a single exception between CalDAV calendars is not meaningful — the
+ *               calendar change is silently ignored and the exception is injected into the
+ *               original calendar as usual.
+ */
+export async function moveEvent(
+  session: SessionData,
+  oldCalendarId: string,
+  id: string,
+  data: EventJson,
+  etag: string,
+  scope: RecurrenceScope | undefined,
+  config: Config,
+): Promise<EventWriteResult> {
+  const newCalendarId = data.calendarId;
+
+  if (scope === 'this') {
+    const sameCalData: EventJson = { ...data, calendarId: oldCalendarId };
+    return updateEventScoped(session, oldCalendarId, id, sameCalData, etag, 'this', config);
+  }
+
+  if (scope === 'following') {
+    // Truncate the original series in the old calendar; create the continuation in the new one.
+    const { raw, etag: freshEtag } = await fetchRawEvent(session, oldCalendarId, id);
+    const truncatedIcs = truncateRrule(raw, data.start, data.allDay);
+    const oldUrl = calendarObjectUrl(session, oldCalendarId, id);
+    const truncatedEtag = await putRawIcs(session, oldUrl, truncatedIcs, freshEtag);
+
+    const newUid = crypto.randomUUID();
+    const continuationData: EventJson = { ...data, uid: newUid, calendarId: newCalendarId, recurrenceId: null };
+    const continuationResult = await createEvent(session, newCalendarId, continuationData, config);
+
+    const result: EventWriteResult & { continuation?: EventWriteResult } = {
+      id,
+      url: oldUrl,
+      etag: truncatedEtag,
+      calendarId: oldCalendarId,
+      data: { ...data, uid: data.uid },
+      continuation: continuationResult,
+    };
+    return result;
+  }
+
+  if (scope === 'all') {
+    // Fetch raw from old calendar, rewrite master VEVENT, PUT to new calendar, then DELETE old.
+    const masterData: EventJson = { ...data, calendarId: newCalendarId, recurrenceId: null };
+    const { raw, etag: freshEtag } = await fetchRawEvent(session, oldCalendarId, id);
+    const updatedIcs = updateMasterVevent(raw, masterData);
+    const newUrl = calendarObjectUrl(session, newCalendarId, id);
+    const putRes = await davFetch(newUrl, {
+      method: 'PUT',
+      headers: {
+        ...basicAuthHeader(session),
+        'Content-Type': 'text/calendar; charset=utf-8',
+        'If-None-Match': '*',
+      },
+      body: updatedIcs,
+    });
+    if (!putRes.ok) {
+      const body = await putRes.text().catch(() => '');
+      throw Object.assign(new Error(`PUT failed: ${putRes.status}`), { statusCode: putRes.status, body });
+    }
+    const newEtag = putRes.headers.get('ETag') ?? freshEtag;
+    await deleteEvent(session, oldCalendarId, id, freshEtag, config);
+    return { id, url: newUrl, etag: newEtag, calendarId: newCalendarId, data: masterData };
+  }
+
+  // Non-recurring: serialize updated event, PUT to new calendar, DELETE from old.
+  const eventData: EventJson = { ...data, calendarId: newCalendarId, recurrenceId: null };
+  const icsStr = serializeIcalEvent(eventData);
+  const newUrl = calendarObjectUrl(session, newCalendarId, id);
+  const putRes = await davFetch(newUrl, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: icsStr,
+  });
+  if (!putRes.ok) {
+    const body = await putRes.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${putRes.status}`), { statusCode: putRes.status, body });
+  }
+  const newEtag = putRes.headers.get('ETag') ?? etag;
+  await deleteEvent(session, oldCalendarId, id, etag, config);
+  return { id, url: newUrl, etag: newEtag, calendarId: newCalendarId, data: eventData };
+}
+
 export async function deleteEvent(
   session: SessionData,
   calendarId: string,
@@ -463,7 +626,7 @@ export async function deleteEvent(
 ): Promise<void> {
   const url = calendarObjectUrl(session, calendarId, id);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'DELETE',
     headers: {
       ...basicAuthHeader(session),
@@ -485,7 +648,7 @@ async function fetchRawEvent(
   id: string,
 ): Promise<{ raw: string; etag: string }> {
   const url = calendarObjectUrl(session, calendarId, id);
-  const res = await fetch(url, { headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { headers: basicAuthHeader(session) });
   if (!res.ok) {
     throw Object.assign(new Error(`GET failed: ${res.status}`), { statusCode: res.status });
   }
@@ -500,7 +663,7 @@ async function putRawIcs(
   ics: string,
   etag: string,
 ): Promise<string> {
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -645,7 +808,7 @@ export async function createAddressBook(
   </D:set>
 </D:mkcol>`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'MKCOL',
     headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
@@ -680,7 +843,7 @@ export async function updateAddressBook(
   </D:set>
 </D:propertyupdate>`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PROPPATCH',
     headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
@@ -698,7 +861,7 @@ export async function deleteAddressBook(
   _config: Config,
 ): Promise<void> {
   const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${id}/`;
-  const res = await fetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
 
   if (!res.ok && res.status !== 404) {
     const text = await res.text().catch(() => '');
@@ -733,7 +896,7 @@ export async function createCalendar(
   </D:set>
 </C:mkcalendar>`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'MKCALENDAR',
     headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
@@ -769,7 +932,7 @@ export async function updateCalendar(
   </D:set>
 </D:propertyupdate>`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PROPPATCH',
     headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
@@ -787,7 +950,7 @@ export async function deleteCalendar(
   _config: Config,
 ): Promise<void> {
   const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${id}/`;
-  const res = await fetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
 
   if (!res.ok && res.status !== 404) {
     const text = await res.text().catch(() => '');
@@ -886,4 +1049,467 @@ export async function syncCalendar(
   const dirty = results.some((r) => (r.ok && r.href) || r.status === 404);
 
   return { syncToken: newSyncToken, dirty };
+}
+
+// ── Cache sync helpers ────────────────────────────────────────────────────────
+
+export interface CalendarObjectRaw {
+  url: string;
+  etag: string;
+  rawIcs: string;
+}
+
+export interface CalendarCacheSyncResult {
+  syncToken: string;
+  changed: CalendarObjectRaw[];
+  deleted: string[]; // resolved absolute URLs of deleted objects
+}
+
+/**
+ * Fetch every calendar object in a collection (no time-range filter).
+ * Used for the initial cache population of VTODO/VJOURNAL collections.
+ */
+export async function fetchAllCalendarObjects(
+  session: SessionData,
+  calUrl: string,
+  _config: Config,
+  componentType: 'VTODO' | 'VJOURNAL' = 'VTODO',
+): Promise<CalendarObjectRaw[]> {
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const objects = await _fetchCalendarObjects({
+    calendar: { url: calUrl },
+    headers: authHeaders,
+    filters: [
+      {
+        'comp-filter': {
+          _attributes: { name: 'VCALENDAR' },
+          'comp-filter': { _attributes: { name: componentType } },
+        },
+      },
+    ],
+  });
+  return objects
+    .filter((obj: TsdavTypes.DAVCalendarObject) => obj.data)
+    .map((obj: TsdavTypes.DAVCalendarObject) => ({
+      url: obj.url,
+      etag: obj.etag ?? '',
+      rawIcs: obj.data as string,
+    }));
+}
+
+/**
+ * Incremental sync via sync-collection REPORT.
+ * Unlike syncCalendar(), this also fetches the bodies of changed objects
+ * so the cache can be updated without a second round-trip.
+ */
+export async function syncCalendarForCache(
+  session: SessionData,
+  calUrl: string,
+  currentSyncToken: string,
+  _config: Config,
+): Promise<CalendarCacheSyncResult> {
+  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+
+  const results = await _syncCollection({
+    url: calUrl,
+    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
+    syncLevel: 1,
+    syncToken: currentSyncToken,
+    headers: authHeaders,
+  });
+
+  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
+  const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
+  const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
+
+  // Resolve relative hrefs to absolute URLs so they match what is stored in the cache.
+  const resolveHref = (href: string): string => {
+    try { return new URL(href, calUrl).href; } catch { return href; }
+  };
+  const deleted = deletedHrefs.map(resolveHref);
+
+  let changed: CalendarObjectRaw[] = [];
+  if (changedHrefs.length > 0) {
+    const objects = await _fetchCalendarObjects({
+      calendar: { url: calUrl },
+      objectUrls: changedHrefs,
+      headers: authHeaders,
+    });
+    changed = objects
+      .filter((obj: TsdavTypes.DAVCalendarObject) => obj.data)
+      .map((obj: TsdavTypes.DAVCalendarObject) => ({
+        url: obj.url,
+        etag: obj.etag ?? '',
+        rawIcs: obj.data as string,
+      }));
+  }
+
+  return { syncToken: newSyncToken, changed, deleted };
+}
+
+// ── Task write operations ─────────────────────────────────────────────────────
+
+export interface TaskWriteResult {
+  uid: string;
+  url: string;
+  etag: string;
+  collectionUrl: string;
+  rawIcs: string;
+}
+
+export async function createTask(
+  session: SessionData,
+  collectionUrl: string,
+  data: TaskJson,
+  config: Config,
+): Promise<TaskWriteResult> {
+  assertBaikalOrigin(collectionUrl, config);
+  const uid = data.uid || crypto.randomUUID();
+  const taskData: TaskJson = { ...data, uid };
+  const icsStr = serializeIcalTask(taskData);
+  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+
+  const res = await davFetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: icsStr,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const etag = res.headers.get('ETag') ?? `"${uid}"`;
+  return { uid, url, etag, collectionUrl, rawIcs: icsStr };
+}
+
+export async function updateTask(
+  session: SessionData,
+  objectUrl: string,
+  collectionUrl: string,
+  data: TaskJson,
+  etag: string,
+  rawIcs: string,
+): Promise<TaskWriteResult> {
+  const updatedIcs = serializeIcalTask(data, rawIcs);
+
+  const res = await davFetch(objectUrl, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-Match': etag,
+    },
+    body: updatedIcs,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const newEtag = res.headers.get('ETag') ?? etag;
+  return { uid: data.uid, url: objectUrl, etag: newEtag, collectionUrl, rawIcs: updatedIcs };
+}
+
+export async function deleteTask(
+  session: SessionData,
+  objectUrl: string,
+  etag: string,
+): Promise<void> {
+  const res = await davFetch(objectUrl, {
+    method: 'DELETE',
+    headers: {
+      ...basicAuthHeader(session),
+      'If-Match': etag,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
+  }
+}
+
+// ── Baikal archive search ─────────────────────────────────────────────────────
+
+/**
+ * Fetch VTODO objects whose COMPLETED timestamp falls strictly between the
+ * retention window and the max archive age — i.e. tasks that have been evicted
+ * from the local cache but are still within the Baikal search cap.
+ *
+ * time-range start = now - BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS  (oldest to fetch)
+ * time-range end   = now - COMPLETED_TASK_RETENTION_DAYS       (exclude still-cached tasks)
+ *
+ * Per-collection failures are caught and logged so one bad collection
+ * doesn't abort the entire search.
+ */
+export async function fetchArchivedCompletedTasks(
+  session: SessionData,
+  collectionUrls: string[],
+  config: Config,
+): Promise<CalendarObjectRaw[]> {
+  const authHeaders = basicAuthHeader(session);
+  const toIso = (ms: number): string =>
+    new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
+
+  // Oldest tasks to include
+  const startStr = toIso(Date.now() - config.BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS * 86_400_000);
+  // Exclude tasks still within the retention window (they're in the local cache)
+  const endStr = toIso(Date.now() - config.COMPLETED_TASK_RETENTION_DAYS * 86_400_000);
+
+  const results: CalendarObjectRaw[] = [];
+  for (const calUrl of collectionUrls) {
+    try {
+      const objects = await _fetchCalendarObjects({
+        calendar: { url: calUrl },
+        headers: authHeaders,
+        filters: [
+          {
+            'comp-filter': {
+              _attributes: { name: 'VCALENDAR' },
+              'comp-filter': {
+                _attributes: { name: 'VTODO' },
+                'prop-filter': {
+                  _attributes: { name: 'COMPLETED' },
+                  'time-range': { _attributes: { start: startStr, end: endStr } },
+                },
+              },
+            },
+          },
+        ],
+      });
+      for (const obj of objects as TsdavTypes.DAVCalendarObject[]) {
+        if (obj.data) {
+          results.push({ url: obj.url, etag: obj.etag ?? '', rawIcs: obj.data as string });
+        }
+      }
+    } catch (err) {
+      console.warn(`fetchArchivedCompletedTasks: collection ${calUrl} failed`, err);
+    }
+  }
+  return results;
+}
+
+/**
+ * Fetch VEVENT objects from the given calendar collections within ±rangeDays of
+ * today. Used by the global search endpoint to search calendar events.
+ *
+ * Each collection failure is caught individually so one bad calendar doesn't
+ * abort the entire search. The caller is responsible for text-filtering and
+ * capping results.
+ */
+export async function fetchEventsForSearch(
+  session: SessionData,
+  calendars: Array<{ id: string; url: string }>,
+  rangeDays: number,
+): Promise<Array<{ url: string; etag: string; rawIcs: string; calendarId: string }>> {
+  const authHeaders = basicAuthHeader(session);
+  const toIso = (ms: number): string =>
+    new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
+
+  const now = Date.now();
+  const startStr = toIso(now - rangeDays * 86_400_000);
+  const endStr = toIso(now + rangeDays * 86_400_000);
+
+  const results: Array<{ url: string; etag: string; rawIcs: string; calendarId: string }> = [];
+  for (const cal of calendars) {
+    try {
+      const objects = await _fetchCalendarObjects({
+        calendar: { url: cal.url },
+        headers: authHeaders,
+        filters: [
+          {
+            'comp-filter': {
+              _attributes: { name: 'VCALENDAR' },
+              'comp-filter': {
+                _attributes: { name: 'VEVENT' },
+                'time-range': { _attributes: { start: startStr, end: endStr } },
+              },
+            },
+          },
+        ],
+      });
+      for (const obj of objects as TsdavTypes.DAVCalendarObject[]) {
+        if (obj.data) {
+          results.push({ url: obj.url, etag: obj.etag ?? '', rawIcs: obj.data as string, calendarId: cal.id });
+        }
+      }
+    } catch (err) {
+      console.warn(`fetchEventsForSearch: collection ${cal.url} failed`, err);
+    }
+  }
+  return results;
+}
+
+/**
+ * Restore an archived completed task: GET the current ICS from Baikal,
+ * reset STATUS to NEEDS-ACTION, clear COMPLETED and PERCENT-COMPLETE,
+ * then PUT it back. Returns the TaskWriteResult for the caller to cache.
+ */
+export async function restoreArchivedTask(
+  session: SessionData,
+  objectUrl: string,
+  collectionUrl: string,
+  etag: string,
+  config: Config,
+): Promise<TaskWriteResult> {
+  assertBaikalOrigin(objectUrl, config);
+  const authHeaders = basicAuthHeader(session);
+
+  // Fetch latest ICS (in case it changed since the search was run)
+  const getRes = await davFetch(objectUrl, { headers: authHeaders });
+  if (!getRes.ok) {
+    throw Object.assign(new Error(`GET failed: ${getRes.status}`), { statusCode: getRes.status });
+  }
+  const rawIcs = await getRes.text();
+  const currentEtag = getRes.headers.get('ETag') ?? etag;
+
+  const restoredIcs = resetTaskToNeedsAction(rawIcs);
+
+  const putRes = await davFetch(objectUrl, {
+    method: 'PUT',
+    headers: {
+      ...authHeaders,
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-Match': currentEtag,
+    },
+    body: restoredIcs,
+  });
+
+  if (!putRes.ok) {
+    const body = await putRes.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${putRes.status}`), { statusCode: putRes.status, body });
+  }
+
+  const newEtag = putRes.headers.get('ETag') ?? currentEtag;
+
+  // Extract UID with a simple regex — UUIDs never fold across lines.
+  const uidMatch = restoredIcs.match(/^UID:(.+)$/m);
+  const uid = uidMatch?.[1]?.trim() ?? '';
+
+  return { uid, url: objectUrl, etag: newEtag, collectionUrl, rawIcs: restoredIcs };
+}
+
+// ── Journal (VJOURNAL) write operations ───────────────────────────────────────
+
+export interface JournalWriteResult {
+  uid: string;
+  url: string;
+  etag: string;
+  collectionUrl: string;
+  rawIcs: string;
+}
+
+export async function createJournal(
+  session: SessionData,
+  collectionUrl: string,
+  data: NoteJson,
+  config: Config,
+): Promise<JournalWriteResult> {
+  assertBaikalOrigin(collectionUrl, config);
+  const uid = data.uid || crypto.randomUUID();
+  const entryData: NoteJson = { ...data, uid };
+  const icsStr = serializeIcalJournal(entryData);
+  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+
+  const res = await davFetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: icsStr,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const etag = res.headers.get('ETag') ?? `"${uid}"`;
+  return { uid, url, etag, collectionUrl, rawIcs: icsStr };
+}
+
+export async function updateJournal(
+  session: SessionData,
+  objectUrl: string,
+  collectionUrl: string,
+  data: NoteJson,
+  etag: string,
+  rawIcs: string,
+): Promise<JournalWriteResult> {
+  const updatedIcs = serializeIcalJournal(data, rawIcs);
+
+  const res = await davFetch(objectUrl, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-Match': etag,
+    },
+    body: updatedIcs,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const newEtag = res.headers.get('ETag') ?? etag;
+  return { uid: data.uid, url: objectUrl, etag: newEtag, collectionUrl, rawIcs: updatedIcs };
+}
+
+export async function deleteJournal(
+  session: SessionData,
+  objectUrl: string,
+  etag: string,
+): Promise<void> {
+  const res = await davFetch(objectUrl, {
+    method: 'DELETE',
+    headers: {
+      ...basicAuthHeader(session),
+      'If-Match': etag,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`DELETE failed: ${res.status}`), { statusCode: res.status, body });
+  }
+}
+
+// PUT existing raw ICS content into a new collection URL (used for cascade moves).
+export async function createTaskRaw(
+  session: SessionData,
+  collectionUrl: string,
+  uid: string,
+  rawIcs: string,
+  config: Config,
+): Promise<{ url: string; etag: string; collectionUrl: string }> {
+  assertBaikalOrigin(collectionUrl, config);
+  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+  const res = await davFetch(url, {
+    method: 'PUT',
+    headers: {
+      ...basicAuthHeader(session),
+      'Content-Type': 'text/calendar; charset=utf-8',
+      'If-None-Match': '*',
+    },
+    body: rawIcs,
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw Object.assign(new Error(`PUT failed: ${res.status}`), { statusCode: res.status, body });
+  }
+
+  const etag = res.headers.get('ETag') ?? `"${uid}"`;
+  return { url, etag, collectionUrl };
 }

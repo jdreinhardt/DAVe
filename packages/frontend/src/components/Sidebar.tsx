@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BookUser, Calendar, Check, LogOut, Pencil, Plus, RefreshCw, Settings } from 'lucide-react';
+import { BookUser, Calendar, Check, CheckSquare, LogOut, NotebookPen, Pencil, Plus, RefreshCw, Search, Settings, ScrollText } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import AddressBookModal from './AddressBookModal';
 import CalendarModal from './CalendarModal';
@@ -12,6 +12,7 @@ import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useContactDrag } from '../contexts/ContactDrag';
+import { useNoteDrag } from '../contexts/NoteDrag';
 import type { AddressBook, Calendar as CalendarType } from '@dave/shared';
 import type { MeResponse } from '@dave/shared';
 
@@ -19,9 +20,10 @@ interface SidebarProps {
   me: MeResponse;
   isOpen: boolean;
   onClose: () => void;
+  onOpenSearch: () => void;
 }
 
-export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
+export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarProps) {
   const queryClient = useQueryClient();
   const [showSettings, setShowSettings] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -49,7 +51,12 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
   const { pathname } = useLocation();
   const inContacts = pathname.startsWith('/contacts');
   const inCalendar = pathname.startsWith('/calendar');
-  const isLoading = (inContacts ? abQuery.isFetching : false) || (inCalendar ? calQuery.isFetching : false);
+  const inTasks = pathname.startsWith('/tasks');
+  const inNotes = pathname.startsWith('/notes');
+  const inJournals = pathname.startsWith('/journals');
+  const isLoading =
+    (inContacts ? abQuery.isFetching : false) ||
+    (inCalendar || inTasks || inNotes || inJournals ? calQuery.isFetching : false);
 
   return (
     <>
@@ -69,9 +76,17 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
         // Desktop: static in normal flow, always visible
         'md:static md:translate-x-0',
       )}>
-      {/* App name + sync indicator */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <span className="font-semibold text-foreground">DAVe</span>
+      {/* App name + search + sync indicator */}
+      <div className="flex items-center gap-1 px-4 py-3 border-b border-border">
+        <span className="font-semibold text-foreground flex-1">DAVe</span>
+        <button
+          onClick={onOpenSearch}
+          className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+          title="Search (⌘K)"
+          aria-label="Search"
+        >
+          <Search className="h-3.5 w-3.5" />
+        </button>
         {isLoading && (
           <RefreshCw className="h-3 w-3 text-muted-foreground animate-spin" />
         )}
@@ -84,6 +99,15 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
         </SidebarNavLink>
         <SidebarNavLink to="/calendar" icon={<Calendar className="h-4 w-4" />}>
           Calendar
+        </SidebarNavLink>
+        <SidebarNavLink to="/tasks" icon={<CheckSquare className="h-4 w-4" />}>
+          Tasks
+        </SidebarNavLink>
+        <SidebarNavLink to="/notes" icon={<NotebookPen className="h-4 w-4" />}>
+          Notes
+        </SidebarNavLink>
+        <SidebarNavLink to="/journals" icon={<ScrollText className="h-4 w-4" />}>
+          Journals
         </SidebarNavLink>
       </nav>
 
@@ -106,6 +130,20 @@ export default function Sidebar({ me, isOpen, onClose }: SidebarProps) {
           items={calQuery.data}
           isError={calQuery.isError}
           defaultColor="#0082C9"
+        />
+      )}
+
+      {inTasks && (
+        <TaskCollectionSection
+          allCalendars={calQuery.data}
+          isError={calQuery.isError}
+        />
+      )}
+
+      {(inNotes || inJournals) && (
+        <VJournalCollectionSection
+          allCalendars={calQuery.data}
+          isError={calQuery.isError}
         />
       )}
 
@@ -186,6 +224,211 @@ function SidebarNavLink({
       {icon}
       {children}
     </NavLink>
+  );
+}
+
+// Notes and Journals share the same VJOURNAL collections and one visibility state.
+function VJournalCollectionSection({
+  allCalendars,
+  isError,
+}: {
+  allCalendars: CalendarType[] | undefined;
+  isError: boolean;
+}) {
+  const {
+    hiddenVJournalCollections,
+    toggleVJournalCollection,
+    showAllVJournalCollections,
+    hideAllVJournalCollections,
+  } = useCollectionVisibility();
+
+  const { dragging: noteDragging } = useNoteDrag();
+  const isDraggingNote = noteDragging !== null;
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
+  const vjournalCollections = (allCalendars ?? []).filter((cal) =>
+    cal.components.includes('VJOURNAL'),
+  );
+
+  const allVisible = vjournalCollections.every((c) => !hiddenVJournalCollections.has(c.id));
+  const noneVisible =
+    vjournalCollections.length > 0 && vjournalCollections.every((c) => hiddenVJournalCollections.has(c.id));
+
+  return (
+    <div className="px-2 py-2">
+      <div className="group flex items-center justify-between px-3 mb-1">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Collections
+        </p>
+        {vjournalCollections.length > 1 && (
+          <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={showAllVJournalCollections}
+              disabled={allVisible}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors"
+            >
+              All
+            </button>
+            <span className="text-muted-foreground/40 text-xs">·</span>
+            <button
+              onClick={() => hideAllVJournalCollections(vjournalCollections.map((c) => c.id))}
+              disabled={noneVisible}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors"
+            >
+              None
+            </button>
+          </div>
+        )}
+      </div>
+
+      {isError && (
+        <p className="px-3 text-xs text-destructive">Failed to load</p>
+      )}
+
+      {allCalendars === undefined && !isError && (
+        <div className="px-3 space-y-2">
+          {[1, 2].map((i) => (
+            <div key={i} className="h-5 rounded bg-muted animate-pulse" />
+          ))}
+        </div>
+      )}
+
+      {allCalendars !== undefined && vjournalCollections.length === 0 && (
+        <p className="px-3 text-xs text-muted-foreground">No collections available</p>
+      )}
+
+      {vjournalCollections.map((cal) => {
+        const isSameCol = isDraggingNote && noteDragging!.note.data.collectionUrl === cal.url;
+        const isOver = dropTargetId === cal.id;
+        return (
+          <label
+            key={cal.id}
+            onDragOver={isDraggingNote && !isSameCol ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropTargetId(cal.id); } : undefined}
+            onDragLeave={isDraggingNote ? () => setDropTargetId(null) : undefined}
+            onDrop={isDraggingNote && !isSameCol ? (e) => { e.preventDefault(); setDropTargetId(null); noteDragging!.onMove(cal.url); } : undefined}
+            className={cn(
+              'flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors',
+              isOver && 'bg-primary/10 ring-1 ring-inset ring-primary/40',
+            )}
+          >
+            <input
+              type="checkbox"
+              className="sr-only"
+              checked={!hiddenVJournalCollections.has(cal.id)}
+              onChange={() => toggleVJournalCollection(cal.id)}
+            />
+            <span
+              className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+              style={{
+                backgroundColor: hiddenVJournalCollections.has(cal.id) ? 'transparent' : (cal.color || '#0082C9'),
+                borderColor: cal.color || '#0082C9',
+              }}
+            >
+              {!hiddenVJournalCollections.has(cal.id) && (
+                <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+              )}
+            </span>
+            <span className={cn('truncate', hiddenVJournalCollections.has(cal.id) && 'text-muted-foreground line-through')}>
+              {cal.displayName}
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskCollectionSection({
+  allCalendars,
+  isError,
+}: {
+  allCalendars: CalendarType[] | undefined;
+  isError: boolean;
+}) {
+  const { hiddenTaskCollections, toggleTaskCollection, showAllTaskCollections, hideAllTaskCollections } =
+    useCollectionVisibility();
+
+  const taskCollections = (allCalendars ?? []).filter((cal) =>
+    cal.components.includes('VTODO'),
+  );
+
+  const allVisible = taskCollections.every((c) => !hiddenTaskCollections.has(c.id));
+  const noneVisible =
+    taskCollections.length > 0 && taskCollections.every((c) => hiddenTaskCollections.has(c.id));
+
+  return (
+    <div className="px-2 py-2">
+      <div className="group flex items-center justify-between px-3 mb-1">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Task Lists
+        </p>
+        {taskCollections.length > 1 && (
+          <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button
+              onClick={showAllTaskCollections}
+              disabled={allVisible}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors"
+            >
+              All
+            </button>
+            <span className="text-muted-foreground/40 text-xs">·</span>
+            <button
+              onClick={() => hideAllTaskCollections(taskCollections.map((c) => c.id))}
+              disabled={noneVisible}
+              className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-default transition-colors"
+            >
+              None
+            </button>
+          </div>
+        )}
+      </div>
+
+      {isError && (
+        <p className="px-3 text-xs text-destructive">Failed to load</p>
+      )}
+
+      {/* Skeleton while loading */}
+      {allCalendars === undefined && !isError && (
+        <div className="px-3 space-y-2">
+          {[1, 2].map((i) => (
+            <div key={i} className="h-5 rounded bg-muted animate-pulse" />
+          ))}
+        </div>
+      )}
+
+      {/* Empty state per §3.1 — no spinner, no polling */}
+      {allCalendars !== undefined && taskCollections.length === 0 && (
+        <p className="px-3 text-xs text-muted-foreground">No collections available</p>
+      )}
+
+      {taskCollections.map((cal) => (
+        <label
+          key={cal.id}
+          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors"
+        >
+          <input
+            type="checkbox"
+            className="sr-only"
+            checked={!hiddenTaskCollections.has(cal.id)}
+            onChange={() => toggleTaskCollection(cal.id)}
+          />
+          <span
+            className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+            style={{
+              backgroundColor: hiddenTaskCollections.has(cal.id) ? 'transparent' : (cal.color || '#0082C9'),
+              borderColor: cal.color || '#0082C9',
+            }}
+          >
+            {!hiddenTaskCollections.has(cal.id) && (
+              <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+            )}
+          </span>
+          <span className={cn('truncate', hiddenTaskCollections.has(cal.id) && 'text-muted-foreground line-through')}>
+            {cal.displayName}
+          </span>
+        </label>
+      ))}
+    </div>
   );
 }
 

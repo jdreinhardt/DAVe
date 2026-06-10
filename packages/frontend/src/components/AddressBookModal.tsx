@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { X, AlertTriangle } from 'lucide-react';
+import { X, AlertTriangle, Check } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { createAddressBook, updateAddressBook, deleteAddressBook } from '../api/collections';
 import type { AddressBook } from '@dave/shared';
@@ -12,6 +12,20 @@ interface Props {
 }
 
 type View = 'form' | 'confirm-delete';
+type ColorMode = 'auto' | 'custom' | 'none';
+
+const PRESET_COLORS = [
+  '#0082C9', '#3498DB', '#1ABC9C', '#2ECC71',
+  '#F1C40F', '#E67E22', '#E74C3C', '#E91E63',
+  '#9B59B6', '#795548', '#607D8B', '#34495E',
+];
+
+function initColorMode(ab: AddressBook | undefined): ColorMode {
+  if (!ab) return 'auto';
+  if (ab.colorIsAuto) return 'auto';
+  if (ab.color === null) return 'none';
+  return 'custom';
+}
 
 export default function AddressBookModal({ mode, addressBook, onClose }: Props) {
   const queryClient = useQueryClient();
@@ -20,11 +34,23 @@ export default function AddressBookModal({ mode, addressBook, onClose }: Props) 
   const [description, setDescription] = useState(addressBook?.description ?? '');
   const [error, setError] = useState('');
 
+  const [colorMode, setColorMode] = useState<ColorMode>(() => initColorMode(addressBook));
+  const [customColor, setCustomColor] = useState(
+    addressBook && !addressBook.colorIsAuto && addressBook.color ? addressBook.color : '#0082C9',
+  );
+
   const saveMutation = useMutation({
-    mutationFn: () =>
-      mode === 'create'
-        ? createAddressBook({ displayName, description: description || undefined })
-        : updateAddressBook(addressBook!.id, { displayName, description: description || undefined }),
+    mutationFn: () => {
+      if (mode === 'create') {
+        return createAddressBook({ displayName, description: description || undefined });
+      }
+      const colorValue = colorMode === 'auto' ? null : colorMode === 'none' ? 'none' : customColor;
+      return updateAddressBook(addressBook!.id, {
+        displayName,
+        description: description || undefined,
+        color: colorValue,
+      });
+    },
     onSuccess: (updatedBooks) => {
       queryClient.setQueryData(['addressbooks'], updatedBooks);
       onClose();
@@ -98,6 +124,92 @@ export default function AddressBookModal({ mode, addressBook, onClose }: Props) 
                   className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-none"
                 />
               </div>
+
+              {/* Color picker — edit mode only */}
+              {mode === 'edit' && (
+                <div className="space-y-2">
+                  <span className="text-sm font-medium">Color</span>
+
+                  {/* Auto / None quick-select */}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setColorMode('auto')}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs border transition-colors',
+                        colorMode === 'auto'
+                          ? 'bg-primary/10 border-primary/40 text-primary font-medium'
+                          : 'border-input hover:bg-muted text-muted-foreground',
+                      )}
+                    >
+                      {addressBook?.colorIsAuto && addressBook.color && (
+                        <span
+                          className="w-3 h-3 rounded-full shrink-0"
+                          style={{ backgroundColor: addressBook.color }}
+                        />
+                      )}
+                      Auto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setColorMode('none')}
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs border transition-colors',
+                        colorMode === 'none'
+                          ? 'bg-primary/10 border-primary/40 text-primary font-medium'
+                          : 'border-input hover:bg-muted text-muted-foreground',
+                      )}
+                    >
+                      <span className="w-3 h-3 rounded-full bg-muted border border-input shrink-0" />
+                      No color
+                    </button>
+                  </div>
+
+                  {/* Preset swatches + custom input (clicking any sets custom mode) */}
+                  <div className="flex flex-wrap gap-2">
+                    {PRESET_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => { setColorMode('custom'); setCustomColor(c); }}
+                        className="w-6 h-6 rounded-full flex items-center justify-center transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-1"
+                        style={{ backgroundColor: c }}
+                        title={c}
+                      >
+                        {colorMode === 'custom' && customColor === c && (
+                          <Check className="w-3 h-3 text-white" strokeWidth={3} />
+                        )}
+                      </button>
+                    ))}
+                    {/* Custom color input */}
+                    <label
+                      className="w-6 h-6 rounded-full border-2 border-dashed border-muted-foreground/50 flex items-center justify-center cursor-pointer hover:border-foreground transition-colors overflow-hidden"
+                      title="Custom color"
+                      style={
+                        colorMode === 'custom' && !PRESET_COLORS.includes(customColor)
+                          ? { backgroundColor: customColor, borderStyle: 'solid', borderColor: customColor }
+                          : {}
+                      }
+                    >
+                      <input
+                        type="color"
+                        value={colorMode === 'custom' ? customColor : '#0082C9'}
+                        onChange={(e) => { setColorMode('custom'); setCustomColor(e.target.value); }}
+                        className="opacity-0 absolute w-0 h-0"
+                      />
+                      {colorMode === 'custom' && !PRESET_COLORS.includes(customColor) && (
+                        <Check className="w-3 h-3 text-white" strokeWidth={3} />
+                      )}
+                    </label>
+                  </div>
+
+                  {colorMode === 'auto' && (
+                    <p className="text-xs text-muted-foreground">
+                      Color is automatically assigned based on this address book.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Footer */}

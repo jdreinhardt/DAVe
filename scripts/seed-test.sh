@@ -83,7 +83,7 @@ INSERT OR IGNORE INTO calendars
      calendarorder, calendarcolor, timezone, components, transparent, synctoken)
   VALUES
     ('principals/${USERNAME}', 'Personal', 'personal', '',
-     0, '#0082C9', 'America/New_York', 'VEVENT', 0, 1);
+     0, '#0082C9', 'America/New_York', 'VEVENT,VTODO,VJOURNAL', 0, 1);
 
 INSERT OR IGNORE INTO addressbooks (principaluri, displayname, uri, description, synctoken)
   VALUES ('principals/${USERNAME}', 'Contacts', 'contacts', '', 1);

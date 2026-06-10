@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { DbInstance as DatabaseSync } from '../db/index.js';
 import type { Config } from '../config.js';
 import type { EventJson, UpdateEventRequest } from '@dave/shared';
-import { createEvent, updateEvent, deleteEvent, updateEventScoped, deleteEventScoped } from '../lib/dav.js';
+import { createEvent, updateEvent, moveEvent, deleteEvent, updateEventScoped, deleteEventScoped } from '../lib/dav.js';
 import { deleteSession } from '../services/session.js';
 import { requireAuth, COOKIE_NAME } from '../plugins/session.js';
 
@@ -82,13 +82,13 @@ export async function eventsRoutes(
         return reply.status(400).send({ error: 'Missing calendarId in event data', statusCode: 400 });
       }
       try {
-        // When a scope is explicitly provided the request involves a recurring event
-        // and must go through updateEventScoped (which preserves exceptions for
-        // scope=all and handles this/following correctly). When no scope is provided
-        // the event is non-recurring and we use the simpler updateEvent path.
-        const result = scope != null
-          ? await updateEventScoped(req.sessionData!, data.calendarId, req.params.eventId, data, etag, scope, config)
-          : await updateEvent(req.sessionData!, data.calendarId, req.params.eventId, data, etag, config);
+        const { oldCalendarId } = req.body;
+        const isMove = !!oldCalendarId && oldCalendarId !== data.calendarId;
+        const result = isMove
+          ? await moveEvent(req.sessionData!, oldCalendarId, req.params.eventId, data, etag, scope, config)
+          : scope != null
+            ? await updateEventScoped(req.sessionData!, data.calendarId, req.params.eventId, data, etag, scope, config)
+            : await updateEvent(req.sessionData!, data.calendarId, req.params.eventId, data, etag, config);
         return reply.send(result);
       } catch (e) {
         await handleDavError(e, req, reply, app, db);

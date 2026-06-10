@@ -74,6 +74,23 @@ describe('serializeIcalEvent – DTSTART formats', () => {
     expect(out).toContain('BEGIN:VTIMEZONE');
     expect(out).toContain('TZID:America/New_York');
   });
+
+  it('VTIMEZONE offset is well-formed ±HHMM (no truncation)', () => {
+    // Regression: utcOffsetString was returning ±HHMM (no colon) but
+    // ical.js toICAL() expects jCal ±HH:MM — passing ±HHMM caused the
+    // minutes digit to be mis-sliced, emitting -050 instead of -0500.
+    const e = baseEvent();
+    e.tzid = 'America/Chicago';
+    e.start = '2026-05-21T14:00:00.000Z'; // 09:00 CDT (UTC-5)
+    e.end   = '2026-05-21T15:00:00.000Z';
+    const out = serializeIcalEvent(e);
+    // Must match ±HHMM with exactly 4 digits, never a truncated ±HMM.
+    const offsetLines = out.split(/\r?\n/).filter(l => l.startsWith('TZOFFSET'));
+    expect(offsetLines.length).toBeGreaterThan(0);
+    for (const line of offsetLines) {
+      expect(line).toMatch(/TZOFFSET(?:FROM|TO):[+-]\d{4}$/);
+    }
+  });
 });
 
 describe('serializeIcalEvent – UID', () => {
