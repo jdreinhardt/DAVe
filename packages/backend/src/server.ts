@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import Fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
+import fastifyRateLimit from '@fastify/rate-limit';
 import { loadConfig } from './config.js';
 import { getDb } from './db/index.js';
 import { getCacheDb } from './db/cache.js';
@@ -39,9 +40,31 @@ const app = Fastify({
   trustProxy: config.TRUST_PROXY,
 });
 
+// In production behind an HTTPS-terminating proxy, TRUST_PROXY must be set so the
+// session cookie gets the Secure flag (and X-Forwarded-For is honored for rate
+// limiting). Warn rather than exit: direct HTTP on a trusted network is a valid
+// deployment, so we can't assume this is wrong — only that it's a common mistake.
+if (config.NODE_ENV === 'production' && !config.TRUST_PROXY) {
+  app.log.warn(
+    'TRUST_PROXY is not set in production — the session cookie will be sent ' +
+      'without the Secure flag and client IPs will not be read from ' +
+      'X-Forwarded-For. Set TRUST_PROXY=1 if you run behind an HTTPS proxy.',
+  );
+}
+
 // ── Plugins ───────────────────────────────────────────────────────────────────
 
 await app.register(fastifyCookie);
+
+// Loose global cap as a backstop; the login route tightens this further via its
+// own route-level config (see routes/auth.ts). Keys on the client IP — behind a
+// proxy this is the X-Forwarded-For address only when TRUST_PROXY is enabled.
+await app.register(fastifyRateLimit, {
+  global: true,
+  max: 300,
+  timeWindow: '1 minute',
+});
+
 await app.register(sessionPlugin, { config, db });
 
 // ── Sync worker (created before routes so routes can reference it) ─────────

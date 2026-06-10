@@ -55,8 +55,31 @@ export async function settingsRoutes(
     } satisfies SettingsBody);
   });
 
-  app.put('/api/settings', { preHandler: requireAuth }, async (req, reply) => {
+  app.put('/api/settings', {
+    preHandler: requireAuth,
+    schema: {
+      body: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          contactSortBy:   { type: 'string', enum: ['first', 'last'] },
+          contactSortDir:  { type: 'string', enum: ['asc', 'desc'] },
+          contactSubtitle: { type: 'string', enum: ['nickname', 'email', 'phone', 'organization', 'title', ''] },
+          mapService:      { type: 'string', enum: ['osm', 'google', 'apple'] },
+          darkMode:        { type: 'string', enum: ['light', 'dark', 'system'] },
+          taskLayout:      { type: 'string', enum: ['list', 'compact', 'kanban'] },
+          notesView:       { type: 'string', enum: ['list', 'grid'] },
+          journalsView:    { type: 'string', enum: ['timeline', 'list', 'calendar'] },
+          updatedAt:       { type: 'integer', minimum: 0 },
+        },
+      },
+    },
+  }, async (req, reply) => {
     const body = req.body as SettingsBody;
+
+    // Clamp to now (+ small clock-skew tolerance) so a client can't pin its
+    // settings against future writes with an arbitrarily large timestamp.
+    const updatedAt = Math.min(body.updatedAt ?? Date.now(), Date.now() + 60_000);
 
     db.prepare(`
       INSERT INTO user_settings
@@ -84,7 +107,7 @@ export async function settingsRoutes(
       body.taskLayout     ?? 'list',
       body.notesView      ?? 'list',
       body.journalsView   ?? 'timeline',
-      body.updatedAt      ?? Date.now(),
+      updatedAt,
     );
 
     return reply.status(204).send();

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fastifyRateLimit from '@fastify/rate-limit';
 import { buildApp } from './helpers.js';
 import { authRoutes } from '../routes/auth.js';
 import { COOKIE_NAME } from '../plugins/session.js';
@@ -112,6 +113,41 @@ describe('POST /api/auth/login', () => {
     const setCookie = res.headers['set-cookie'];
     const cookieStr = Array.isArray(setCookie) ? setCookie[0] : setCookie;
     expect(cookieStr).toContain(COOKIE_NAME);
+  });
+});
+
+describe('POST /api/auth/login rate limiting', () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+
+  beforeEach(async () => {
+    vi.mocked(discoverAndValidate).mockReset();
+    // Register the limiter before the route so the route-level config takes
+    // effect. The high global cap ensures only the per-route max governs here.
+    app = await buildApp(async (a, cfg, db) => {
+      await a.register(fastifyRateLimit, { global: true, max: 1000, timeWindow: '1 minute' });
+      await a.register(authRoutes, { config: cfg, db });
+    });
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('returns 429 once the per-route login limit (10/window) is exceeded', async () => {
+    vi.mocked(discoverAndValidate).mockRejectedValue(new Error('Request failed with status 401'));
+    const attempt = () =>
+      app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: 'alice', password: 'wrong' },
+      });
+
+    // The first 10 attempts reach the handler and fail with 401.
+    for (let i = 0; i < 10; i++) {
+      expect((await attempt()).statusCode).toBe(401);
+    }
+    // The 11th is rejected by the limiter before reaching the handler.
+    expect((await attempt()).statusCode).toBe(429);
   });
 });
 

@@ -25,6 +25,18 @@ const {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/**
+ * All authenticated DAV requests go through this wrapper so the SSRF defense is
+ * the default, not something each call site has to remember. `redirect: 'error'`
+ * ensures a 3xx from Baikal is never followed — otherwise the user's basic-auth
+ * Authorization header could be replayed to an arbitrary redirect target.
+ * Listed first so it can't be silently dropped, but still overridable if a
+ * future caller has a genuine reason.
+ */
+function davFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { redirect: 'error', ...init });
+}
+
 // Coerce a tsdav displayName (can be string or object with a #text key) to string.
 function str(v: unknown, fallback = ''): string {
   if (typeof v === 'string') return v;
@@ -298,7 +310,7 @@ export async function createContact(
   const vcardStr = serializeVCard(contactData);
   const url = contactUrl(session, addressBookId, uid);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -328,7 +340,7 @@ export async function updateContact(
   const vcardStr = serializeVCard(data);
   const url = contactUrl(session, addressBookId, id);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -356,7 +368,7 @@ export async function deleteContact(
 ): Promise<void> {
   const url = contactUrl(session, addressBookId, id);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'DELETE',
     headers: {
       ...basicAuthHeader(session),
@@ -460,7 +472,7 @@ export async function createEvent(
   const icsStr = serializeIcalEvent(eventData);
   const url = calendarObjectUrl(session, calendarId, uid);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -492,7 +504,7 @@ export async function updateEvent(
   const icsStr = serializeIcalEvent(eventData);
   const url = calendarObjectUrl(session, calendarId, id);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -565,7 +577,7 @@ export async function moveEvent(
     const { raw, etag: freshEtag } = await fetchRawEvent(session, oldCalendarId, id);
     const updatedIcs = updateMasterVevent(raw, masterData);
     const newUrl = calendarObjectUrl(session, newCalendarId, id);
-    const putRes = await fetch(newUrl, {
+    const putRes = await davFetch(newUrl, {
       method: 'PUT',
       headers: {
         ...basicAuthHeader(session),
@@ -587,7 +599,7 @@ export async function moveEvent(
   const eventData: EventJson = { ...data, calendarId: newCalendarId, recurrenceId: null };
   const icsStr = serializeIcalEvent(eventData);
   const newUrl = calendarObjectUrl(session, newCalendarId, id);
-  const putRes = await fetch(newUrl, {
+  const putRes = await davFetch(newUrl, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -614,7 +626,7 @@ export async function deleteEvent(
 ): Promise<void> {
   const url = calendarObjectUrl(session, calendarId, id);
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'DELETE',
     headers: {
       ...basicAuthHeader(session),
@@ -636,7 +648,7 @@ async function fetchRawEvent(
   id: string,
 ): Promise<{ raw: string; etag: string }> {
   const url = calendarObjectUrl(session, calendarId, id);
-  const res = await fetch(url, { headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { headers: basicAuthHeader(session) });
   if (!res.ok) {
     throw Object.assign(new Error(`GET failed: ${res.status}`), { statusCode: res.status });
   }
@@ -651,7 +663,7 @@ async function putRawIcs(
   ics: string,
   etag: string,
 ): Promise<string> {
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -796,7 +808,7 @@ export async function createAddressBook(
   </D:set>
 </D:mkcol>`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'MKCOL',
     headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
@@ -831,7 +843,7 @@ export async function updateAddressBook(
   </D:set>
 </D:propertyupdate>`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PROPPATCH',
     headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
@@ -849,7 +861,7 @@ export async function deleteAddressBook(
   _config: Config,
 ): Promise<void> {
   const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${id}/`;
-  const res = await fetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
 
   if (!res.ok && res.status !== 404) {
     const text = await res.text().catch(() => '');
@@ -884,7 +896,7 @@ export async function createCalendar(
   </D:set>
 </C:mkcalendar>`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'MKCALENDAR',
     headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
@@ -920,7 +932,7 @@ export async function updateCalendar(
   </D:set>
 </D:propertyupdate>`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PROPPATCH',
     headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
@@ -938,7 +950,7 @@ export async function deleteCalendar(
   _config: Config,
 ): Promise<void> {
   const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${id}/`;
-  const res = await fetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
 
   if (!res.ok && res.status !== 404) {
     const text = await res.text().catch(() => '');
@@ -1157,7 +1169,7 @@ export async function createTask(
   const icsStr = serializeIcalTask(taskData);
   const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -1165,9 +1177,6 @@ export async function createTask(
       'If-None-Match': '*',
     },
     body: icsStr,
-    // Never follow a redirect off the validated Baikal origin — it could carry
-    // the Authorization header to another host. Treat any redirect as an error.
-    redirect: 'error',
   });
 
   if (!res.ok) {
@@ -1189,7 +1198,7 @@ export async function updateTask(
 ): Promise<TaskWriteResult> {
   const updatedIcs = serializeIcalTask(data, rawIcs);
 
-  const res = await fetch(objectUrl, {
+  const res = await davFetch(objectUrl, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -1213,7 +1222,7 @@ export async function deleteTask(
   objectUrl: string,
   etag: string,
 ): Promise<void> {
-  const res = await fetch(objectUrl, {
+  const res = await davFetch(objectUrl, {
     method: 'DELETE',
     headers: {
       ...basicAuthHeader(session),
@@ -1354,7 +1363,7 @@ export async function restoreArchivedTask(
   const authHeaders = basicAuthHeader(session);
 
   // Fetch latest ICS (in case it changed since the search was run)
-  const getRes = await fetch(objectUrl, { headers: authHeaders, redirect: 'error' });
+  const getRes = await davFetch(objectUrl, { headers: authHeaders });
   if (!getRes.ok) {
     throw Object.assign(new Error(`GET failed: ${getRes.status}`), { statusCode: getRes.status });
   }
@@ -1363,7 +1372,7 @@ export async function restoreArchivedTask(
 
   const restoredIcs = resetTaskToNeedsAction(rawIcs);
 
-  const putRes = await fetch(objectUrl, {
+  const putRes = await davFetch(objectUrl, {
     method: 'PUT',
     headers: {
       ...authHeaders,
@@ -1371,7 +1380,6 @@ export async function restoreArchivedTask(
       'If-Match': currentEtag,
     },
     body: restoredIcs,
-    redirect: 'error',
   });
 
   if (!putRes.ok) {
@@ -1410,7 +1418,7 @@ export async function createJournal(
   const icsStr = serializeIcalJournal(entryData);
   const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
 
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -1418,7 +1426,6 @@ export async function createJournal(
       'If-None-Match': '*',
     },
     body: icsStr,
-    redirect: 'error',
   });
 
   if (!res.ok) {
@@ -1440,7 +1447,7 @@ export async function updateJournal(
 ): Promise<JournalWriteResult> {
   const updatedIcs = serializeIcalJournal(data, rawIcs);
 
-  const res = await fetch(objectUrl, {
+  const res = await davFetch(objectUrl, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -1464,7 +1471,7 @@ export async function deleteJournal(
   objectUrl: string,
   etag: string,
 ): Promise<void> {
-  const res = await fetch(objectUrl, {
+  const res = await davFetch(objectUrl, {
     method: 'DELETE',
     headers: {
       ...basicAuthHeader(session),
@@ -1488,7 +1495,7 @@ export async function createTaskRaw(
 ): Promise<{ url: string; etag: string; collectionUrl: string }> {
   assertBaikalOrigin(collectionUrl, config);
   const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
-  const res = await fetch(url, {
+  const res = await davFetch(url, {
     method: 'PUT',
     headers: {
       ...basicAuthHeader(session),
@@ -1496,7 +1503,6 @@ export async function createTaskRaw(
       'If-None-Match': '*',
     },
     body: rawIcs,
-    redirect: 'error',
   });
 
   if (!res.ok) {

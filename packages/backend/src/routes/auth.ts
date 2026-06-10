@@ -15,6 +15,14 @@ export async function authRoutes(
   app.post<{ Body: { username: string; password: string } }>(
     '/api/auth/login',
     {
+      // Tight limit on the credential-brute-force surface, well below the loose
+      // global cap. Keyed per-IP by @fastify/rate-limit (see server.ts).
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: '15 minutes',
+        },
+      },
       schema: {
         body: {
           type: 'object',
@@ -47,7 +55,9 @@ export async function authRoutes(
         ) {
           return reply.status(401).send({ error: 'Incorrect username or password.', statusCode: 401 });
         }
-        app.log.error({ err: e }, 'DAV discovery failed');
+        // Log only the sanitized message — never the raw error, which can carry
+        // the basic-auth Authorization header from the underlying DAV request.
+        app.log.error({ msg }, 'DAV discovery failed');
         // ECONNREFUSED / ENOTFOUND → server is not reachable at all.
         // Anything else (e.g. Baikal setup wizard returning HTML) → reachable but not ready.
         const isNetworkError =
@@ -78,6 +88,9 @@ export async function authRoutes(
       reply.setCookie(COOKIE_NAME, sessionId, {
         httpOnly: true,
         secure: config.TRUST_PROXY, // only set Secure when behind HTTPS proxy
+        // SameSite=lax is the app's only CSRF defense: it keeps the cookie off
+        // cross-site POST/PUT/DELETE, and there are no state-changing GET routes.
+        // Do NOT relax this to 'none' without adding CSRF tokens.
         sameSite: 'lax',
         path: '/',
       });
