@@ -955,6 +955,7 @@ function TaskDetailPanel({
   childrenOf,
   parentOf,
   fullscreen = false,
+  calendarColor,
 }: {
   task: Task;
   onClose: () => void;
@@ -966,6 +967,7 @@ function TaskDetailPanel({
   childrenOf: Map<string, Task[]>;
   parentOf: Map<string, Task>;
   fullscreen?: boolean;
+  calendarColor?: string;
 }) {
   const due = dueDateDisplay(task.data.due);
   const rows: { label: string; value: React.ReactNode }[] = [];
@@ -1008,6 +1010,11 @@ function TaskDetailPanel({
         fullscreen ? 'flex-1' : 'flex-1 border-l border-border',
       )}
     >
+      {/* Colour accent bar — matches the calendar's task/event popups. */}
+      <div
+        className="h-1.5 w-full shrink-0"
+        style={{ backgroundColor: hex6(calendarColor || '#0082C9') }}
+      />
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         {fullscreen && (
           <button
@@ -2638,6 +2645,7 @@ export default function TasksPage() {
             childrenOf={childrenOf}
             parentOf={parentOf}
             fullscreen={false}
+            calendarColor={collectionColorMap.get(selectedTask.collectionUrl)}
           />
         </div>
       )}
@@ -2653,6 +2661,7 @@ export default function TasksPage() {
           childrenOf={childrenOf}
           parentOf={parentOf}
           fullscreen={true}
+          calendarColor={collectionColorMap.get(selectedTask.collectionUrl)}
         />
       )}
 
@@ -2665,6 +2674,11 @@ export default function TasksPage() {
           )}
           style={!isMobile ? { width: panelWidth } : undefined}
         >
+          {/* Colour accent bar — matches the calendar's task/event popups. */}
+          <div
+            className="h-1.5 w-full shrink-0"
+            style={{ backgroundColor: hex6(collectionColorMap.get(editingTaskData.task.collectionUrl) || '#0082C9') }}
+          />
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
             <h2 className="text-sm font-semibold flex-1">Edit task</h2>
             <button
@@ -2691,6 +2705,11 @@ export default function TasksPage() {
       {createMode && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-card rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            {/* Colour accent bar — matches the calendar's task/event popups. */}
+            <div
+              className="h-1.5 w-full rounded-t-lg"
+              style={{ backgroundColor: hex6(collectionColorMap.get(subtaskParent?.collectionUrl ?? defaultCreateCollectionUrl ?? taskCollections[0]?.url ?? '') || '#0082C9') }}
+            />
             <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
               <h2 className="text-sm font-semibold flex-1">
                 {subtaskParent
