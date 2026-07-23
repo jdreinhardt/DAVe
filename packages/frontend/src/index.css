@@ -105,6 +105,24 @@
   outline-offset: 1px;
 }
 
+/* Task tiles on the calendar's synthetic tasks layer. A checkbox glyph prefixes
+   the title so tasks read distinctly from events; completed tasks show a checked
+   box and are dimmed + struck through. Rendering stays on FullCalendar's default
+   (no eventContent override), so real events keep their normal block height. */
+.fc .dave-task-tile .fc-event-title::before {
+  content: '\2610'; /* ☐ empty checkbox */
+  margin-right: 0.25em;
+}
+.fc .dave-task-done .fc-event-title::before {
+  content: '\2611'; /* ☑ checked box */
+}
+.fc .dave-task-done {
+  opacity: 0.55;
+}
+.fc .dave-task-done .fc-event-title {
+  text-decoration: line-through;
+}
+
 *,
 *::before,
 *::after {

@@ -32,6 +32,8 @@ export const DARK_MODES = ['light', 'dark', 'system'] as const;
 export const TASK_LAYOUTS = ['list', 'compact', 'kanban'] as const;
 export const NOTES_VIEWS = ['list', 'grid'] as const;
 export const JOURNALS_VIEWS = ['timeline', 'list', 'calendar'] as const;
+// Which task date positions a task on the Calendar view's tasks layer.
+export const CALENDAR_TASK_DATES = ['due', 'dtstart', 'span'] as const;
 
 export type SortBy = (typeof SORT_BY)[number];
 export type SortDir = (typeof SORT_DIR)[number];
@@ -41,6 +43,7 @@ export type DarkMode = (typeof DARK_MODES)[number];
 export type TaskLayout = (typeof TASK_LAYOUTS)[number];
 export type NotesView = (typeof NOTES_VIEWS)[number];
 export type JournalsView = (typeof JOURNALS_VIEWS)[number];
+export type CalendarTaskDate = (typeof CALENDAR_TASK_DATES)[number];
 
 // ── Collections ───────────────────────────────────────────────────────────────
 

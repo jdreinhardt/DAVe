@@ -1,15 +1,15 @@
 import { useState } from 'react';
-import { X, ArrowUpAZ, ArrowDownAZ, Sun, Moon, Monitor, List, LayoutGrid, Columns3, Grid, AlignLeft, CalendarDays } from 'lucide-react';
+import { X, ArrowUpAZ, ArrowDownAZ, Sun, Moon, Monitor, List, LayoutGrid, Columns3, Grid, AlignLeft, CalendarDays, CalendarClock, CalendarRange } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useSettings } from '../contexts/Settings';
-import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode, TaskLayout, NotesView, JournalsView } from '../contexts/Settings';
+import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate } from '../contexts/Settings';
 
 interface SettingsModalProps {
   onClose: () => void;
 }
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView } =
+  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView, calendarTaskDate, updateCalendarTaskDate } =
     useSettings();
   const [sortBy, setSortBy] = useState<SortBy>(contactSort.sortBy);
   const [sortDir, setSortDir] = useState<SortDir>(contactSort.sortDir);
@@ -19,6 +19,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [taskLayout, setTaskLayout] = useState<TaskLayout>(taskDefaultLayout);
   const [notesView, setNotesView] = useState<NotesView>(notesDefaultView);
   const [journalsView, setJournalsView] = useState<JournalsView>(journalsDefaultView);
+  const [taskDate, setTaskDate] = useState<CalendarTaskDate>(calendarTaskDate);
 
   const handleSave = () => {
     updateContactSort({ sortBy, sortDir });
@@ -28,6 +29,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     updateTaskDefaultLayout(taskLayout);
     updateNotesDefaultView(notesView);
     updateJournalsDefaultView(journalsView);
+    updateCalendarTaskDate(taskDate);
     onClose();
   };
 
@@ -39,7 +41,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     dm !== darkMode ||
     taskLayout !== taskDefaultLayout ||
     notesView !== notesDefaultView ||
-    journalsView !== journalsDefaultView;
+    journalsView !== journalsDefaultView ||
+    taskDate !== calendarTaskDate;
 
   return (
     <div
@@ -150,6 +153,36 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                 <option value="google">Google Maps</option>
                 <option value="apple">Apple Maps</option>
               </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium shrink-0">Tasks by</span>
+              <div className="flex flex-1 gap-1">
+                {([
+                  { value: 'due',     label: 'Due',   icon: <CalendarClock className="h-3.5 w-3.5" /> },
+                  { value: 'dtstart', label: 'Start', icon: <CalendarDays className="h-3.5 w-3.5" /> },
+                  { value: 'span',    label: 'Span',  icon: <CalendarRange className="h-3.5 w-3.5" /> },
+                ] as { value: CalendarTaskDate; label: string; icon: React.ReactNode }[]).map(({ value, label, icon }) => (
+                  <button
+                    key={value}
+                    onClick={() => setTaskDate(value)}
+                    title={
+                      value === 'due' ? 'Position tasks by due date'
+                      : value === 'dtstart' ? 'Position tasks by start date'
+                      : 'Span tasks from start to due date'
+                    }
+                    className={cn(
+                      'flex flex-1 items-center justify-center gap-1.5 rounded-md border py-1.5 text-xs transition-colors',
+                      taskDate === value
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-input bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
+                    )}
+                  >
+                    {icon}
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
 

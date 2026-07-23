@@ -6,9 +6,9 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
-import type { EventInput, DatesSetArg, EventClickArg } from '@fullcalendar/core';
-import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2 } from 'lucide-react';
-import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope } from '@dave/shared';
+import type { EventInput, DatesSetArg, EventClickArg, EventContentArg } from '@fullcalendar/core';
+import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2, CalendarDays, Flag, Tag } from 'lucide-react';
+import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope, Task, TaskJson, TasksQueryParams, CalendarTaskDate } from '@dave/shared';
 import {
   getCalendars,
   getCalendarEvents,
@@ -16,12 +16,88 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent,
 } from '../api/collections';
+import { fetchTasks, updateTask } from '../api/tasks';
 import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useSettings } from '../contexts/Settings';
-import { cn, buildMapUrl } from '../lib/utils';
+import { cn, buildMapUrl, lightenHex } from '../lib/utils';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
+import TaskEditForm from '../components/TaskEditForm';
 import { useHotkey } from '../hooks/useHotkey';
+
+// ── Task-on-calendar helpers ──────────────────────────────────────────────────
+
+const dateOnly = (iso: string): string => iso.substring(0, 10);
+
+/** Replace the date portion of an ISO string, preserving any time component. */
+function applyNewDate(iso: string, newDateStr: string): string {
+  const tIdx = iso.indexOf('T');
+  return tIdx === -1 ? newDateStr : newDateStr + iso.substring(tIdx);
+}
+
+/** Parse a 'YYYY-MM-DD' string to a UTC epoch (midnight), timezone-independent. */
+function dateStrToUtc(dateStr: string): number {
+  const y = Number(dateStr.slice(0, 4));
+  const m = Number(dateStr.slice(5, 7));
+  const d = Number(dateStr.slice(8, 10));
+  return Date.UTC(y, m - 1, d);
+}
+
+function addDaysToDateStr(dateStr: string, days: number): string {
+  // Do the arithmetic in UTC so the returned calendar date never drifts by a day
+  // in eastern-hemisphere timezones (a local parse + toISOString() would).
+  const dt = new Date(dateStrToUtc(dateStr));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().substring(0, 10);
+}
+
+function daysBetween(fromDateStr: string, toDateStr: string): number {
+  return Math.round((dateStrToUtc(toDateStr) - dateStrToUtc(fromDateStr)) / 86_400_000);
+}
+
+/**
+ * Map a task to a FullCalendar all-day input per the configured date basis, or
+ * null when the task lacks the anchor date(s). CANCELLED tasks are dropped.
+ */
+function taskToFcEvent(task: Task, color: string, basis: CalendarTaskDate): EventInput | null {
+  if (task.data.status === 'CANCELLED') return null;
+  const { dtstart, due } = task.data;
+
+  let start: string;
+  let end: string | undefined;
+  if (basis === 'due') {
+    if (!due) return null;
+    start = dateOnly(due);
+  } else if (basis === 'dtstart') {
+    if (!dtstart) return null;
+    start = dateOnly(dtstart);
+  } else {
+    // span: bar from start to due when both present; single marker otherwise
+    if (dtstart && due) {
+      start = dateOnly(dtstart);
+      end = addDaysToDateStr(dateOnly(due), 1); // FC all-day end is exclusive
+    } else if (dtstart) {
+      start = dateOnly(dtstart);
+    } else if (due) {
+      start = dateOnly(due);
+    } else {
+      return null;
+    }
+  }
+
+  return {
+    id: `task::${task.data.uid}`,
+    title: task.data.summary || '(No title)',
+    start,
+    end,
+    allDay: true,
+    backgroundColor: color,
+    borderColor: color,
+    textColor: '#ffffff',
+    durationEditable: false, // no resize for tasks in v1
+    extendedProps: { componentType: 'task', task },
+  };
+}
 
 function formatAlarmTrigger(trigger: string): string {
   const negative = trigger.startsWith('-');
@@ -204,7 +280,8 @@ function errorMessage(e: unknown, is412Special = false): string {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CalendarPage() {
-  const { hiddenCalendars } = useCollectionVisibility();
+  const { hiddenCalendars, hiddenCalendarTasks } = useCollectionVisibility();
+  const { calendarTaskDate } = useSettings();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
@@ -218,6 +295,8 @@ export default function CalendarPage() {
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CalendarEvent | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
+  const [taskEdit, setTaskEdit] = useState<Task | null>(null);
+  const [taskPopup, setTaskPopup] = useState<Task | null>(null);
 
   // Pending scope confirmation: when a recurring event is about to be edited or
   // deleted, we park the action here and show the scope dialog first.
@@ -259,7 +338,48 @@ export default function CalendarPage() {
     })),
   });
 
-  const isLoadingEvents = dateRange !== null && eventQueries.some((q) => q.isFetching);
+  // ── Tasks layer ────────────────────────────────────────────────────────────
+  // Calendars that support VTODO and whose nested task layer is visible.
+  const taskVisibleCalendars = useMemo(
+    () =>
+      (calQuery.data ?? []).filter(
+        (cal) => cal.components.includes('VTODO') && !hiddenCalendarTasks.has(cal.id),
+      ),
+    [calQuery.data, hiddenCalendarTasks],
+  );
+
+  // All VTODO-capable calendars (regardless of task-layer visibility) — used by
+  // the task editor's move-to-collection selector.
+  const vtodoCalendars = useMemo(
+    () => (calQuery.data ?? []).filter((cal) => cal.components.includes('VTODO')),
+    [calQuery.data],
+  );
+
+  const taskParams = useMemo<TasksQueryParams>(() => {
+    const urls = taskVisibleCalendars.map((c) => c.url);
+    return { collections: urls.length > 0 ? urls.join(',') : undefined, order: 'asc' };
+  }, [taskVisibleCalendars]);
+
+  const tasksQuery = useQuery({
+    // Shares the ['tasks', …] key prefix with the Tasks tab, so task mutations
+    // anywhere (and the background sync worker) refresh this layer automatically.
+    queryKey: ['tasks', taskParams],
+    queryFn: () => fetchTasks(taskParams),
+    enabled: taskVisibleCalendars.length > 0,
+    staleTime: 30_000,
+  });
+
+  const allTasks = useMemo(() => tasksQuery.data?.tasks ?? [], [tasksQuery.data]);
+
+  // collectionId → calendar, for coloring task tiles by their source calendar.
+  const calendarById = useMemo(() => {
+    const m = new Map<string, Calendar>();
+    for (const cal of calQuery.data ?? []) m.set(cal.id, cal);
+    return m;
+  }, [calQuery.data]);
+
+  const isLoadingEvents =
+    (dateRange !== null && eventQueries.some((q) => q.isFetching)) || tasksQuery.isFetching;
 
   // ── Toast helper ─────────────────────────────────────────────────────────
 
@@ -350,6 +470,17 @@ export default function CalendarPage() {
     },
   });
 
+  const updateTaskMutation = useMutation({
+    mutationFn: ({ task, data }: { task: Task; data: TaskJson }) =>
+      updateTask(task.data.uid, data, task.etag),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      setTaskEdit(null);
+      showToast('Task saved');
+    },
+    onError: (e) => showToast(errorMessage(e, true), 'err'),
+  });
+
   const allLoadedEvents = useMemo(
     () => visibleCalendars.flatMap((cal, i) => (eventQueries[i]?.data ?? []).map((ev) => ({ cal, ev }))),
     [eventQueries, visibleCalendars],
@@ -368,7 +499,7 @@ export default function CalendarPage() {
   // ── FullCalendar event mapping ─────────────────────────────────────────────
 
   const fcEvents = useMemo<EventInput[]>(() => {
-    return visibleCalendars.flatMap((cal, i) => {
+    const eventInputs = visibleCalendars.flatMap((cal, i) => {
       const events = eventQueries[i]?.data ?? [];
       return events.map((ev) => ({
         id: `${cal.id}::${ev.id}::${ev.data.start}`,
@@ -386,7 +517,31 @@ export default function CalendarPage() {
         },
       }));
     });
-  }, [visibleCalendars, eventQueries]);
+
+    const taskInputs = allTasks.flatMap((task) => {
+      // Tint tasks a slightly lighter shade of their calendar's color so they
+      // read as related to that calendar but distinct from its events.
+      const color = lightenHex(calendarById.get(task.collectionId)?.color ?? '#6C757D');
+      const input = taskToFcEvent(task, color, calendarTaskDate);
+      return input ? [input] : [];
+    });
+
+    return [...eventInputs, ...taskInputs];
+  }, [visibleCalendars, eventQueries, allTasks, calendarById, calendarTaskDate]);
+
+  // ── Distinct rendering for the task layer ──────────────────────────────────
+  // We deliberately do NOT override `eventContent`: returning undefined from a
+  // global eventContent callback does not fall back to FullCalendar's default
+  // rendering (it renders empty), which collapses real events to a colored line.
+  // Instead, tasks are distinguished with CSS classes (checkbox glyph + dimming);
+  // see `.dave-task-tile` in index.css.
+  const getEventClassNames = useCallback((arg: EventContentArg) => {
+    if (arg.event.extendedProps.componentType !== 'task') return [];
+    const task = arg.event.extendedProps.task as Task;
+    return task.data.status === 'COMPLETED'
+      ? ['dave-task-tile', 'dave-task-done']
+      : ['dave-task-tile'];
+  }, []);
 
   // ── Scope dialog confirm ──────────────────────────────────────────────────
 
@@ -451,6 +606,10 @@ export default function CalendarPage() {
 
   const handleEventClick = (arg: EventClickArg) => {
     arg.jsEvent.preventDefault();
+    if (arg.event.extendedProps.componentType === 'task') {
+      setTaskPopup(arg.event.extendedProps.task as Task);
+      return;
+    }
     const { calendarEvent, calendar } = arg.event.extendedProps as {
       eventData: EventJson;
       calendarEvent: CalendarEvent;
@@ -461,6 +620,33 @@ export default function CalendarPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEventDrop = (arg: any) => {
+    // Task tiles reschedule the anchor date(s) per the configured basis.
+    if (arg.event.extendedProps.componentType === 'task') {
+      const task = arg.event.extendedProps.task as Task;
+      const newStart = (arg.event.startStr as string).substring(0, 10);
+      const data: TaskJson = { ...task.data };
+
+      if (calendarTaskDate === 'due') {
+        data.due = applyNewDate(task.data.due ?? newStart, newStart);
+      } else if (calendarTaskDate === 'dtstart') {
+        data.dtstart = applyNewDate(task.data.dtstart ?? newStart, newStart);
+      } else {
+        // span: shift both dates by the delta applied to the dragged anchor
+        const anchor = task.data.dtstart ?? task.data.due;
+        if (!anchor) { arg.revert(); return; }
+        const delta = daysBetween(dateOnly(anchor), newStart);
+        if (task.data.dtstart) {
+          data.dtstart = applyNewDate(task.data.dtstart, addDaysToDateStr(dateOnly(task.data.dtstart), delta));
+        }
+        if (task.data.due) {
+          data.due = applyNewDate(task.data.due, addDaysToDateStr(dateOnly(task.data.due), delta));
+        }
+      }
+
+      updateTaskMutation.mutate({ task, data }, { onError: () => arg.revert() });
+      return;
+    }
+
     const { calendarEvent, eventData } = arg.event.extendedProps as {
       eventData: EventJson;
       calendarEvent: CalendarEvent;
@@ -487,6 +673,7 @@ export default function CalendarPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEventResize = (arg: any) => {
+    if (arg.event.extendedProps.componentType === 'task') { arg.revert(); return; } // no task resize in v1
     const { calendarEvent, eventData } = arg.event.extendedProps as {
       eventData: EventJson;
       calendarEvent: CalendarEvent;
@@ -565,6 +752,8 @@ export default function CalendarPage() {
   useHotkey('n', handleNewEvent);
 
   useHotkey('Escape', () => {
+    if (taskEdit) { setTaskEdit(null); return; }
+    if (taskPopup) { setTaskPopup(null); return; }
     if (editModal) { setEditModal(null); return; }
     if (popup) { setPopup(null); return; }
     if (deleteTarget) { setDeleteTarget(null); return; }
@@ -599,6 +788,7 @@ export default function CalendarPage() {
           }}
           buttonText={{ today: 'Today', month: 'Month', week: 'Week', day: 'Day' }}
           events={fcEvents}
+          eventClassNames={getEventClassNames}
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
           dateClick={handleDateClick}
@@ -665,6 +855,47 @@ export default function CalendarPage() {
           onDelete={editModal.calendarEvent ? () => handleDeleteRequest(editModal.calendarEvent!) : undefined}
           onCancel={() => setEditModal(null)}
         />
+      )}
+
+      {/* Task detail popup — minimal read-only view, mirrors EventPopup */}
+      {taskPopup && !taskEdit && (
+        <TaskPopup
+          task={taskPopup}
+          calendar={calendarById.get(taskPopup.collectionId) ?? null}
+          onClose={() => setTaskPopup(null)}
+          onEdit={() => { setTaskEdit(taskPopup); setTaskPopup(null); }}
+        />
+      )}
+
+      {/* Task editor modal — wrapped in the same centered modal shell as the
+          event editor so it reads as a popup rather than a full-page view.
+          TaskEditForm renders only its content (no overlay of its own). */}
+      {taskEdit && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setTaskEdit(null)}
+        >
+          <div
+            className="bg-background rounded-lg shadow-xl border border-border w-full max-w-lg mx-4 flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="h-1.5 w-full rounded-t-lg shrink-0"
+              style={{ backgroundColor: lightenHex(calendarById.get(taskEdit.collectionId)?.color ?? '#0082C9') }}
+            />
+            <div className="flex-1 overflow-y-auto min-h-0">
+              <TaskEditForm
+                initial={taskEdit.data}
+                calendars={vtodoCalendars}
+                isNew={false}
+                saving={updateTaskMutation.isPending}
+                onSave={(data) => updateTaskMutation.mutate({ task: taskEdit, data })}
+                onCancel={() => setTaskEdit(null)}
+                allTasks={allTasks}
+              />
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Delete confirmation */}
@@ -949,6 +1180,144 @@ function EventPopup({
                   </p>
                 )}
               </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Task detail popup ─────────────────────────────────────────────────────────
+
+function formatTaskDate(iso: string): string {
+  // Task dates may be date-only ('YYYY-MM-DD') or datetime; treat the former as all-day.
+  return formatEventTime(iso, !iso.includes('T'));
+}
+
+function priorityLabel(p: number): string {
+  if (p >= 1 && p <= 3) return 'High';
+  if (p >= 4 && p <= 6) return 'Medium';
+  return 'Low';
+}
+
+function taskStatusStyle(status: string | null): { label: string; cls: string } {
+  switch (status) {
+    case 'COMPLETED':  return { label: 'Completed',   cls: 'bg-green-500/15 text-green-600 dark:text-green-400' };
+    case 'IN-PROCESS': return { label: 'In progress', cls: 'bg-blue-500/15 text-blue-600 dark:text-blue-400' };
+    case 'CANCELLED':  return { label: 'Cancelled',   cls: 'bg-muted text-muted-foreground line-through' };
+    default:           return { label: 'To do',       cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' };
+  }
+}
+
+function TaskPopup({
+  task,
+  calendar,
+  onClose,
+  onEdit,
+}: {
+  task: Task;
+  calendar: Calendar | null;
+  onClose: () => void;
+  onEdit: () => void;
+}) {
+  const t = task.data;
+  const accent = calendar ? lightenHex(calendar.color) : '#6C757D';
+  const status = taskStatusStyle(t.status);
+  const done = t.status === 'COMPLETED';
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="bg-background rounded-lg shadow-xl border border-border w-full max-w-sm mx-4 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Task colour accent bar */}
+        <div className="h-1.5 w-full" style={{ backgroundColor: accent }} />
+
+        <div className="p-4 space-y-3">
+          {/* Title + actions */}
+          <div className="flex items-start justify-between gap-3">
+            <h3 className={cn('font-semibold text-base leading-snug', done && 'line-through text-muted-foreground')}>
+              {t.summary || '(No title)'}
+            </h3>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={onEdit}
+                className="rounded p-1 text-muted-foreground hover:bg-muted"
+                title="Edit task"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={onClose}
+                className="rounded p-0.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Calendar label + status badge */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {calendar && (
+              <>
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: accent }}
+                />
+                <span className="text-xs text-muted-foreground">{calendar.displayName}</span>
+              </>
+            )}
+            <span className={cn('text-xs rounded px-1.5 py-0.5', status.cls)}>{status.label}</span>
+          </div>
+
+          {/* Due */}
+          {t.due && (
+            <div className="flex items-center gap-2 text-sm">
+              <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span>Due {formatTaskDate(t.due)}</span>
+            </div>
+          )}
+
+          {/* Start */}
+          {t.dtstart && (
+            <div className="flex items-center gap-2 text-sm">
+              <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span>Starts {formatTaskDate(t.dtstart)}</span>
+            </div>
+          )}
+
+          {/* Priority */}
+          {t.priority != null && (
+            <div className="flex items-center gap-2 text-sm">
+              <Flag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="text-muted-foreground">{priorityLabel(t.priority)} priority</span>
+            </div>
+          )}
+
+          {/* Categories */}
+          {t.categories.length > 0 && (
+            <div className="flex items-start gap-2 text-sm">
+              <Tag className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+              <div className="flex flex-wrap gap-1">
+                {t.categories.map((c) => (
+                  <span key={c} className="text-xs rounded bg-muted px-1.5 py-0.5">{c}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Description (truncated) */}
+          {t.description && (
+            <div className="flex items-start gap-2 text-sm">
+              <AlignLeft className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+              <p className="whitespace-pre-wrap break-words text-muted-foreground leading-relaxed line-clamp-4">
+                {t.description}
+              </p>
             </div>
           )}
         </div>

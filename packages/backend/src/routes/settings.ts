@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   SORT_BY, SORT_DIR, CONTACT_SUBTITLE_FIELDS, MAP_SERVICES,
-  DARK_MODES, TASK_LAYOUTS, NOTES_VIEWS, JOURNALS_VIEWS,
+  DARK_MODES, TASK_LAYOUTS, NOTES_VIEWS, JOURNALS_VIEWS, CALENDAR_TASK_DATES,
 } from '@dave/shared';
 import type { DbInstance } from '../db/index.js';
 import { requireAuth } from '../plugins/session.js';
@@ -16,6 +16,7 @@ interface SettingsRow {
   task_layout: string;
   notes_view: string;
   journals_view: string;
+  calendar_task_date: string;
   updated_at: number;
 }
 
@@ -28,6 +29,7 @@ interface SettingsBody {
   taskLayout: string;
   notesView: string;
   journalsView: string;
+  calendarTaskDate: string;
   updatedAt: number;
 }
 
@@ -55,6 +57,7 @@ export async function settingsRoutes(
       taskLayout:     row.task_layout,
       notesView:      row.notes_view,
       journalsView:   row.journals_view,
+      calendarTaskDate: row.calendar_task_date,
       updatedAt:      row.updated_at,
     } satisfies SettingsBody);
   });
@@ -76,6 +79,7 @@ export async function settingsRoutes(
           taskLayout:      { type: 'string', enum: [...TASK_LAYOUTS] },
           notesView:       { type: 'string', enum: [...NOTES_VIEWS] },
           journalsView:    { type: 'string', enum: [...JOURNALS_VIEWS] },
+          calendarTaskDate: { type: 'string', enum: [...CALENDAR_TASK_DATES] },
           updatedAt:       { type: 'integer', minimum: 0 },
         },
       },
@@ -90,8 +94,9 @@ export async function settingsRoutes(
     db.prepare(`
       INSERT INTO user_settings
         (username, contact_sort_by, contact_sort_dir, contact_subtitle,
-         map_service, dark_mode, task_layout, notes_view, journals_view, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         map_service, dark_mode, task_layout, notes_view, journals_view,
+         calendar_task_date, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(username) DO UPDATE SET
         contact_sort_by  = excluded.contact_sort_by,
         contact_sort_dir = excluded.contact_sort_dir,
@@ -101,6 +106,7 @@ export async function settingsRoutes(
         task_layout      = excluded.task_layout,
         notes_view       = excluded.notes_view,
         journals_view    = excluded.journals_view,
+        calendar_task_date = excluded.calendar_task_date,
         updated_at       = excluded.updated_at
       WHERE excluded.updated_at > user_settings.updated_at
     `).run(
@@ -113,6 +119,7 @@ export async function settingsRoutes(
       body.taskLayout     ?? 'list',
       body.notesView      ?? 'list',
       body.journalsView   ?? 'timeline',
+      body.calendarTaskDate ?? 'due',
       updatedAt,
     );
 

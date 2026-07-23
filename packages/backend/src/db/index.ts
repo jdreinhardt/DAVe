@@ -47,6 +47,7 @@ export function getDb(config: Config): DbInstance {
       task_layout      TEXT    NOT NULL DEFAULT 'list',
       notes_view       TEXT    NOT NULL DEFAULT 'list',
       journals_view    TEXT    NOT NULL DEFAULT 'timeline',
+      calendar_task_date TEXT  NOT NULL DEFAULT 'due',
       updated_at       INTEGER NOT NULL DEFAULT 0
     );
 
@@ -57,6 +58,12 @@ export function getDb(config: Config): DbInstance {
       PRIMARY KEY (username, address_book_id)
     );
   `);
+
+  // Migration: add calendar_task_date to user_settings for existing databases.
+  const settingsCols = _db.prepare("PRAGMA table_info(user_settings)").all() as { name: string }[];
+  if (!settingsCols.some((c) => c.name === 'calendar_task_date')) {
+    _db.exec("ALTER TABLE user_settings ADD COLUMN calendar_task_date TEXT NOT NULL DEFAULT 'due'");
+  }
 
   return _db;
 }

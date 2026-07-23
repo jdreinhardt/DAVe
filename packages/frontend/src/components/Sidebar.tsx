@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -7,7 +7,7 @@ import { BookUser, Calendar, Check, CheckSquare, LogOut, NotebookPen, Pencil, Pl
 import SettingsModal from './SettingsModal';
 import AddressBookModal from './AddressBookModal';
 import CalendarModal from './CalendarModal';
-import { cn } from '../lib/utils';
+import { cn, lightenHex } from '../lib/utils';
 import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
@@ -446,8 +446,8 @@ function CollectionSection({
   defaultColor: string;
 }) {
   const {
-    hiddenAddressBooks, hiddenCalendars,
-    toggleAddressBook, toggleCalendar,
+    hiddenAddressBooks, hiddenCalendars, hiddenCalendarTasks,
+    toggleAddressBook, toggleCalendar, toggleCalendarTasks,
     showAllAddressBooks, hideAllAddressBooks,
     showAllCalendars, hideAllCalendars,
   } = useCollectionVisibility();
@@ -509,10 +509,12 @@ function CollectionSection({
       {items?.map((item) => {
         const isSameAb = isDraggingContact && dragging!.contact.addressBookId === item.id;
         const isOver = dropTargetId === item.id;
+        const supportsTasks =
+          kind === 'calendar' && (item as CalendarType).components?.includes('VTODO');
 
         return (
+          <Fragment key={item.id}>
           <div
-            key={item.id}
             onDragOver={isDraggingContact && !isSameAb ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDropTargetId(item.id); } : undefined}
             onDragLeave={isDraggingContact ? () => setDropTargetId(null) : undefined}
             onDrop={isDraggingContact && !isSameAb ? (e) => { e.preventDefault(); setDropTargetId(null); dragging!.onMove(item.id); } : undefined}
@@ -559,6 +561,38 @@ function CollectionSection({
               <Pencil className="h-3 w-3" />
             </button>
           </div>
+
+          {/* Nested Tasks layer toggle — only for VTODO-capable calendars.
+              Uses a lighter shade of the calendar color so the tasks layer is
+              clearly related to, but distinct from, the calendar's events. */}
+          {supportsTasks && (
+            <label
+              className="flex items-center gap-2 rounded-md pl-9 pr-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors"
+              title="Show this calendar's tasks on the Calendar view"
+            >
+              <input
+                type="checkbox"
+                className="sr-only"
+                checked={!hiddenCalendarTasks.has(item.id)}
+                onChange={() => toggleCalendarTasks(item.id)}
+              />
+              <span
+                className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+                style={{
+                  backgroundColor: hiddenCalendarTasks.has(item.id) ? 'transparent' : lightenHex(item.color || defaultColor),
+                  borderColor: lightenHex(item.color || defaultColor),
+                }}
+              >
+                {!hiddenCalendarTasks.has(item.id) && (
+                  <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+                )}
+              </span>
+              <span className={cn('truncate text-muted-foreground', hiddenCalendarTasks.has(item.id) && 'line-through')}>
+                Tasks
+              </span>
+            </label>
+          )}
+          </Fragment>
         );
       })}
 
