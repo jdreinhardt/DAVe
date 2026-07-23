@@ -368,20 +368,28 @@ export default function NotesPage() {
   );
 
   const [detailPanelWidth, setDetailPanelWidth] = useState<number>(() =>
-    loadPref('notes.detailPanelWidth', 440),
+    loadPref('notes.detailWidth', PANEL_MAX),
   );
   useEffect(() => {
-    savePref('notes.detailPanelWidth', detailPanelWidth);
+    savePref('notes.detailWidth', detailPanelWidth);
   }, [detailPanelWidth]);
 
   const startDetailResize = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
+      const paneEl = (e.currentTarget as HTMLElement).parentElement;
+      const rowEl = paneEl?.parentElement;
       const startX = e.clientX;
-      const startWidth = detailPanelWidth;
+      // Start from the rendered width (which may be capped below the stored value)
+      // so there's no dead zone at the start of the drag.
+      const startWidth = paneEl?.getBoundingClientRect().width ?? detailPanelWidth;
       const onMove = (ev: MouseEvent) => {
         const delta = startX - ev.clientX;
-        setDetailPanelWidth(Math.max(PANEL_MIN, Math.min(PANEL_MAX, startWidth + delta)));
+        // Cap to the space actually available (row width minus the list minimum)
+        // so the pane can never overflow the row and clip its header buttons.
+        const rowW = rowEl?.getBoundingClientRect().width ?? PANEL_MAX;
+        const cap = Math.min(PANEL_MAX, rowW - 320);
+        setDetailPanelWidth(Math.max(PANEL_MIN, Math.min(cap, startWidth + delta)));
       };
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
@@ -1018,7 +1026,7 @@ export default function NotesPage() {
 
         {/* Detail / edit panel — desktop */}
         {showDetailPanel && !isMobile && (
-          <div className="flex shrink-0" style={{ width: detailPanelWidth }}>
+          <div className="flex shrink-0 min-w-0" style={{ width: detailPanelWidth, maxWidth: 'calc(100% - 20rem)' }}>
             <div
               className="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
               onMouseDown={startDetailResize}

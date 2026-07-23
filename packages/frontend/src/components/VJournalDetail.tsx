@@ -150,7 +150,7 @@ export default function VJournalDetail({
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         {data.description ? (
-          <div className="prose prose-sm dark:prose-invert max-w-none">
+          <div className="prose prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.description}</ReactMarkdown>
           </div>
         ) : (
