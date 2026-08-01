@@ -8,7 +8,7 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import type { EventInput, DatesSetArg, EventClickArg, EventContentArg } from '@fullcalendar/core';
 import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2, CalendarDays, Flag, Tag } from 'lucide-react';
-import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope, Task, TaskJson, TasksQueryParams, CalendarTaskDate, Note, NoteJson, JournalsQueryParams } from '@dave/shared';
+import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope, Task, TaskJson, TasksQueryParams, Note, NoteJson, JournalsQueryParams } from '@dave/shared';
 import {
   getCalendars,
   getCalendarEvents,
@@ -24,37 +24,8 @@ import { useSettings } from '../contexts/Settings';
 import { cn, buildMapUrl, lightenHex, darkenHex } from '../lib/utils';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
 import TaskEditForm from '../components/TaskEditForm';
+import { taskToFcEvent, journalToFcEvent, computeTaskDrop, computeJournalDrop } from '../lib/calendarLayers';
 import { useHotkey } from '../hooks/useHotkey';
-
-// ── Task-on-calendar helpers ──────────────────────────────────────────────────
-
-const dateOnly = (iso: string): string => iso.substring(0, 10);
-
-/** Replace the date portion of an ISO string, preserving any time component. */
-function applyNewDate(iso: string, newDateStr: string): string {
-  const tIdx = iso.indexOf('T');
-  return tIdx === -1 ? newDateStr : newDateStr + iso.substring(tIdx);
-}
-
-/** Parse a 'YYYY-MM-DD' string to a UTC epoch (midnight), timezone-independent. */
-function dateStrToUtc(dateStr: string): number {
-  const y = Number(dateStr.slice(0, 4));
-  const m = Number(dateStr.slice(5, 7));
-  const d = Number(dateStr.slice(8, 10));
-  return Date.UTC(y, m - 1, d);
-}
-
-function addDaysToDateStr(dateStr: string, days: number): string {
-  // Do the arithmetic in UTC so the returned calendar date never drifts by a day
-  // in eastern-hemisphere timezones (a local parse + toISOString() would).
-  const dt = new Date(dateStrToUtc(dateStr));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().substring(0, 10);
-}
-
-function daysBetween(fromDateStr: string, toDateStr: string): number {
-  return Math.round((dateStrToUtc(toDateStr) - dateStrToUtc(fromDateStr)) / 86_400_000);
-}
 
 // Small localStorage helpers for persisting the calendar's current view + date.
 function readLs(key: string, fallback: string): string {
@@ -62,50 +33,6 @@ function readLs(key: string, fallback: string): string {
 }
 function writeLs(key: string, value: string): void {
   try { localStorage.setItem(key, value); } catch { /* ignore */ }
-}
-
-/**
- * Map a task to a FullCalendar all-day input per the configured date basis, or
- * null when the task lacks the anchor date(s). CANCELLED tasks are dropped.
- */
-function taskToFcEvent(task: Task, color: string, basis: CalendarTaskDate): EventInput | null {
-  if (task.data.status === 'CANCELLED') return null;
-  const { dtstart, due } = task.data;
-
-  let start: string;
-  let end: string | undefined;
-  if (basis === 'due') {
-    if (!due) return null;
-    start = dateOnly(due);
-  } else if (basis === 'dtstart') {
-    if (!dtstart) return null;
-    start = dateOnly(dtstart);
-  } else {
-    // span: bar from start to due when both present; single marker otherwise
-    if (dtstart && due) {
-      start = dateOnly(dtstart);
-      end = addDaysToDateStr(dateOnly(due), 1); // FC all-day end is exclusive
-    } else if (dtstart) {
-      start = dateOnly(dtstart);
-    } else if (due) {
-      start = dateOnly(due);
-    } else {
-      return null;
-    }
-  }
-
-  return {
-    id: `task::${task.data.uid}`,
-    title: task.data.summary || '(No title)',
-    start,
-    end,
-    allDay: true,
-    backgroundColor: color,
-    borderColor: color,
-    textColor: '#ffffff',
-    durationEditable: false, // no resize for tasks in v1
-    extendedProps: { componentType: 'task', task },
-  };
 }
 
 function formatAlarmTrigger(trigger: string): string {
@@ -582,21 +509,11 @@ export default function CalendarPage() {
     });
 
     const journalInputs = allJournals.flatMap((journal) => {
-      if (!journal.data.dtstart) return [];
       // Journals are tinted a shade darker than their calendar (mirror of tasks,
       // which are lighter) so the three layers are easy to tell apart.
       const color = darkenHex(calendarById.get(journal.collectionId)?.color ?? '#6C757D');
-      return [{
-        id: `journal::${journal.uid}`,
-        title: journal.data.summary || '(Untitled)',
-        start: dateOnly(journal.data.dtstart),
-        allDay: true,
-        backgroundColor: color,
-        borderColor: color,
-        textColor: '#ffffff',
-        durationEditable: false, // no resize for journals
-        extendedProps: { componentType: 'journal', journal },
-      }];
+      const input = journalToFcEvent(journal, color);
+      return input ? [input] : [];
     });
 
     return [...eventInputs, ...taskInputs, ...journalInputs];
@@ -708,25 +625,8 @@ export default function CalendarPage() {
     if (arg.event.extendedProps.componentType === 'task') {
       const task = arg.event.extendedProps.task as Task;
       const newStart = (arg.event.startStr as string).substring(0, 10);
-      const data: TaskJson = { ...task.data };
-
-      if (calendarTaskDate === 'due') {
-        data.due = applyNewDate(task.data.due ?? newStart, newStart);
-      } else if (calendarTaskDate === 'dtstart') {
-        data.dtstart = applyNewDate(task.data.dtstart ?? newStart, newStart);
-      } else {
-        // span: shift both dates by the delta applied to the dragged anchor
-        const anchor = task.data.dtstart ?? task.data.due;
-        if (!anchor) { arg.revert(); return; }
-        const delta = daysBetween(dateOnly(anchor), newStart);
-        if (task.data.dtstart) {
-          data.dtstart = applyNewDate(task.data.dtstart, addDaysToDateStr(dateOnly(task.data.dtstart), delta));
-        }
-        if (task.data.due) {
-          data.due = applyNewDate(task.data.due, addDaysToDateStr(dateOnly(task.data.due), delta));
-        }
-      }
-
+      const data = computeTaskDrop(task.data, calendarTaskDate, newStart);
+      if (!data) { arg.revert(); return; } // span task with no anchor date
       updateTaskMutation.mutate({ task, data }, { onError: () => arg.revert() });
       return;
     }
@@ -736,7 +636,7 @@ export default function CalendarPage() {
       const journal = arg.event.extendedProps.journal as Note;
       if (!journal.data.dtstart) { arg.revert(); return; }
       const newStart = (arg.event.startStr as string).substring(0, 10);
-      const data: NoteJson = { ...journal.data, dtstart: applyNewDate(journal.data.dtstart, newStart) };
+      const data = computeJournalDrop(journal.data, newStart);
       updateJournalMutation.mutate({ journal, data }, { onError: () => arg.revert() });
       return;
     }
