@@ -193,7 +193,7 @@ export default function CalendarModal({ mode, calendar, onClose }: Props) {
                 <span
                   className={cn('text-sm font-medium', mode === 'edit' && 'text-muted-foreground')}
                 >
-                  Enable
+                  Enabled
                   {mode === 'edit' && (
                     <span className="font-normal text-xs ml-1">(set at creation)</span>
                   )}

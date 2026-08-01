@@ -2069,17 +2069,10 @@ export default function TasksPage() {
         <div>
           <h2 className="text-lg font-semibold">No task lists found</h2>
           <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-            Your Baikal collections don&apos;t currently advertise support for VTODO components.
-            Enable VTODO on an existing collection or create a new one in Baikal.
+            Your calendars currently don&apos;t have Tasks enabled. Enable Tasks on
+            an existing calendar in the Baikal admin or create a new one to use this feature.
           </p>
         </div>
-        <a
-          href="#"
-          className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-        >
-          Set up in Baikal
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
       </div>
     );
   }

@@ -54,6 +54,18 @@ export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarPr
   const inTasks = pathname.startsWith('/tasks');
   const inNotes = pathname.startsWith('/notes');
   const inJournals = pathname.startsWith('/journals');
+
+  // Hide the Tasks / Notes / Journals tabs when no calendar advertises support for
+  // their component. The active tab stays visible even when unsupported, so a manual
+  // deep-link still shows the tab (and its in-view "no collections" notice) and only
+  // disappears once you navigate away. While calendars are still loading we show the
+  // tabs to avoid a flicker for the common case where support does exist.
+  const calsLoaded = calQuery.data !== undefined;
+  const hasVTodo = (calQuery.data ?? []).some((c) => c.components.includes('VTODO'));
+  const hasVJournal = (calQuery.data ?? []).some((c) => c.components.includes('VJOURNAL'));
+  const showTasks = !calsLoaded || hasVTodo || inTasks;
+  const showNotes = !calsLoaded || hasVJournal || inNotes;
+  const showJournals = !calsLoaded || hasVJournal || inJournals;
   const isLoading =
     (inContacts ? abQuery.isFetching : false) ||
     (inCalendar || inTasks || inNotes || inJournals ? calQuery.isFetching : false);
@@ -100,15 +112,21 @@ export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarPr
         <SidebarNavLink to="/calendar" icon={<Calendar className="h-4 w-4" />}>
           Calendar
         </SidebarNavLink>
-        <SidebarNavLink to="/tasks" icon={<CheckSquare className="h-4 w-4" />}>
-          Tasks
-        </SidebarNavLink>
-        <SidebarNavLink to="/notes" icon={<NotebookPen className="h-4 w-4" />}>
-          Notes
-        </SidebarNavLink>
-        <SidebarNavLink to="/journals" icon={<ScrollText className="h-4 w-4" />}>
-          Journals
-        </SidebarNavLink>
+        {showTasks && (
+          <SidebarNavLink to="/tasks" icon={<CheckSquare className="h-4 w-4" />}>
+            Tasks
+          </SidebarNavLink>
+        )}
+        {showNotes && (
+          <SidebarNavLink to="/notes" icon={<NotebookPen className="h-4 w-4" />}>
+            Notes
+          </SidebarNavLink>
+        )}
+        {showJournals && (
+          <SidebarNavLink to="/journals" icon={<ScrollText className="h-4 w-4" />}>
+            Journals
+          </SidebarNavLink>
+        )}
       </nav>
 
       <div className="mx-4 my-1 border-t border-border" />

@@ -155,17 +155,10 @@ function NoCollectionsState() {
         No journals collections found
       </h2>
       <p className="text-sm text-muted-foreground max-w-xs mb-4">
-        Your Baikal calendars don&apos;t currently support VJOURNAL components. Enable VJOURNAL on
-        an existing collection or create a new one.
+        Your calendars currently don&apos;t have Journals enabled. Enable Notes on
+        an existing calendar in the Baikal admin or create a new one to use this feature.
+        Journals are a subcomponent of Notes.
       </p>
-      <a
-        href="https://sabre.io/baikal/"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
-      >
-        Set up in Baikal <ExternalLink className="h-3.5 w-3.5" />
-      </a>
     </div>
   );
 }
