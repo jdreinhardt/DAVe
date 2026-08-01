@@ -94,7 +94,7 @@ export default function VJournalDetail({
       {/* Header */}
       <div className="px-4 pt-3 pb-3 shrink-0 border-b border-border">
         <div className="flex items-center gap-2 mb-2">
-          <h2 className="text-sm font-semibold text-foreground leading-tight flex-1 min-w-0 truncate">
+          <h2 className="text-xl font-semibold text-foreground leading-tight flex-1 min-w-0 truncate">
             {data.summary || <span className="text-muted-foreground italic">Untitled</span>}
           </h2>
           <button
