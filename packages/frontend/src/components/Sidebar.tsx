@@ -3,11 +3,11 @@ import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BookUser, Calendar, Check, CheckSquare, LogOut, NotebookPen, Pencil, Plus, RefreshCw, Search, Settings, ScrollText } from 'lucide-react';
+import { BookUser, Calendar, Check, CheckSquare, ChevronDown, ChevronRight, LogOut, NotebookPen, Pencil, Plus, RefreshCw, Search, Settings, ScrollText } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import AddressBookModal from './AddressBookModal';
 import CalendarModal from './CalendarModal';
-import { cn, lightenHex } from '../lib/utils';
+import { cn, lightenHex, darkenHex } from '../lib/utils';
 import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
@@ -446,8 +446,8 @@ function CollectionSection({
   defaultColor: string;
 }) {
   const {
-    hiddenAddressBooks, hiddenCalendars, hiddenCalendarTasks,
-    toggleAddressBook, toggleCalendar, toggleCalendarTasks,
+    hiddenAddressBooks, hiddenCalendars, hiddenCalendarTasks, hiddenCalendarJournals,
+    toggleAddressBook, toggleCalendar, toggleCalendarTasks, toggleCalendarJournals,
     showAllAddressBooks, hideAllAddressBooks,
     showAllCalendars, hideAllCalendars,
   } = useCollectionVisibility();
@@ -456,6 +456,15 @@ function CollectionSection({
   const isDraggingContact = kind === 'addressbook' && dragging !== null;
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<AddressBook | CalendarType | null>(null);
+  // Which calendars have their tasks/journals sub-items expanded in the sidebar.
+  // Collapsed by default so the sidebar stays tidy; expand per calendar as needed.
+  const [expandedCals, setExpandedCals] = useState<Set<string>>(new Set());
+  const toggleExpanded = (id: string) =>
+    setExpandedCals((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
 
   const hidden = kind === 'addressbook' ? hiddenAddressBooks : hiddenCalendars;
   const toggle = kind === 'addressbook' ? toggleAddressBook : toggleCalendar;
@@ -510,7 +519,13 @@ function CollectionSection({
         const isSameAb = isDraggingContact && dragging!.contact.addressBookId === item.id;
         const isOver = dropTargetId === item.id;
         const supportsTasks =
-          kind === 'calendar' && (item as CalendarType).components?.includes('VTODO');
+          kind === 'calendar' && !!(item as CalendarType).components?.includes('VTODO');
+        const supportsJournals =
+          kind === 'calendar' && !!(item as CalendarType).components?.includes('VJOURNAL');
+        const hasSubItems = supportsTasks || supportsJournals;
+        const isExpanded = expandedCals.has(item.id);
+        const taskColor = lightenHex(item.color || defaultColor);
+        const journalColor = darkenHex(item.color || defaultColor);
 
         return (
           <Fragment key={item.id}>
@@ -560,12 +575,26 @@ function CollectionSection({
             >
               <Pencil className="h-3 w-3" />
             </button>
+
+            {/* Disclosure — reveals the tasks/journals sub-items for this calendar.
+                Collapsed by default so the sidebar stays tidy. Kept last so the
+                toggle is flush to the right edge (the pencil only shows on hover). */}
+            {hasSubItems && (
+              <button
+                onClick={() => toggleExpanded(item.id)}
+                title={isExpanded ? 'Hide tasks & journals' : 'Show tasks & journals'}
+                aria-expanded={isExpanded}
+                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              </button>
+            )}
           </div>
 
-          {/* Nested Tasks layer toggle — only for VTODO-capable calendars.
-              Uses a lighter shade of the calendar color so the tasks layer is
-              clearly related to, but distinct from, the calendar's events. */}
-          {supportsTasks && (
+          {/* Nested sub-item toggles, revealed by the disclosure. Each uses a lighter
+              shade of the calendar color so the layer is clearly related to, but
+              distinct from, the calendar's events. */}
+          {isExpanded && supportsTasks && (
             <label
               className="flex items-center gap-2 rounded-md pl-9 pr-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors"
               title="Show this calendar's tasks on the Calendar view"
@@ -579,8 +608,8 @@ function CollectionSection({
               <span
                 className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
                 style={{
-                  backgroundColor: hiddenCalendarTasks.has(item.id) ? 'transparent' : lightenHex(item.color || defaultColor),
-                  borderColor: lightenHex(item.color || defaultColor),
+                  backgroundColor: hiddenCalendarTasks.has(item.id) ? 'transparent' : taskColor,
+                  borderColor: taskColor,
                 }}
               >
                 {!hiddenCalendarTasks.has(item.id) && (
@@ -589,6 +618,33 @@ function CollectionSection({
               </span>
               <span className={cn('truncate text-muted-foreground', hiddenCalendarTasks.has(item.id) && 'line-through')}>
                 Tasks
+              </span>
+            </label>
+          )}
+          {isExpanded && supportsJournals && (
+            <label
+              className="flex items-center gap-2 rounded-md pl-9 pr-3 py-1.5 text-sm cursor-pointer hover:bg-muted transition-colors"
+              title="Show this calendar's journals on the Calendar view"
+            >
+              <input
+                type="checkbox"
+                className="sr-only"
+                checked={!hiddenCalendarJournals.has(item.id)}
+                onChange={() => toggleCalendarJournals(item.id)}
+              />
+              <span
+                className="w-4 h-4 rounded shrink-0 border-2 flex items-center justify-center transition-colors"
+                style={{
+                  backgroundColor: hiddenCalendarJournals.has(item.id) ? 'transparent' : journalColor,
+                  borderColor: journalColor,
+                }}
+              >
+                {!hiddenCalendarJournals.has(item.id) && (
+                  <Check className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+                )}
+              </span>
+              <span className={cn('truncate text-muted-foreground', hiddenCalendarJournals.has(item.id) && 'line-through')}>
+                Journals
               </span>
             </label>
           )}

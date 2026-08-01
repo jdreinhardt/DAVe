@@ -22,7 +22,11 @@ interface VJournalDetailProps {
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return '';
   try {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(iso));
+    // A date-only value ('YYYY-MM-DD') parses as UTC midnight, which renders as the
+    // previous day in negative-offset timezones. Parse it as local midnight instead
+    // so the displayed date matches the list/timeline (which key off the date string).
+    const d = iso.length <= 10 ? new Date(iso + 'T00:00:00') : new Date(iso);
+    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(d);
   } catch {
     return iso;
   }

@@ -8,7 +8,7 @@ import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import type { EventInput, DatesSetArg, EventClickArg, EventContentArg } from '@fullcalendar/core';
 import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2, CalendarDays, Flag, Tag } from 'lucide-react';
-import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope, Task, TaskJson, TasksQueryParams, CalendarTaskDate } from '@dave/shared';
+import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope, Task, TaskJson, TasksQueryParams, CalendarTaskDate, Note, NoteJson, JournalsQueryParams } from '@dave/shared';
 import {
   getCalendars,
   getCalendarEvents,
@@ -17,10 +17,11 @@ import {
   deleteCalendarEvent,
 } from '../api/collections';
 import { fetchTasks, updateTask } from '../api/tasks';
+import { fetchJournals, updateJournal } from '../api/journals';
 import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useSettings } from '../contexts/Settings';
-import { cn, buildMapUrl, lightenHex } from '../lib/utils';
+import { cn, buildMapUrl, lightenHex, darkenHex } from '../lib/utils';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
 import TaskEditForm from '../components/TaskEditForm';
 import { useHotkey } from '../hooks/useHotkey';
@@ -53,6 +54,14 @@ function addDaysToDateStr(dateStr: string, days: number): string {
 
 function daysBetween(fromDateStr: string, toDateStr: string): number {
   return Math.round((dateStrToUtc(toDateStr) - dateStrToUtc(fromDateStr)) / 86_400_000);
+}
+
+// Small localStorage helpers for persisting the calendar's current view + date.
+function readLs(key: string, fallback: string): string {
+  try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+}
+function writeLs(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* ignore */ }
 }
 
 /**
@@ -280,7 +289,7 @@ function errorMessage(e: unknown, is412Special = false): string {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CalendarPage() {
-  const { hiddenCalendars, hiddenCalendarTasks } = useCollectionVisibility();
+  const { hiddenCalendars, hiddenCalendarTasks, hiddenCalendarJournals } = useCollectionVisibility();
   const { calendarTaskDate } = useSettings();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
@@ -288,6 +297,10 @@ export default function CalendarPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const calRef = useRef<FullCalendar>(null);
+  // Restore the view type + date the user last had, so leaving and returning to
+  // the Calendar tab doesn't reset to the current month. Read once on mount.
+  const initialCalView = useRef<string>(readLs('calendar.view', 'dayGridMonth'));
+  const initialCalDate = useRef<string | undefined>(readLs('calendar.date', '') || undefined);
   const [pendingSelectEventId, setPendingSelectEventId] = useState<string | null>(null);
 
   const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
@@ -371,15 +384,47 @@ export default function CalendarPage() {
 
   const allTasks = useMemo(() => tasksQuery.data?.tasks ?? [], [tasksQuery.data]);
 
-  // collectionId → calendar, for coloring task tiles by their source calendar.
+  // collectionId → calendar, for coloring task/journal tiles by their source calendar.
   const calendarById = useMemo(() => {
     const m = new Map<string, Calendar>();
     for (const cal of calQuery.data ?? []) m.set(cal.id, cal);
     return m;
   }, [calQuery.data]);
 
+  // ── Journals layer ─────────────────────────────────────────────────────────
+  // Calendars that support VJOURNAL and whose nested journal layer is visible.
+  const journalVisibleCalendars = useMemo(
+    () =>
+      (calQuery.data ?? []).filter(
+        (cal) => cal.components.includes('VJOURNAL') && !hiddenCalendarJournals.has(cal.id),
+      ),
+    [calQuery.data, hiddenCalendarJournals],
+  );
+
+  const journalParams = useMemo<JournalsQueryParams | null>(() => {
+    if (!dateRange || journalVisibleCalendars.length === 0) return null;
+    return {
+      collections: journalVisibleCalendars.map((c) => c.url).join(','),
+      from: dateRange.start.substring(0, 10),
+      to: dateRange.end.substring(0, 10),
+    };
+  }, [journalVisibleCalendars, dateRange]);
+
+  const journalsQuery = useQuery({
+    // Shares the ['journals', …] key prefix with the Journals tab, so journal
+    // mutations anywhere (and the sync worker) refresh this layer automatically.
+    queryKey: ['journals', 'calendar', journalParams],
+    queryFn: () => fetchJournals(journalParams!),
+    enabled: journalParams !== null,
+    staleTime: 30_000,
+  });
+
+  const allJournals = useMemo(() => journalsQuery.data?.journals ?? [], [journalsQuery.data]);
+
   const isLoadingEvents =
-    (dateRange !== null && eventQueries.some((q) => q.isFetching)) || tasksQuery.isFetching;
+    (dateRange !== null && eventQueries.some((q) => q.isFetching)) ||
+    tasksQuery.isFetching ||
+    journalsQuery.isFetching;
 
   // ── Toast helper ─────────────────────────────────────────────────────────
 
@@ -481,6 +526,16 @@ export default function CalendarPage() {
     onError: (e) => showToast(errorMessage(e, true), 'err'),
   });
 
+  const updateJournalMutation = useMutation({
+    mutationFn: ({ journal, data }: { journal: Note; data: NoteJson }) =>
+      updateJournal(journal.uid, data, journal.etag),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['journals'] });
+      showToast('Journal saved');
+    },
+    onError: (e) => showToast(errorMessage(e, true), 'err'),
+  });
+
   const allLoadedEvents = useMemo(
     () => visibleCalendars.flatMap((cal, i) => (eventQueries[i]?.data ?? []).map((ev) => ({ cal, ev }))),
     [eventQueries, visibleCalendars],
@@ -526,8 +581,26 @@ export default function CalendarPage() {
       return input ? [input] : [];
     });
 
-    return [...eventInputs, ...taskInputs];
-  }, [visibleCalendars, eventQueries, allTasks, calendarById, calendarTaskDate]);
+    const journalInputs = allJournals.flatMap((journal) => {
+      if (!journal.data.dtstart) return [];
+      // Journals are tinted a shade darker than their calendar (mirror of tasks,
+      // which are lighter) so the three layers are easy to tell apart.
+      const color = darkenHex(calendarById.get(journal.collectionId)?.color ?? '#6C757D');
+      return [{
+        id: `journal::${journal.uid}`,
+        title: journal.data.summary || '(Untitled)',
+        start: dateOnly(journal.data.dtstart),
+        allDay: true,
+        backgroundColor: color,
+        borderColor: color,
+        textColor: '#ffffff',
+        durationEditable: false, // no resize for journals
+        extendedProps: { componentType: 'journal', journal },
+      }];
+    });
+
+    return [...eventInputs, ...taskInputs, ...journalInputs];
+  }, [visibleCalendars, eventQueries, allTasks, allJournals, calendarById, calendarTaskDate]);
 
   // ── Distinct rendering for the task layer ──────────────────────────────────
   // We deliberately do NOT override `eventContent`: returning undefined from a
@@ -536,7 +609,9 @@ export default function CalendarPage() {
   // Instead, tasks are distinguished with CSS classes (checkbox glyph + dimming);
   // see `.dave-task-tile` in index.css.
   const getEventClassNames = useCallback((arg: EventContentArg) => {
-    if (arg.event.extendedProps.componentType !== 'task') return [];
+    const type = arg.event.extendedProps.componentType;
+    if (type === 'journal') return ['dave-journal-tile'];
+    if (type !== 'task') return [];
     const task = arg.event.extendedProps.task as Task;
     return task.data.status === 'COMPLETED'
       ? ['dave-task-tile', 'dave-task-done']
@@ -576,6 +651,9 @@ export default function CalendarPage() {
 
   const handleDatesSet = (arg: DatesSetArg) => {
     setDateRange({ start: arg.start.toISOString(), end: arg.end.toISOString() });
+    // Remember where the user is so we can restore it after navigating away.
+    writeLs('calendar.view', arg.view.type);
+    writeLs('calendar.date', arg.view.currentStart.toISOString());
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -608,6 +686,12 @@ export default function CalendarPage() {
     arg.jsEvent.preventDefault();
     if (arg.event.extendedProps.componentType === 'task') {
       setTaskPopup(arg.event.extendedProps.task as Task);
+      return;
+    }
+    if (arg.event.extendedProps.componentType === 'journal') {
+      // Journals are edited in the Journals tab; open there with this entry selected.
+      const journal = arg.event.extendedProps.journal as Note;
+      navigate('/journals', { state: { selectUid: journal.uid } });
       return;
     }
     const { calendarEvent, calendar } = arg.event.extendedProps as {
@@ -647,6 +731,16 @@ export default function CalendarPage() {
       return;
     }
 
+    // Journal tiles reschedule DTSTART to the dropped day (preserving any time).
+    if (arg.event.extendedProps.componentType === 'journal') {
+      const journal = arg.event.extendedProps.journal as Note;
+      if (!journal.data.dtstart) { arg.revert(); return; }
+      const newStart = (arg.event.startStr as string).substring(0, 10);
+      const data: NoteJson = { ...journal.data, dtstart: applyNewDate(journal.data.dtstart, newStart) };
+      updateJournalMutation.mutate({ journal, data }, { onError: () => arg.revert() });
+      return;
+    }
+
     const { calendarEvent, eventData } = arg.event.extendedProps as {
       eventData: EventJson;
       calendarEvent: CalendarEvent;
@@ -673,7 +767,9 @@ export default function CalendarPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEventResize = (arg: any) => {
-    if (arg.event.extendedProps.componentType === 'task') { arg.revert(); return; } // no task resize in v1
+    // Tasks and journals render as all-day markers; no resize.
+    const ct = arg.event.extendedProps.componentType;
+    if (ct === 'task' || ct === 'journal') { arg.revert(); return; }
     const { calendarEvent, eventData } = arg.event.extendedProps as {
       eventData: EventJson;
       calendarEvent: CalendarEvent;
@@ -776,7 +872,8 @@ export default function CalendarPage() {
         <FullCalendar
           ref={calRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-          initialView="dayGridMonth"
+          initialView={initialCalView.current}
+          initialDate={initialCalDate.current}
           headerToolbar={isMobile ? {
             left: 'prev,next',
             center: 'title',
@@ -800,7 +897,7 @@ export default function CalendarPage() {
           unselectAuto={true}
           height="100%"
           eventDisplay="block"
-          dayMaxEvents={4}
+          dayMaxEvents={true}
         />
       </div>
 

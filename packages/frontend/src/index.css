@@ -66,6 +66,10 @@
    are theme-aware and visually consistent with the rest of the UI. */
 :root {
   --fc-border-color: var(--border);
+  /* Theme-aware surfaces so the "+N more" popover (and other neutral surfaces)
+     follow light/dark mode instead of FullCalendar's hardcoded white. */
+  --fc-page-bg-color: var(--background);
+  --fc-neutral-bg-color: var(--muted);
 
   /* Button colours — replaces FullCalendar's default dark navy palette. */
   --fc-button-text-color: var(--foreground);
@@ -105,6 +109,13 @@
   outline-offset: 1px;
 }
 
+/* The "+N more" popover is portaled to <body> (outside .fc), so it needs its own
+   theme-aware text colour on top of the --fc-*-bg-color variables above. */
+.fc-popover {
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
 /* Task tiles on the calendar's synthetic tasks layer. A checkbox glyph prefixes
    the title so tasks read distinctly from events; completed tasks show a checked
    box and are dimmed + struck through. Rendering stays on FullCalendar's default
@@ -121,6 +132,14 @@
 }
 .fc .dave-task-done .fc-event-title {
   text-decoration: line-through;
+}
+
+/* Journal tiles on the calendar's synthetic journals layer — a book glyph
+   prefixes the title so journals read distinctly from events and tasks. */
+.fc .dave-journal-tile .fc-event-title::before {
+  content: '\1F4D6'; /* 📖 open book */
+  margin-right: 0.25em;
+  font-size: 0.9em;
 }
 
 /* Wire Tailwind Typography (@tailwindcss/typography) to the app's design tokens
