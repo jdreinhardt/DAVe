@@ -12,10 +12,17 @@ test.describe('Calendar events', () => {
     await expect(page.locator('.fc-view-harness')).toBeVisible();
   });
 
+  test('today is inert while the view already shows today', async ({ page }) => {
+    const today = page.getByRole('button', { name: 'Today' });
+    await expect(today).toBeDisabled();
+    await page.locator('.fc-next-button').click();
+    await expect(today).toBeEnabled();
+  });
+
   test('jump to date moves the calendar', async ({ page }) => {
     // The button opens the native picker, which we can't drive; setting the hidden
     // input directly exercises the same change handler.
-    await expect(page.getByRole('button', { name: 'Jump to…' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Jump to date' })).toBeVisible();
     await page.locator('input[type="date"]').fill('2027-03-15');
 
     await expect(page.locator('.fc-toolbar-title')).toHaveText(/March 2027/);

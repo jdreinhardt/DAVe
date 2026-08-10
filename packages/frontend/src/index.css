@@ -79,6 +79,11 @@
   --fc-button-hover-border-color: var(--border);
   --fc-button-active-bg-color: var(--primary);
   --fc-button-active-border-color: var(--primary);
+
+  /* lucide "calendar-search", inlined so the desktop jump-to-date button can wear
+     the same icon <DateJumpButton> uses. Kept in sync by hand — if the icon in
+     components/DateJumper.tsx changes, change this path data too. */
+  --dave-icon-calendar-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7.5'/%3E%3Cpath d='M16 2v4'/%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M3 10h18'/%3E%3Ccircle cx='18' cy='18' r='3'/%3E%3Cpath d='m22 22-1.5-1.5'/%3E%3C/svg%3E");
 }
 
 /* Active / pressed view buttons need light text to stay legible on --primary. */
@@ -107,6 +112,27 @@
 .fc .fc-button:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 1px;
+}
+
+/* Jump-to-date in the calendar's desktop toolbar. FullCalendar's customButtons take
+   a text string and nothing else, so the lucide calendar-search icon — the same one
+   <DateJumpButton> renders on mobile and in Journals — is applied as a mask on
+   ::before. currentColor keeps it in step with the button's hover/active states.
+
+   The 1.5em box with vertical-align: middle is not arbitrary — it mirrors FullCalendar's
+   own `.fc .fc-button .fc-icon` rule. Buttons inside a .fc-button-group are flex items
+   and stretch to the tallest, but this one stands alone, so it only lines up with its
+   neighbours if its line box is built the same way theirs is. The mask is drawn at
+   0.875rem inside that box, matching the lucide icons elsewhere in the app. */
+.fc .fc-jumpTo-button::before {
+  content: '';
+  display: inline-block;
+  width: 1.5em;
+  height: 1.5em;
+  vertical-align: middle;
+  background-color: currentColor;
+  -webkit-mask: var(--dave-icon-calendar-search) center / 0.875rem 0.875rem no-repeat;
+  mask: var(--dave-icon-calendar-search) center / 0.875rem 0.875rem no-repeat;
 }
 
 /* The "+N more" popover is portaled to <body> (outside .fc), so it needs its own

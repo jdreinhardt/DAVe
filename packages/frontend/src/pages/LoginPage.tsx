@@ -48,7 +48,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm space-y-6">
         <div className="text-center space-y-1">
           <h1 className="text-3xl font-bold tracking-tight text-foreground">DAVe</h1>
-          <p className="text-sm text-muted-foreground">Baikal web client</p>
+          <p className="text-sm text-muted-foreground">CalDAV web client</p>
         </div>
 
         <div className="rounded-lg border border-border bg-card p-6 shadow-sm">

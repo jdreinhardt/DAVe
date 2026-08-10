@@ -23,6 +23,7 @@ import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useMobileHeaderTitle } from '../contexts/MobileHeader';
 import { useSettings } from '../contexts/Settings';
 import { cn, buildMapUrl, lightenHex, darkenHex } from '../lib/utils';
+import DateJumpButton, { useDateJumper } from '../components/DateJumper';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
 import TaskEditForm from '../components/TaskEditForm';
 import { taskToFcEvent, journalToFcEvent, computeTaskDrop, computeJournalDrop } from '../lib/calendarLayers';
@@ -242,10 +243,16 @@ export default function CalendarPage() {
   // toolbar is ours rather than FullCalendar's, so it needs these to render.
   const [viewType, setViewType] = useState<string>(initialCalView.current);
   const [viewTitle, setViewTitle] = useState('');
+  const [todayEnabled, setTodayEnabled] = useState(false);
 
   // On mobile the date range lives in the app header instead of the calendar's own
   // toolbar, which frees that row for the nav cluster and the view menu.
   useMobileHeaderTitle(viewTitle || null);
+
+  const gotoDate = useCallback((date: string) => calRef.current?.getApi().gotoDate(date), []);
+  // Desktop's toolbar is FullCalendar's, so the jump button there is a customButton
+  // and only the hidden input is ours. Mobile uses the whole DateJumpButton.
+  const desktopJumper = useDateJumper(gotoDate);
 
   const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
   const [popup, setPopup] = useState<PopupData | null>(null);
@@ -593,6 +600,11 @@ export default function CalendarPage() {
     setDateRange({ start: arg.start.toISOString(), end: arg.end.toISOString() });
     setViewType(arg.view.type);
     setViewTitle(arg.view.title);
+    // Mirrors FullCalendar's own isTodayEnabled: Today is inert while the view we're
+    // looking at already contains today. currentStart/currentEnd (not arg.start/end)
+    // so a month view doesn't count today showing as a greyed-out trailing day.
+    const now = new Date();
+    setTodayEnabled(now < arg.view.currentStart || now >= arg.view.currentEnd);
     // Remember where the user is so we can restore it after navigating away.
     writeLs('calendar.view', arg.view.type);
     writeLs('calendar.date', arg.view.currentStart.toISOString());
@@ -794,14 +806,18 @@ export default function CalendarPage() {
         </div>
       )}
 
+      {!isMobile && desktopJumper.input}
+
       {isMobile && (
         <MobileCalendarToolbar
           viewType={viewType}
           syncing={isLoadingEvents}
+          todayEnabled={todayEnabled}
           onPrev={() => calRef.current?.getApi().prev()}
           onToday={() => calRef.current?.getApi().today()}
           onNext={() => calRef.current?.getApi().next()}
           onChangeView={(v) => calRef.current?.getApi().changeView(v)}
+          onJumpToDate={gotoDate}
         />
       )}
 
@@ -815,7 +831,17 @@ export default function CalendarPage() {
           headerToolbar={isMobile ? false : {
             left: 'prev,today,next',
             center: 'title',
-            right: CALENDAR_VIEWS.map((v) => v.type).join(','),
+            // Space, not comma: jumpTo stands alone ahead of the view group, mirroring
+            // where MobileCalendarToolbar puts it.
+            right: `jumpTo ${CALENDAR_VIEWS.map((v) => v.type).join(',')}`,
+          }}
+          customButtons={{
+            // No text: the icon comes from a CSS mask on .fc-jumpTo-button (index.css),
+            // since customButtons can't render an element. `hint` becomes the button's
+            // title attribute, which is its only accessible name. FullCalendar hands
+            // the click handler the button element — pass it along so the date picker
+            // opens under the button rather than wherever the hidden input sits.
+            jumpTo: { hint: 'Jump to date', click: (_ev, el) => desktopJumper.open(el) },
           }}
           buttonText={{ today: 'Today', month: 'Month', week: 'Week', day: 'Day' }}
           events={fcEvents}
@@ -1003,17 +1029,21 @@ export default function CalendarPage() {
 function MobileCalendarToolbar({
   viewType,
   syncing,
+  todayEnabled,
   onPrev,
   onToday,
   onNext,
   onChangeView,
+  onJumpToDate,
 }: {
   viewType: string;
   syncing: boolean;
+  todayEnabled: boolean;
   onPrev: () => void;
   onToday: () => void;
   onNext: () => void;
   onChangeView: (view: string) => void;
+  onJumpToDate: (date: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const active = CALENDAR_VIEWS.find((v) => v.type === viewType) ?? CALENDAR_VIEWS[0];
@@ -1028,7 +1058,14 @@ function MobileCalendarToolbar({
         <button type="button" onClick={onPrev} aria-label="Previous" className={navBtn}>
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <button type="button" onClick={onToday} className={cn(navBtn, 'text-sm')}>
+        <button
+          type="button"
+          onClick={onToday}
+          disabled={!todayEnabled}
+          // 0.65 is FullCalendar's own disabled opacity, so the two toolbars dim to
+          // the same degree.
+          className={cn(navBtn, 'text-sm disabled:opacity-65 disabled:hover:bg-transparent')}
+        >
           Today
         </button>
         <button type="button" onClick={onNext} aria-label="Next" className={navBtn}>
@@ -1036,51 +1073,56 @@ function MobileCalendarToolbar({
         </button>
       </div>
 
-      {syncing && (
-        <span className="ml-auto flex items-center text-xs text-muted-foreground">
-          <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
-        </span>
-      )}
-
-      <div className={cn('relative', !syncing && 'ml-auto')}>
-        <button
-          type="button"
-          onClick={() => setMenuOpen((v) => !v)}
-          aria-expanded={menuOpen}
-          aria-label="Change view"
-          className="flex items-center gap-1.5 rounded-md border border-input px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-        >
-          <ActiveIcon className="h-4 w-4" />
-          {active.label}
-          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', menuOpen && 'rotate-180')} />
-        </button>
-        {menuOpen && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-            {/* right-0: the trigger sits at the right edge, so anchoring left would
-                push the panel off-screen. */}
-            <div className="absolute right-0 top-full mt-1 z-20 w-36 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
-              {CALENDAR_VIEWS.map(({ type, label, Icon }) => (
-                <button
-                  key={type}
-                  type="button"
-                  aria-current={type === viewType}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onChangeView(type);
-                  }}
-                  className={cn(
-                    'w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted',
-                    type === viewType && 'bg-primary/10 text-primary',
-                  )}
-                >
-                  <Icon className="h-4 w-4" />
-                  {label}
-                </button>
-              ))}
-            </div>
-          </>
+      <div className="ml-auto flex items-center gap-2">
+        {syncing && (
+          <span
+            className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse"
+            aria-label="Syncing"
+          />
         )}
+
+        <DateJumpButton onPick={onJumpToDate} />
+
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-label="Change view"
+            className="flex h-8 items-center gap-1.5 rounded-md border border-input px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            <ActiveIcon className="h-4 w-4" />
+            {active.label}
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', menuOpen && 'rotate-180')} />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+              {/* right-0: the trigger sits at the right edge, so anchoring left would
+                  push the panel off-screen. */}
+              <div className="absolute right-0 top-full mt-1 z-20 w-36 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                {CALENDAR_VIEWS.map(({ type, label, Icon }) => (
+                  <button
+                    key={type}
+                    type="button"
+                    aria-current={type === viewType}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onChangeView(type);
+                    }}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted',
+                      type === viewType && 'bg-primary/10 text-primary',
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

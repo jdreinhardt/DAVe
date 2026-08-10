@@ -57,7 +57,15 @@ test.describe('mobile bottom navigation', () => {
 
     // FullCalendar's own toolbar is off on mobile; ours is the only one.
     await expect(page.locator('.fc-toolbar')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Today' })).toBeVisible();
+
+    // Today is inert while the view already contains today, matching what
+    // FullCalendar does on desktop, and wakes up once we navigate away.
+    const today = page.getByRole('button', { name: 'Today' });
+    await expect(today).toBeDisabled();
+    await page.getByRole('button', { name: 'Next' }).click();
+    await expect(today).toBeEnabled();
+    await today.click();
+    await expect(today).toBeDisabled();
 
     // Week is reachable again from the view menu.
     await page.getByRole('button', { name: 'Change view' }).click();
