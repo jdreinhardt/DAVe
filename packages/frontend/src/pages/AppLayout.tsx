@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Menu } from 'lucide-react';
+import { Menu, Search } from 'lucide-react';
 import { getMe } from '../api/auth';
 import { ApiError } from '../api/client';
 import Sidebar from '../components/Sidebar';
+import BottomNav from '../components/BottomNav';
 import GlobalSearchModal from '../components/GlobalSearchModal';
+import { VIEW_NAV_ITEMS } from '../hooks/useViewNavItems';
 import { CollectionVisibilityProvider } from '../contexts/CollectionVisibility';
 import { ContactDragProvider } from '../contexts/ContactDrag';
 import { NoteDragProvider } from '../contexts/NoteDrag';
@@ -49,15 +51,8 @@ export default function AppLayout() {
     setSidebarOpen(false);
   }, [pathname]);
 
-  const pageTitle = pathname.startsWith('/contacts')
-    ? 'Contacts'
-    : pathname.startsWith('/tasks')
-      ? 'Tasks'
-      : pathname.startsWith('/notes')
-        ? 'Notes'
-        : pathname.startsWith('/journals')
-          ? 'Journals'
-          : 'Calendar';
+  const pageTitle =
+    VIEW_NAV_ITEMS.find((item) => pathname.startsWith(item.to))?.label ?? 'Calendar';
 
   if (meQuery.isLoading) {
     return (
@@ -95,11 +90,21 @@ export default function AppLayout() {
                 >
                   <Menu className="h-5 w-5" />
                 </button>
-                <span className="font-semibold text-sm text-foreground">{pageTitle}</span>
+                <span className="font-semibold text-sm text-foreground flex-1">{pageTitle}</span>
+                <button
+                  onClick={() => setSearchOpen(true)}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Search"
+                >
+                  <Search className="h-5 w-5" />
+                </button>
               </header>
-              <main className="flex-1 overflow-auto min-h-0">
+              {/* `relative` contains the pages' full-bleed mobile detail panes, so the
+                  header and bottom nav stay visible behind them. */}
+              <main className="flex-1 overflow-auto min-h-0 relative">
                 <Outlet />
               </main>
+              <BottomNav />
             </div>
           </div>
           </NoteDragProvider>

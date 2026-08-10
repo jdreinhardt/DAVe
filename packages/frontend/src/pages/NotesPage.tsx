@@ -999,7 +999,7 @@ export default function NotesPage() {
           </div>
         )}
         {showMultiPanel && isMobile && (
-          <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <div className="absolute inset-0 z-20 flex flex-col bg-background">
             <NoteMultiSelectPanel
               notes={selectedNotes}
               noteCollections={vjournalCalendars}
@@ -1160,7 +1160,7 @@ export default function NotesPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-foreground text-background text-xs px-4 py-2 shadow-lg pointer-events-none">
+        <div className="fixed bottom-20 md:bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-foreground text-background text-xs px-4 py-2 shadow-lg pointer-events-none">
           {toast}
         </div>
       )}

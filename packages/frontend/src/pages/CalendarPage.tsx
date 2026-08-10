@@ -950,7 +950,7 @@ export default function CalendarPage() {
       {toast && (
         <div
           className={cn(
-            'fixed bottom-4 right-4 z-[70] rounded-lg px-4 py-2.5 text-sm shadow-lg',
+            'fixed bottom-20 md:bottom-4 right-4 z-[70] rounded-lg px-4 py-2.5 text-sm shadow-lg',
             toast.type === 'ok'
               ? 'bg-background border border-border text-foreground'
               : 'bg-destructive text-destructive-foreground',

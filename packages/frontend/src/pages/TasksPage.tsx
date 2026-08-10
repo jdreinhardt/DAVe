@@ -1151,7 +1151,7 @@ function TaskDetailPanel({
   );
 
   if (fullscreen) {
-    return <div className="fixed inset-0 z-50 flex flex-col bg-background">{panel}</div>;
+    return <div className="absolute inset-0 z-20 flex flex-col bg-background">{panel}</div>;
   }
 
   return panel;
@@ -2569,7 +2569,7 @@ export default function TasksPage() {
         </div>
       )}
       {selectedUids.size >= 2 && isMobile && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-background">
+        <div className="absolute inset-0 z-20 flex flex-col bg-background">
           <MultiTaskPanel
             tasks={selectedTasks}
             taskCollections={taskCollections}
@@ -2661,7 +2661,7 @@ export default function TasksPage() {
         <div
           className={cn(
             'flex flex-col bg-card border-l border-border overflow-y-auto',
-            isMobile ? 'fixed inset-0 z-50' : 'shrink-0',
+            isMobile ? 'absolute inset-0 z-20' : 'shrink-0',
           )}
           style={!isMobile ? { width: panelWidth } : undefined}
         >
@@ -2913,7 +2913,7 @@ export default function TasksPage() {
 
       {/* Toast */}
       {toastMessage && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-foreground text-background text-sm shadow-lg">
+        <div className="fixed bottom-20 md:bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-foreground text-background text-sm shadow-lg">
           {toastMessage}
         </div>
       )}

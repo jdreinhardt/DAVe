@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { BookUser, Calendar, Check, CheckSquare, ChevronDown, ChevronRight, LogOut, NotebookPen, Pencil, Plus, RefreshCw, Search, Settings, ScrollText } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, LogOut, Pencil, Plus, RefreshCw, Search, Settings } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import AddressBookModal from './AddressBookModal';
 import CalendarModal from './CalendarModal';
@@ -14,6 +14,7 @@ import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useSettings } from '../contexts/Settings';
 import { useContactDrag } from '../contexts/ContactDrag';
 import { useNoteDrag } from '../contexts/NoteDrag';
+import { useViewNavItems } from '../hooks/useViewNavItems';
 import type { AddressBook, Calendar as CalendarType } from '@dave/shared';
 import type { MeResponse } from '@dave/shared';
 
@@ -56,17 +57,7 @@ export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarPr
   const inNotes = pathname.startsWith('/notes');
   const inJournals = pathname.startsWith('/journals');
 
-  // Hide the Tasks / Notes / Journals tabs when no calendar advertises support for
-  // their component. The active tab stays visible even when unsupported, so a manual
-  // deep-link still shows the tab (and its in-view "no collections" notice) and only
-  // disappears once you navigate away. While calendars are still loading we show the
-  // tabs to avoid a flicker for the common case where support does exist.
-  const calsLoaded = calQuery.data !== undefined;
-  const hasVTodo = (calQuery.data ?? []).some((c) => c.components.includes('VTODO'));
-  const hasVJournal = (calQuery.data ?? []).some((c) => c.components.includes('VJOURNAL'));
-  const showTasks = !calsLoaded || hasVTodo || inTasks;
-  const showNotes = !calsLoaded || hasVJournal || inNotes;
-  const showJournals = !calsLoaded || hasVJournal || inJournals;
+  const viewNavItems = useViewNavItems();
   const isLoading =
     (inContacts ? abQuery.isFetching : false) ||
     (inCalendar || inTasks || inNotes || inJournals ? calQuery.isFetching : false);
@@ -92,9 +83,10 @@ export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarPr
       {/* App name + search + sync indicator */}
       <div className="flex items-center gap-1 px-4 py-3 border-b border-border">
         <span className="font-semibold text-foreground flex-1">DAVe</span>
+        {/* Desktop only — on mobile the app header carries the search button. */}
         <button
           onClick={onOpenSearch}
-          className="text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
+          className="hidden md:block text-muted-foreground hover:text-foreground transition-colors p-0.5 rounded"
           title="Search (⌘K)"
           aria-label="Search"
         >
@@ -105,32 +97,17 @@ export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarPr
         )}
       </div>
 
-      {/* Navigation */}
-      <nav className="px-2 py-2 space-y-0.5">
-        <SidebarNavLink to="/contacts" icon={<BookUser className="h-4 w-4" />}>
-          Contacts
-        </SidebarNavLink>
-        <SidebarNavLink to="/calendar" icon={<Calendar className="h-4 w-4" />}>
-          Calendar
-        </SidebarNavLink>
-        {showTasks && (
-          <SidebarNavLink to="/tasks" icon={<CheckSquare className="h-4 w-4" />}>
-            Tasks
+      {/* Navigation — desktop only; on mobile the bottom nav owns view switching
+          and this drawer is just the collections list. */}
+      <nav className="hidden md:block px-2 py-2 space-y-0.5">
+        {viewNavItems.map(({ to, label, Icon }) => (
+          <SidebarNavLink key={to} to={to} icon={<Icon className="h-4 w-4" />}>
+            {label}
           </SidebarNavLink>
-        )}
-        {showNotes && (
-          <SidebarNavLink to="/notes" icon={<NotebookPen className="h-4 w-4" />}>
-            Notes
-          </SidebarNavLink>
-        )}
-        {showJournals && (
-          <SidebarNavLink to="/journals" icon={<ScrollText className="h-4 w-4" />}>
-            Journals
-          </SidebarNavLink>
-        )}
+        ))}
       </nav>
 
-      <div className="mx-4 my-1 border-t border-border" />
+      <div className="hidden md:block mx-4 my-1 border-t border-border" />
 
       {inContacts && (
         <CollectionSection
