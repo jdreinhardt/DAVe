@@ -31,16 +31,17 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: 'journals',   label: 'Journals',   icon: <ScrollText className="h-4 w-4" /> },
 ];
 
-// A labelled settings row: label on the left, control filling the rest.
+// A labelled settings row: label on its own line, the control in a div beneath it
+// so every control shares the same left edge regardless of label width.
 function SettingRow({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="space-y-1.5">
       {htmlFor ? (
-        <label htmlFor={htmlFor} className="text-sm font-medium shrink-0">{label}</label>
+        <label htmlFor={htmlFor} className="block text-sm font-medium">{label}</label>
       ) : (
-        <span className="text-sm font-medium shrink-0">{label}</span>
+        <span className="block text-sm font-medium">{label}</span>
       )}
-      {children}
+      <div className="flex items-center gap-2">{children}</div>
     </div>
   );
 }
@@ -143,7 +144,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
           </div>
 
           {/* Content pane */}
-          <div className="flex-1 min-w-0 overflow-y-auto px-4 py-4 space-y-3">
+          <div className="flex-1 min-w-0 overflow-y-auto px-4 py-4 space-y-6">
             {activeTab === 'contacts' && (
               <>
                 <SettingRow label="Sort order" htmlFor="contact-sort-by">
