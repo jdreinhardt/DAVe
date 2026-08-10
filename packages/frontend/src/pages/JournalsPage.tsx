@@ -43,6 +43,11 @@ import NoteBulkEditModal, {
 } from '../components/NoteBulkEditModal';
 import TagInput from '../components/TagInput';
 import TagFilterButton from '../components/TagFilterButton';
+import {
+  ToolbarFilterToggle,
+  ToolbarFilterGroup,
+  ToolbarPrimaryEnd,
+} from '../components/ToolbarFilters';
 import { useSettings } from '../contexts/Settings';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
@@ -834,7 +839,7 @@ function DateJumperButton({
           }
         }}
         title="Jump to date"
-        className="flex items-center gap-1.5 text-sm rounded-md border border-input bg-background px-2 py-1.5 hover:bg-muted transition-colors"
+        className="flex h-7.75 items-center gap-1.5 text-sm rounded-md border border-input bg-background px-2 py-1.5 hover:bg-muted transition-colors"
       >
         <CalendarSearch className="h-3.5 w-3.5 text-muted-foreground" />
       </button>
@@ -965,6 +970,8 @@ export default function JournalsPage() {
     return Array.isArray(v) ? (v as string[]) : [];
   });
   const [searchQuery, setSearchQuery] = useState('');
+  // Mobile-only: collapses the secondary toolbar controls. Resets on remount.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
   const location = useLocation();
@@ -1533,8 +1540,9 @@ export default function JournalsPage() {
           New journal
         </button>
 
+        <ToolbarPrimaryEnd>
         {/* Search */}
-        <div className="relative flex-1 min-w-40 max-w-72">
+        <div className="relative w-40 shrink-0 md:w-auto md:flex-1 md:min-w-40 md:max-w-72">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <input
             type="search"
@@ -1553,6 +1561,14 @@ export default function JournalsPage() {
           )}
         </div>
 
+        <ToolbarFilterToggle
+          open={filtersOpen}
+          onToggle={() => setFiltersOpen((o) => !o)}
+          activeCount={categoryFilter.length}
+        />
+        </ToolbarPrimaryEnd>
+
+        <ToolbarFilterGroup open={filtersOpen}>
         {/* Sort controls — list view only */}
         {effectiveView === 'list' && (
           <>
@@ -1575,7 +1591,7 @@ export default function JournalsPage() {
               <button
                 onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
                 title={`Sort ${order === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
-                className="text-muted-foreground hover:text-foreground"
+                className="flex h-7.75 items-center justify-center rounded-md border border-input bg-background px-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
               >
                 <ArrowUpDown className="h-4 w-4" />
               </button>
@@ -1635,6 +1651,7 @@ export default function JournalsPage() {
             </button>
           )}
         </div>
+        </ToolbarFilterGroup>
       </div>
 
 

@@ -45,6 +45,11 @@ import TaskEditForm, { emptyTaskJson } from '../components/TaskEditForm';
 import BulkDeleteDialog from '../components/BulkDeleteDialog';
 import TaskBulkEditModal, { applyTaskBulkEdit } from '../components/TaskBulkEditModal';
 import type { TaskBulkEditConfig, TaskBulkEditFieldId } from '../components/TaskBulkEditModal';
+import {
+  ToolbarFilterToggle,
+  ToolbarFilterGroup,
+  ToolbarPrimaryEnd,
+} from '../components/ToolbarFilters';
 
 // Baikal stores colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
 function hex6(color: string): string {
@@ -1457,6 +1462,8 @@ export default function TasksPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [rawSearch, setRawSearch] = useState('');
+  // Mobile-only: collapses the secondary toolbar controls. Resets on remount.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [pendingSelectUid, setPendingSelectUid] = useState<string | null>(null);
@@ -2093,8 +2100,9 @@ export default function TasksPage() {
             New task
           </button>
 
+          <ToolbarPrimaryEnd>
           {/* Search */}
-          <div className="relative flex-1 min-w-40 max-w-72">
+          <div className="relative w-40 shrink-0 md:w-auto md:flex-1 md:min-w-40 md:max-w-72">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <input
               type="search"
@@ -2113,7 +2121,40 @@ export default function TasksPage() {
             )}
           </div>
 
-          {/* Sort — hidden in Baikal mode */}
+          <ToolbarFilterToggle
+            open={filtersOpen}
+            onToggle={() => setFiltersOpen((o) => !o)}
+            activeCount={activeFilters}
+          />
+          </ToolbarPrimaryEnd>
+
+          {/* Archive search — its own full-width bar on mobile, shown whenever a search is
+              active regardless of the disclosure, since it belongs to the search box rather
+              than to the filters. `md:order-1` keeps its original desktop slot, after the
+              filters and before the layout toggle. */}
+          {(rawSearch || baikalMode) && (
+            <label className="w-full md:w-auto md:order-1 flex items-center justify-end md:justify-start gap-1.5 text-xs text-muted-foreground cursor-pointer select-none shrink-0">
+              <input
+                type="checkbox"
+                checked={baikalMode}
+                onChange={(e) => {
+                  setBaikalMode(e.target.checked);
+                  if (!e.target.checked) {
+                    setBaikalResults([]);
+                    setBaikalError(null);
+                    setSelectedArchived(null);
+                  } else {
+                    setSelectedUid(null);
+                  }
+                }}
+                className="rounded"
+              />
+              Search Archived
+            </label>
+          )}
+
+          <ToolbarFilterGroup open={filtersOpen}>
+          {/* Sort + filters — hidden in Baikal mode */}
           {!baikalMode && (
             <>
               <select
@@ -2133,14 +2174,16 @@ export default function TasksPage() {
                 <button
                   onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
                   title={`Sort ${order === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
-                  className="text-muted-foreground hover:text-foreground"
+                  className="flex h-7.75 items-center justify-center rounded-md border border-input bg-background px-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                 >
                   <ArrowUpDown className="h-4 w-4" />
                 </button>
               )}
 
-              {/* Filters */}
-              <div className="flex items-center gap-1">
+              {/* Filters. `contents` on mobile so the three selects wrap individually into
+                  the cluster instead of forming one unbreakable item that strands the sort
+                  select on a row of its own. */}
+              <div className="contents md:flex md:items-center md:gap-1">
                 <select
                   value={filterStatus ?? ''}
                   onChange={(e) => setFilterStatus((e.target.value as FilterStatus) || undefined)}
@@ -2205,34 +2248,11 @@ export default function TasksPage() {
                   </button>
                 )}
               </div>
-            </>
-          )}
 
-          {/* Baikal search toggle — shown when search box has text, or while already active */}
-          {(rawSearch || baikalMode) && (
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none shrink-0">
-              <input
-                type="checkbox"
-                checked={baikalMode}
-                onChange={(e) => {
-                  setBaikalMode(e.target.checked);
-                  if (!e.target.checked) {
-                    setBaikalResults([]);
-                    setBaikalError(null);
-                    setSelectedArchived(null);
-                  } else {
-                    setSelectedUid(null);
-                  }
-                }}
-                className="rounded"
-              />
-              Search Archived
-            </label>
-          )}
-
-          {/* Layout toggle — hidden in Baikal mode; pushed to right */}
-          {!baikalMode && (
-            <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
+          {/* Layout toggle — `ml-auto` right-justifies it on whichever wrapped line it
+              lands on, so it shares the last row of filters instead of claiming one of its
+              own. `md:order-2` keeps it last on desktop. */}
+            <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto md:order-2 shrink-0">
               <LayoutToggleButton
                 icon={<List className="h-4 w-4" />}
                 active={layout === 'list'}
@@ -2252,7 +2272,9 @@ export default function TasksPage() {
                 onClick={() => setLayout('kanban')}
               />
             </div>
+            </>
           )}
+          </ToolbarFilterGroup>
         </div>
 
         {/* Multi-select bar */}
