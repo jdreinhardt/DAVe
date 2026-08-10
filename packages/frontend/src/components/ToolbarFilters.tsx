@@ -1,30 +1,36 @@
 import { ChevronDown, SlidersHorizontal } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 /**
- * Mobile-only disclosure for the secondary toolbar controls (sort, filters, view
- * toggle). The toolbars wrap onto several rows on a phone, which reads as clutter;
- * collapsing everything but "new" and "search" keeps the default view calm.
+ * Mobile-only disclosure for secondary toolbar controls. The toolbars wrap onto several
+ * rows on a phone, which reads as clutter; collapsing all but search keeps the default
+ * view calm.
  *
- * `activeCount` should count only controls that hide entries from the list — sort
- * and view toggles don't, so they aren't counted. Without it a user can filter,
- * collapse, and then have no way to see why the list is short.
+ * `activeCount` should count only controls that hide entries from the list — sort and
+ * view toggles don't, so they aren't counted. Without it a user can filter, collapse,
+ * and then have no way to see why the list is short. Omit it where the disclosure holds
+ * actions rather than filters, and pass a matching `noun` so the label reads correctly.
  */
 export function ToolbarFilterToggle({
   open,
   onToggle,
-  activeCount,
+  activeCount = 0,
+  noun = 'filters',
+  icon: Icon = SlidersHorizontal,
 }: {
   open: boolean;
   onToggle: () => void;
-  activeCount: number;
+  activeCount?: number;
+  noun?: string;
+  icon?: LucideIcon;
 }) {
   return (
     <button
       type="button"
       onClick={onToggle}
       aria-expanded={open}
-      aria-label={open ? 'Hide filters' : 'Show filters'}
+      aria-label={`${open ? 'Hide' : 'Show'} ${noun}`}
       className={cn(
         // h-[34px] matches the search input it sits beside; the icons alone would
         // otherwise make this button noticeably shorter than its neighbours.
@@ -32,7 +38,7 @@ export function ToolbarFilterToggle({
         activeCount > 0 ? 'border-primary text-primary' : 'border-input text-muted-foreground',
       )}
     >
-      <SlidersHorizontal className="h-3.5 w-3.5" />
+      <Icon className="h-3.5 w-3.5" />
       {activeCount > 0 && (
         <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium leading-none text-primary-foreground">
           {activeCount}

@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine, GitMerge, ArrowLeft } from 'lucide-react';
+import { Search, UserRound, Plus, Download, Upload, Pencil, Trash2, ChevronDown, X, PencilLine, GitMerge, ArrowLeft, MoreHorizontal } from 'lucide-react';
+import { ToolbarFilterToggle } from '../components/ToolbarFilters';
 import type { AddressBook, Contact, ContactJson } from '@dave/shared';
 import { getAddressBooks, getContacts } from '../api/collections';
 import {
@@ -92,6 +93,8 @@ export default function ContactsPage() {
   const [pendingSelectId, setPendingSelectId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
+  // Mobile-only: collapses the new/import/export row. Resets on remount.
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [panel, setPanel] = useState<Panel>({ mode: 'empty' });
 
   useEffect(() => {
@@ -582,7 +585,8 @@ export default function ContactsPage() {
       >
         {/* Toolbar */}
         <div className="px-3 py-2 border-b border-border space-y-2">
-          <div className="relative">
+          <div className="flex items-center gap-2">
+          <div className="relative flex-1">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <input
               ref={searchRef}
@@ -596,7 +600,16 @@ export default function ContactsPage() {
               )}
             />
           </div>
-          <div className="flex gap-1">
+            <ToolbarFilterToggle
+              open={actionsOpen}
+              onToggle={() => setActionsOpen((o) => !o)}
+              noun="actions"
+              icon={MoreHorizontal}
+            />
+          </div>
+          {/* New / import / export — collapsed behind the toggle on mobile so the
+              search box gets the full first row. */}
+          <div className={cn('flex gap-1', !actionsOpen && 'hidden md:flex')}>
             <button
               onClick={handleNewContact}
               className="flex flex-1 items-center justify-center gap-1 rounded-md border border-input bg-background py-1.5 text-xs hover:bg-muted"
