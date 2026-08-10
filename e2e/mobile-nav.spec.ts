@@ -46,6 +46,27 @@ test.describe('mobile bottom navigation', () => {
     await expect(page.locator('aside').getByRole('button', { name: 'Search' })).toBeHidden();
   });
 
+  test('the calendar toolbar holds the nav cluster and a view menu', async ({ page }) => {
+    await page.goto('/calendar');
+    await expect(page.locator('.fc-view-harness')).toBeVisible();
+
+    const header = page.locator('header');
+    // The date range replaces the static view name, so the header must not read "Calendar".
+    await expect(header).not.toContainText('Calendar');
+    const monthTitle = await header.locator('span').first().textContent();
+
+    // FullCalendar's own toolbar is off on mobile; ours is the only one.
+    await expect(page.locator('.fc-toolbar')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Today' })).toBeVisible();
+
+    // Week is reachable again from the view menu.
+    await page.getByRole('button', { name: 'Change view' }).click();
+    await page.getByRole('button', { name: 'Week', exact: true }).click();
+    await expect(page.locator('.fc-timeGridWeek-view')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Change view' })).toContainText('Week');
+    await expect(header.locator('span').first()).not.toHaveText(monthTitle ?? '');
+  });
+
   test('the bottom bar stays visible while a detail pane is open', async ({ page }) => {
     const bar = page.getByRole('navigation', { name: 'Views' });
     const firstContact = page.locator('[data-uid]').first();

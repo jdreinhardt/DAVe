@@ -7,7 +7,7 @@ import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
 import type { EventInput, DatesSetArg, EventClickArg, EventContentArg } from '@fullcalendar/core';
-import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2, CalendarDays, Flag, Tag } from 'lucide-react';
+import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2, CalendarDays, Flag, Tag, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, CalendarClock } from 'lucide-react';
 import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope, Task, TaskJson, TasksQueryParams, Note, NoteJson, JournalsQueryParams } from '@dave/shared';
 import {
   getCalendars,
@@ -20,6 +20,7 @@ import { fetchTasks, updateTask } from '../api/tasks';
 import { fetchJournals, updateJournal } from '../api/journals';
 import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
+import { useMobileHeaderTitle } from '../contexts/MobileHeader';
 import { useSettings } from '../contexts/Settings';
 import { cn, buildMapUrl, lightenHex, darkenHex } from '../lib/utils';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
@@ -34,6 +35,14 @@ function readLs(key: string, fallback: string): string {
 function writeLs(key: string, value: string): void {
   try { localStorage.setItem(key, value); } catch { /* ignore */ }
 }
+
+// The views FullCalendar is configured with, in toolbar order. Shared by the
+// desktop headerToolbar button list and the mobile view menu.
+const CALENDAR_VIEWS = [
+  { type: 'dayGridMonth', label: 'Month', Icon: CalendarDays },
+  { type: 'timeGridWeek', label: 'Week', Icon: CalendarRange },
+  { type: 'timeGridDay', label: 'Day', Icon: CalendarClock },
+] as const;
 
 function formatAlarmTrigger(trigger: string): string {
   const negative = trigger.startsWith('-');
@@ -229,6 +238,14 @@ export default function CalendarPage() {
   const initialCalView = useRef<string>(readLs('calendar.view', 'dayGridMonth'));
   const initialCalDate = useRef<string | undefined>(readLs('calendar.date', '') || undefined);
   const [pendingSelectEventId, setPendingSelectEventId] = useState<string | null>(null);
+  // Mirrors of FullCalendar's own view state, kept in sync from datesSet. The mobile
+  // toolbar is ours rather than FullCalendar's, so it needs these to render.
+  const [viewType, setViewType] = useState<string>(initialCalView.current);
+  const [viewTitle, setViewTitle] = useState('');
+
+  // On mobile the date range lives in the app header instead of the calendar's own
+  // toolbar, which frees that row for the nav cluster and the view menu.
+  useMobileHeaderTitle(viewTitle || null);
 
   const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
   const [popup, setPopup] = useState<PopupData | null>(null);
@@ -574,6 +591,8 @@ export default function CalendarPage() {
 
   const handleDatesSet = (arg: DatesSetArg) => {
     setDateRange({ start: arg.start.toISOString(), end: arg.end.toISOString() });
+    setViewType(arg.view.type);
+    setViewTitle(arg.view.title);
     // Remember where the user is so we can restore it after navigating away.
     writeLs('calendar.view', arg.view.type);
     writeLs('calendar.date', arg.view.currentStart.toISOString());
@@ -766,12 +785,24 @@ export default function CalendarPage() {
 
   return (
     <div className="h-full flex flex-col p-2 md:p-4 relative">
-      {/* Sync indicator */}
-      {isLoadingEvents && (
+      {/* Sync indicator. Desktop only — on mobile it would land on top of the view
+          menu, so the mobile toolbar renders its own inline copy instead. */}
+      {isLoadingEvents && !isMobile && (
         <div className="absolute top-2 right-4 z-10 text-xs text-muted-foreground flex items-center gap-1.5">
           <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
           Syncing…
         </div>
+      )}
+
+      {isMobile && (
+        <MobileCalendarToolbar
+          viewType={viewType}
+          syncing={isLoadingEvents}
+          onPrev={() => calRef.current?.getApi().prev()}
+          onToday={() => calRef.current?.getApi().today()}
+          onNext={() => calRef.current?.getApi().next()}
+          onChangeView={(v) => calRef.current?.getApi().changeView(v)}
+        />
       )}
 
       <div className="flex-1 overflow-hidden">
@@ -780,14 +811,11 @@ export default function CalendarPage() {
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
           initialView={initialCalView.current}
           initialDate={initialCalDate.current}
-          headerToolbar={isMobile ? {
-            left: 'prev,next',
+          // Mobile gets MobileCalendarToolbar above instead — one row rather than two.
+          headerToolbar={isMobile ? false : {
+            left: 'prev,today,next',
             center: 'title',
-            right: 'dayGridMonth,timeGridDay',
-          } : {
-            left: 'prev,next today',
-            center: 'title',
-            right: 'dayGridMonth,timeGridWeek,timeGridDay',
+            right: CALENDAR_VIEWS.map((v) => v.type).join(','),
           }}
           buttonText={{ today: 'Today', month: 'Month', week: 'Week', day: 'Day' }}
           events={fcEvents}
@@ -959,6 +987,101 @@ export default function CalendarPage() {
           {toast.msg}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Mobile toolbar ────────────────────────────────────────────────────────────
+
+/**
+ * Replaces FullCalendar's built-in header on phones, where it wraps onto two rows
+ * and still can't fit every view button. Everything lives on one row: a grouped
+ * ‹ Today › cluster on the left, and a menu on the right whose trigger shows the
+ * active view, so Week is reachable again without spending the width on a third
+ * button. The date range is pushed into the app header (see useMobileHeaderTitle).
+ */
+function MobileCalendarToolbar({
+  viewType,
+  syncing,
+  onPrev,
+  onToday,
+  onNext,
+  onChangeView,
+}: {
+  viewType: string;
+  syncing: boolean;
+  onPrev: () => void;
+  onToday: () => void;
+  onNext: () => void;
+  onChangeView: (view: string) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const active = CALENDAR_VIEWS.find((v) => v.type === viewType) ?? CALENDAR_VIEWS[0];
+  const ActiveIcon = active.Icon;
+
+  const navBtn = 'flex items-center justify-center px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors';
+
+  return (
+    <div className="flex items-center gap-2 pb-2">
+      {/* ‹ Today › — one segmented cluster, thumb-reachable on the left */}
+      <div className="flex items-center rounded-md border border-input divide-x divide-input overflow-hidden">
+        <button type="button" onClick={onPrev} aria-label="Previous" className={navBtn}>
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <button type="button" onClick={onToday} className={cn(navBtn, 'text-sm')}>
+          Today
+        </button>
+        <button type="button" onClick={onNext} aria-label="Next" className={navBtn}>
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+
+      {syncing && (
+        <span className="ml-auto flex items-center text-xs text-muted-foreground">
+          <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
+        </span>
+      )}
+
+      <div className={cn('relative', !syncing && 'ml-auto')}>
+        <button
+          type="button"
+          onClick={() => setMenuOpen((v) => !v)}
+          aria-expanded={menuOpen}
+          aria-label="Change view"
+          className="flex items-center gap-1.5 rounded-md border border-input px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        >
+          <ActiveIcon className="h-4 w-4" />
+          {active.label}
+          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', menuOpen && 'rotate-180')} />
+        </button>
+        {menuOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+            {/* right-0: the trigger sits at the right edge, so anchoring left would
+                push the panel off-screen. */}
+            <div className="absolute right-0 top-full mt-1 z-20 w-36 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+              {CALENDAR_VIEWS.map(({ type, label, Icon }) => (
+                <button
+                  key={type}
+                  type="button"
+                  aria-current={type === viewType}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onChangeView(type);
+                  }}
+                  className={cn(
+                    'w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted',
+                    type === viewType && 'bg-primary/10 text-primary',
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
