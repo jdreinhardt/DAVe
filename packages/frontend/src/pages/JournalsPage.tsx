@@ -10,7 +10,6 @@ import {
   ArrowUpDown,
   BookOpen,
   CalendarDays,
-  CalendarSearch,
   ChevronDown,  List,
   MoreVertical,
   PencilLine,
@@ -36,6 +35,7 @@ import { cn } from '../lib/utils';
 import VJournalDetail from '../components/VJournalDetail';
 import VJournalEditForm, { emptyJournalJson } from '../components/VJournalEditForm';
 import BulkDeleteDialog from '../components/BulkDeleteDialog';
+import DateJumpButton from '../components/DateJumper';
 import NoteBulkEditModal, {
   applyNoteBulkEdit,
   type NoteBulkEditConfig,
@@ -790,13 +790,7 @@ function DateJumperButton({
   monthGroups: MonthGroup[];
   calendarRef: React.RefObject<FullCalendar | null>;
 }) {
-  const dateInputRef = useRef<HTMLInputElement>(null);
-  const [jumpDate, setJumpDate] = useState(() => new Date().toISOString().substring(0, 10));
-
-  function handleDateChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const date = e.target.value;
-    if (!date) return;
-    setJumpDate(date);
+  function handleDateChange(date: string) {
     if (view === 'calendar') {
       calendarRef.current?.getApi().gotoDate(date);
     } else {
@@ -819,32 +813,8 @@ function DateJumperButton({
     }
   }
 
-  return (
-    <div className="relative shrink-0">
-      <input
-        ref={dateInputRef}
-        type="date"
-        value={jumpDate}
-        onChange={handleDateChange}
-        className="sr-only"
-        tabIndex={-1}
-        aria-hidden="true"
-      />
-      <button
-        onClick={() => {
-          try {
-            dateInputRef.current?.showPicker();
-          } catch {
-            dateInputRef.current?.focus();
-          }
-        }}
-        title="Jump to date"
-        className="flex h-7.75 items-center gap-1.5 text-sm rounded-md border border-input bg-background px-2 py-1.5 hover:bg-muted transition-colors"
-      >
-        <CalendarSearch className="h-3.5 w-3.5 text-muted-foreground" />
-      </button>
-    </div>
-  );
+  // h-7.75 matches the neighbouring toolbar controls on this page.
+  return <DateJumpButton onPick={handleDateChange} className="h-7.75" />;
 }
 
 // ── Calendar view ─────────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { AUTH_STATE_PATH } from './e2e/helpers';
 
 export default defineConfig({
   testDir: './e2e',
@@ -9,7 +10,14 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Signs in once; every other spec inherits that session via storageState so the
+    // suite stays under the login route's rate limit. See e2e/auth.setup.ts.
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'], storageState: AUTH_STATE_PATH },
+      dependencies: ['setup'],
+    },
   ],
   // When running in CI, start the full test stack first.
   // Locally, reuse an already-running instance if available.

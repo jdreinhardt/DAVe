@@ -67,6 +67,18 @@ test.describe('mobile bottom navigation', () => {
     await expect(header.locator('span').first()).not.toHaveText(monthTitle ?? '');
   });
 
+  test('jump to date moves the calendar', async ({ page }) => {
+    await page.goto('/calendar');
+    await expect(page.locator('.fc-view-harness')).toBeVisible();
+
+    // The button opens the native picker, which we can't drive; setting the hidden
+    // input directly exercises the same change handler.
+    await expect(page.getByRole('button', { name: 'Jump to date' })).toBeVisible();
+    await page.locator('input[type="date"]').fill('2027-03-15');
+
+    await expect(page.locator('header span').first()).toHaveText(/March 2027/);
+  });
+
   test('the bottom bar stays visible while a detail pane is open', async ({ page }) => {
     const bar = page.getByRole('navigation', { name: 'Views' });
     const firstContact = page.locator('[data-uid]').first();

@@ -31,3 +31,5 @@ coverage/
 .vitest/
 playwright-report/
 test-results/
+# Shared signed-in session written by the Playwright setup project
+e2e/.auth/

@@ -1,93 +1,106 @@
 #!/usr/bin/env sh
 # Non-interactive test-stack seed for docker-compose.test.yml.
-# Runs inside the ckulka/baikal:nginx container.
+# Runs inside the ckulka/baikal:*-nginx container.
 #
 # What it does:
-#   1. Installs sqlite3 (alpine apk)
-#   2. Writes baikal.yaml with Basic auth so tsdav can authenticate
-#   3. Triggers DB initialisation via a curl request to the Baikal admin endpoint
-#   4. Seeds testuser / testpass with a calendar + address book via sqlite3
+#   1. Writes config/baikal.yaml with Basic auth so tsdav can authenticate
+#   2. Creates the SQLite database from Baikal's own schema
+#   3. Seeds testuser / testpass with a calendar + address book
+#   4. Marks the install as complete so /admin/install doesn't intercept
+#
+# Everything is done offline against the shared volumes — we deliberately do not
+# drive Baikal's web installer, which needs a browser session and silently 500s
+# when the config schema doesn't match the version.
 #
 # Expected environment:
-#   BAIKAL_INTERNAL_URL  URL visible from within the Docker network (default http://baikal/dav.php)
+#   BAIKAL_ROOT  Baikal install root inside the container (default /var/www/baikal)
 
 set -eu
 
-BAIKAL_INTERNAL_URL="${BAIKAL_INTERNAL_URL:-http://baikal/}"
-DB_PATH="/var/www/baikal/Specific/db.sqlite"
-CONFIG_DIR="/var/www/baikal/config"
-CONFIG_PATH="$CONFIG_DIR/baikal.yaml"
+BAIKAL_ROOT="${BAIKAL_ROOT:-/var/www/baikal}"
+CONFIG_PATH="$BAIKAL_ROOT/config/baikal.yaml"
+DB_PATH="$BAIKAL_ROOT/Specific/db/db.sqlite"
+SCHEMA_PATH="$BAIKAL_ROOT/Core/Resources/Db/SQLite/db.sql"
 
 USERNAME="testuser"
 PASSWORD="testpass"
 DISPLAY_NAME="Test User"
 EMAIL="test@example.com"
+ADMIN_PASSWORD="admin"
+# Baked into every user's digesta1 hash, so it must match the config below.
+AUTH_REALM="BaikalDAV"
 
-echo "==> Installing sqlite3..."
-apk add -q sqlite
+# Read the version out of the image rather than hardcoding it: Baikal shows its
+# upgrade wizard (and refuses DAV requests) when configured_version disagrees.
+BAIKAL_VERSION=$(php -r "require '$BAIKAL_ROOT/Core/Distrib.php'; echo BAIKAL_VERSION;")
+echo "==> Seeding Baikal $BAIKAL_VERSION"
 
-echo "==> Writing Baikal config with Basic auth..."
-mkdir -p "$CONFIG_DIR"
+echo "==> Writing config with Basic auth..."
+mkdir -p "$(dirname "$CONFIG_PATH")"
+ADMIN_HASH=$(php -r "echo password_hash('$ADMIN_PASSWORD', PASSWORD_BCRYPT);")
 
-# Compute a bcrypt hash for the admin password using PHP (available in this image).
-ADMIN_HASH=$(php -r "echo password_hash('admin', PASSWORD_BCRYPT);")
-
+# Section names and keys are those of Baikal\Model\Config\{Standard,Database}.
+# Basic (not the default Digest) because tsdav authenticates with Basic.
 cat > "$CONFIG_PATH" <<YAML
-baikal:
-    parameters:
-        admin_passwordhash: '$ADMIN_HASH'
-        auth_realm: 'BaikalDAV'
-        auth_type: 'Basic'
-        invite_from: ''
-        timezone: 'UTC'
-        card_enabled: 'true'
-        cal_enabled: 'true'
-        dav_route: '/dav.php'
-        base_uri: ''
+system:
+    configured_version: '$BAIKAL_VERSION'
+    timezone: 'UTC'
+    card_enabled: true
+    cal_enabled: true
+    dav_auth_type: 'Basic'
+    admin_passwordhash: '$ADMIN_HASH'
+    failed_access_message: 'user %u authentication failure for Baikal'
+    auth_realm: '$AUTH_REALM'
+    base_uri: ''
+    invite_from: 'noreply@example.com'
+database:
+    backend: 'sqlite'
+    sqlite_file: '$DB_PATH'
+    encryption_key: ''
 YAML
-
 echo "   Config written: $CONFIG_PATH"
 
-echo "==> Triggering Baikal database initialisation..."
-# The first authenticated request to the admin area runs migrations.
-# We request the admin login page; the status code doesn't matter here — we just
-# need Baikal to run its bootstrap/migration logic.
-curl -s -o /dev/null -X GET "${BAIKAL_INTERNAL_URL%/dav.php}/admin/" || true
-
-# Wait for the DB to appear (Baikal creates it during the first migration run).
-WAITED=0
-until [ -f "$DB_PATH" ]; do
-  if [ "$WAITED" -ge 30 ]; then
-    echo "ERROR: Baikal database not created after 30 seconds." >&2
-    exit 1
-  fi
-  curl -s -o /dev/null "${BAIKAL_INTERNAL_URL%/dav.php}/admin/" || true
-  sleep 1
-  WAITED=$((WAITED + 1))
-done
-echo "   Database ready: $DB_PATH"
+echo "==> Creating database from Baikal's schema..."
+mkdir -p "$(dirname "$DB_PATH")"
+if [ -s "$DB_PATH" ]; then
+  echo "   Database already exists, leaving it alone: $DB_PATH"
+else
+  sqlite3 "$DB_PATH" < "$SCHEMA_PATH"
+  echo "   Database created: $DB_PATH"
+fi
 
 echo "==> Seeding test user '$USERNAME'..."
-# digesta1 = md5("username:BaikalDAV:password") — used by Baikal for Basic auth verification
-HASH=$(php -r "echo md5('${USERNAME}:BaikalDAV:${PASSWORD}');")
+# digesta1 = md5("username:realm:password"), which is what PDOBasicAuth compares against.
+DIGEST=$(php -r "echo md5('${USERNAME}:${AUTH_REALM}:${PASSWORD}');")
 
+# Since 0.9 a calendar is split in two: `calendars` holds the shared properties
+# and `calendarinstances` the per-principal ones. access=1 means owner.
 sqlite3 "$DB_PATH" <<SQL
-INSERT OR IGNORE INTO users (username, digesta1, displayname)
-  VALUES ('${USERNAME}', '${HASH}', '${DISPLAY_NAME}');
+INSERT OR IGNORE INTO users (username, digesta1)
+  VALUES ('${USERNAME}', '${DIGEST}');
 
 INSERT OR IGNORE INTO principals (uri, email, displayname)
   VALUES ('principals/${USERNAME}', '${EMAIL}', '${DISPLAY_NAME}');
 
-INSERT OR IGNORE INTO calendars
-    (principaluri, displayname, uri, description,
-     calendarorder, calendarcolor, timezone, components, transparent, synctoken)
+INSERT OR IGNORE INTO calendars (id, synctoken, components)
+  VALUES (1, 1, 'VEVENT,VTODO,VJOURNAL');
+
+INSERT OR IGNORE INTO calendarinstances
+    (calendarid, principaluri, access, displayname, uri, description,
+     calendarorder, calendarcolor, timezone, transparent)
   VALUES
-    ('principals/${USERNAME}', 'Personal', 'personal', '',
-     0, '#0082C9', 'America/New_York', 'VEVENT,VTODO,VJOURNAL', 0, 1);
+    (1, 'principals/${USERNAME}', 1, 'Personal', 'personal', '',
+     0, '#0082C9', 'America/New_York', 0);
 
 INSERT OR IGNORE INTO addressbooks (principaluri, displayname, uri, description, synctoken)
   VALUES ('principals/${USERNAME}', 'Contacts', 'contacts', '', 1);
 SQL
+
+# The installer only steps aside once this marker exists.
+touch "$BAIKAL_ROOT/Specific/INSTALL_DISABLED"
+
+# We ran as root; hand everything back to the web user or Baikal can't write.
+chown -R nginx:nginx "$BAIKAL_ROOT/config" "$BAIKAL_ROOT/Specific" 2>/dev/null || true
 
 echo ""
 echo "==> Test Baikal seed complete."

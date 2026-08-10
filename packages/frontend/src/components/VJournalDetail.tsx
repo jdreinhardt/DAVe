@@ -52,7 +52,12 @@ export default function VJournalDetail({
     <>
       {/* Delete confirm — renders in both edit and view modes */}
       {showDeleteConfirm && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Delete this ${mode}?`}
+          className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm"
+        >
           <div className="bg-card border border-border rounded-lg shadow-lg p-5 mx-4 max-w-sm w-full">
             <p className="text-sm font-medium text-foreground mb-1">Delete this {mode}?</p>
             <p className="text-xs text-muted-foreground mb-4">This action cannot be undone.</p>
