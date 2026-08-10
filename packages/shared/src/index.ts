@@ -34,6 +34,8 @@ export const NOTES_VIEWS = ['list', 'grid'] as const;
 export const JOURNALS_VIEWS = ['timeline', 'list', 'calendar'] as const;
 // Which task date positions a task on the Calendar view's tasks layer.
 export const CALENDAR_TASK_DATES = ['due', 'dtstart', 'span'] as const;
+// Whether the Calendar view shows the tasks / journals overlay layer at all.
+export const CALENDAR_LAYER_TOGGLE = ['on', 'off'] as const;
 
 export type SortBy = (typeof SORT_BY)[number];
 export type SortDir = (typeof SORT_DIR)[number];
@@ -44,6 +46,7 @@ export type TaskLayout = (typeof TASK_LAYOUTS)[number];
 export type NotesView = (typeof NOTES_VIEWS)[number];
 export type JournalsView = (typeof JOURNALS_VIEWS)[number];
 export type CalendarTaskDate = (typeof CALENDAR_TASK_DATES)[number];
+export type CalendarLayerToggle = (typeof CALENDAR_LAYER_TOGGLE)[number];
 
 // ── Collections ───────────────────────────────────────────────────────────────
 

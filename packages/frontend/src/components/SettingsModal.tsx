@@ -2,14 +2,19 @@ import { useState } from 'react';
 import {
   X, ArrowUpAZ, ArrowDownAZ, Sun, Moon, Monitor, List, LayoutGrid, Columns3, Grid,
   AlignLeft, CalendarDays, CalendarClock, CalendarRange,
-  BookUser, Calendar, CheckSquare, NotebookPen, ScrollText, Palette,
-  Info,
+  BookUser, Calendar, CheckSquare, NotebookPen, ScrollText,
+  Info, Eye, EyeOff,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useSettings } from '../contexts/Settings';
 import { useIsMobile } from '../hooks/useIsMobile';
 import SegmentedControl from './SegmentedControl';
-import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate } from '../contexts/Settings';
+import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate, CalendarLayerToggle } from '../contexts/Settings';
+
+const LAYER_TOGGLE_OPTIONS = [
+  { value: 'on'  as CalendarLayerToggle, label: 'On',  icon: <Eye className="h-3.5 w-3.5" /> },
+  { value: 'off' as CalendarLayerToggle, label: 'Off', icon: <EyeOff className="h-3.5 w-3.5" /> },
+];
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -44,7 +49,7 @@ const SELECT_CLASS =
   'flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView, calendarTaskDate, updateCalendarTaskDate } =
+  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView, calendarTaskDate, updateCalendarTaskDate, calendarShowTasks, updateCalendarShowTasks, calendarShowJournals, updateCalendarShowJournals } =
     useSettings();
   const isMobile = useIsMobile();
 
@@ -58,6 +63,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [notesView, setNotesView] = useState<NotesView>(notesDefaultView);
   const [journalsView, setJournalsView] = useState<JournalsView>(journalsDefaultView);
   const [taskDate, setTaskDate] = useState<CalendarTaskDate>(calendarTaskDate);
+  const [showTasks, setShowTasks] = useState<CalendarLayerToggle>(calendarShowTasks);
+  const [showJournals, setShowJournals] = useState<CalendarLayerToggle>(calendarShowJournals);
 
   const handleSave = () => {
     updateContactSort({ sortBy, sortDir });
@@ -68,6 +75,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     updateNotesDefaultView(notesView);
     updateJournalsDefaultView(journalsView);
     updateCalendarTaskDate(taskDate);
+    updateCalendarShowTasks(showTasks);
+    updateCalendarShowJournals(showJournals);
     onClose();
   };
 
@@ -80,7 +89,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     taskLayout !== taskDefaultLayout ||
     notesView !== notesDefaultView ||
     journalsView !== journalsDefaultView ||
-    taskDate !== calendarTaskDate;
+    taskDate !== calendarTaskDate ||
+    showTasks !== calendarShowTasks ||
+    showJournals !== calendarShowJournals;
 
   return (
     <div
@@ -221,17 +232,26 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             )}
 
             {activeTab === 'tasks' && (
-              <SettingRow label="Default view">
-                <SegmentedControl<TaskLayout>
-                  value={taskLayout}
-                  onChange={setTaskLayout}
-                  options={[
-                    { value: 'list',    label: 'List',    icon: <List className="h-3.5 w-3.5" /> },
-                    { value: 'compact', label: 'Compact', icon: <LayoutGrid className="h-3.5 w-3.5" /> },
-                    { value: 'kanban',  label: 'Kanban',  icon: <Columns3 className="h-3.5 w-3.5" /> },
-                  ]}
-                />
-              </SettingRow>
+              <>
+                <SettingRow label="Default view">
+                  <SegmentedControl<TaskLayout>
+                    value={taskLayout}
+                    onChange={setTaskLayout}
+                    options={[
+                      { value: 'list',    label: 'List',    icon: <List className="h-3.5 w-3.5" /> },
+                      { value: 'compact', label: 'Compact', icon: <LayoutGrid className="h-3.5 w-3.5" /> },
+                      { value: 'kanban',  label: 'Kanban',  icon: <Columns3 className="h-3.5 w-3.5" /> },
+                    ]}
+                  />
+                </SettingRow>
+                <SettingRow label="Show on calendar">
+                  <SegmentedControl<CalendarLayerToggle>
+                    value={showTasks}
+                    onChange={setShowTasks}
+                    options={LAYER_TOGGLE_OPTIONS}
+                  />
+                </SettingRow>
+              </>
             )}
 
             {activeTab === 'notes' && (
@@ -248,17 +268,26 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             )}
 
             {activeTab === 'journals' && (
-              <SettingRow label="Default view">
-                <SegmentedControl<JournalsView>
-                  value={journalsView}
-                  onChange={setJournalsView}
-                  options={[
-                    { value: 'timeline', label: 'Timeline', icon: <AlignLeft className="h-3.5 w-3.5" /> },
-                    { value: 'list',     label: 'List',     icon: <List className="h-3.5 w-3.5" /> },
-                    { value: 'calendar', label: 'Calendar', icon: <CalendarDays className="h-3.5 w-3.5" /> },
-                  ]}
-                />
-              </SettingRow>
+              <>
+                <SettingRow label="Default view">
+                  <SegmentedControl<JournalsView>
+                    value={journalsView}
+                    onChange={setJournalsView}
+                    options={[
+                      { value: 'timeline', label: 'Timeline', icon: <AlignLeft className="h-3.5 w-3.5" /> },
+                      { value: 'list',     label: 'List',     icon: <List className="h-3.5 w-3.5" /> },
+                      { value: 'calendar', label: 'Calendar', icon: <CalendarDays className="h-3.5 w-3.5" /> },
+                    ]}
+                  />
+                </SettingRow>
+                <SettingRow label="Show on calendar">
+                  <SegmentedControl<CalendarLayerToggle>
+                    value={showJournals}
+                    onChange={setShowJournals}
+                    options={LAYER_TOGGLE_OPTIONS}
+                  />
+                </SettingRow>
+              </>
             )}
 
             {activeTab === 'general' && (

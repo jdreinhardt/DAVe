@@ -48,6 +48,8 @@ export function getDb(config: Config): DbInstance {
       notes_view       TEXT    NOT NULL DEFAULT 'list',
       journals_view    TEXT    NOT NULL DEFAULT 'timeline',
       calendar_task_date TEXT  NOT NULL DEFAULT 'due',
+      calendar_show_tasks    TEXT NOT NULL DEFAULT 'on',
+      calendar_show_journals TEXT NOT NULL DEFAULT 'on',
       updated_at       INTEGER NOT NULL DEFAULT 0
     );
 
@@ -59,10 +61,16 @@ export function getDb(config: Config): DbInstance {
     );
   `);
 
-  // Migration: add calendar_task_date to user_settings for existing databases.
+  // Migrations: add newer user_settings columns to existing databases.
   const settingsCols = _db.prepare("PRAGMA table_info(user_settings)").all() as { name: string }[];
   if (!settingsCols.some((c) => c.name === 'calendar_task_date')) {
     _db.exec("ALTER TABLE user_settings ADD COLUMN calendar_task_date TEXT NOT NULL DEFAULT 'due'");
+  }
+  if (!settingsCols.some((c) => c.name === 'calendar_show_tasks')) {
+    _db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_tasks TEXT NOT NULL DEFAULT 'on'");
+  }
+  if (!settingsCols.some((c) => c.name === 'calendar_show_journals')) {
+    _db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_journals TEXT NOT NULL DEFAULT 'on'");
   }
 
   return _db;

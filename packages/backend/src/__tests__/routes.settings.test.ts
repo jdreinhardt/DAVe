@@ -25,6 +25,8 @@ const VALID_BODY = {
   notesView: 'list',
   journalsView: 'timeline',
   calendarTaskDate: 'due',
+  calendarShowTasks: 'on',
+  calendarShowJournals: 'on',
   updatedAt: 1000,
 };
 
@@ -47,6 +49,8 @@ describe('PUT /api/settings validation', () => {
         notes_view       TEXT    NOT NULL DEFAULT 'list',
         journals_view    TEXT    NOT NULL DEFAULT 'timeline',
         calendar_task_date TEXT  NOT NULL DEFAULT 'due',
+        calendar_show_tasks    TEXT NOT NULL DEFAULT 'on',
+        calendar_show_journals TEXT NOT NULL DEFAULT 'on',
         updated_at       INTEGER NOT NULL DEFAULT 0
       );
     `);

@@ -10,6 +10,8 @@ export interface ServerSettings {
   notesView: string;
   journalsView: string;
   calendarTaskDate: string;
+  calendarShowTasks: string;
+  calendarShowJournals: string;
   updatedAt: number;
 }
 

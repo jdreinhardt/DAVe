@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useCallback, useEffect } from 'rea
 import {
   SORT_BY, SORT_DIR, CONTACT_SUBTITLE_FIELDS, MAP_SERVICES,
   DARK_MODES, TASK_LAYOUTS, NOTES_VIEWS, JOURNALS_VIEWS, CALENDAR_TASK_DATES,
+  CALENDAR_LAYER_TOGGLE,
 } from '@dave/shared';
 import { fetchServerSettings, pushServerSettings } from '../api/settings.js';
 import type { ServerSettings } from '../api/settings.js';
@@ -11,11 +12,11 @@ import type { ServerSettings } from '../api/settings.js';
 // `import { MapService } from '../contexts/Settings'` call sites keep working.
 export type {
   SortBy, SortDir, ContactSubtitleField, MapService,
-  DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate,
+  DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate, CalendarLayerToggle,
 } from '@dave/shared';
 import type {
   SortBy, SortDir, ContactSubtitleField, MapService,
-  DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate,
+  DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate, CalendarLayerToggle,
 } from '@dave/shared';
 
 export interface ContactSortSettings {
@@ -40,6 +41,10 @@ interface SettingsContextValue {
   updateJournalsDefaultView: (v: JournalsView) => void;
   calendarTaskDate: CalendarTaskDate;
   updateCalendarTaskDate: (v: CalendarTaskDate) => void;
+  calendarShowTasks: CalendarLayerToggle;
+  updateCalendarShowTasks: (v: CalendarLayerToggle) => void;
+  calendarShowJournals: CalendarLayerToggle;
+  updateCalendarShowJournals: (v: CalendarLayerToggle) => void;
 }
 
 const SORT_KEY         = 'dave:settings:contactSort';
@@ -50,6 +55,8 @@ const TASK_LAYOUT_KEY  = 'dave:settings:taskDefaultLayout';
 const NOTES_VIEW_KEY   = 'dave:settings:notesDefaultView';
 const JOURNALS_VIEW_KEY = 'dave:settings:journalsDefaultView';
 const CALENDAR_TASK_DATE_KEY = 'dave:settings:calendarTaskDate';
+const CALENDAR_SHOW_TASKS_KEY = 'dave:settings:calendarShowTasks';
+const CALENDAR_SHOW_JOURNALS_KEY = 'dave:settings:calendarShowJournals';
 const UPDATED_AT_KEY   = 'dave:settings:updatedAt';
 
 // Aliases to the shared value sets (kept under the original names so the
@@ -61,6 +68,7 @@ const VALID_TASK_LAYOUTS = TASK_LAYOUTS;
 const VALID_NOTES_VIEWS = NOTES_VIEWS;
 const VALID_JOURNALS_VIEWS = JOURNALS_VIEWS;
 const VALID_CALENDAR_TASK_DATES = CALENDAR_TASK_DATES;
+const VALID_CALENDAR_LAYER_TOGGLE = CALENDAR_LAYER_TOGGLE;
 
 // ── localStorage helpers ───────────────────────────────────────────────────────
 
@@ -133,6 +141,22 @@ function loadCalendarTaskDate(): CalendarTaskDate {
   return 'due';
 }
 
+function loadCalendarShowTasks(): CalendarLayerToggle {
+  try {
+    const raw = localStorage.getItem(CALENDAR_SHOW_TASKS_KEY);
+    if (raw !== null && VALID_CALENDAR_LAYER_TOGGLE.includes(raw as CalendarLayerToggle)) return raw as CalendarLayerToggle;
+  } catch { /* ignore corrupt storage */ }
+  return 'on';
+}
+
+function loadCalendarShowJournals(): CalendarLayerToggle {
+  try {
+    const raw = localStorage.getItem(CALENDAR_SHOW_JOURNALS_KEY);
+    if (raw !== null && VALID_CALENDAR_LAYER_TOGGLE.includes(raw as CalendarLayerToggle)) return raw as CalendarLayerToggle;
+  } catch { /* ignore corrupt storage */ }
+  return 'on';
+}
+
 function loadUpdatedAt(): number {
   try {
     const raw = localStorage.getItem(UPDATED_AT_KEY);
@@ -159,6 +183,8 @@ function readAllFromStorage(): Omit<ServerSettings, 'updatedAt'> {
     notesView:       loadNotesDefaultView(),
     journalsView:    loadJournalsDefaultView(),
     calendarTaskDate: loadCalendarTaskDate(),
+    calendarShowTasks: loadCalendarShowTasks(),
+    calendarShowJournals: loadCalendarShowJournals(),
   };
 }
 
@@ -193,6 +219,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [notesDefaultView, setNotesDefaultView] = useState<NotesView>(loadNotesDefaultView);
   const [journalsDefaultView, setJournalsDefaultView] = useState<JournalsView>(loadJournalsDefaultView);
   const [calendarTaskDate, setCalendarTaskDate] = useState<CalendarTaskDate>(loadCalendarTaskDate);
+  const [calendarShowTasks, setCalendarShowTasks] = useState<CalendarLayerToggle>(loadCalendarShowTasks);
+  const [calendarShowJournals, setCalendarShowJournals] = useState<CalendarLayerToggle>(loadCalendarShowJournals);
 
   // ── Update callbacks ─────────────────────────────────────────────────────────
   // Each writes to localStorage first (fast), then stamps the timestamp and
@@ -254,6 +282,20 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     debouncedPush();
   }, []);
 
+  const updateCalendarShowTasks = useCallback((v: CalendarLayerToggle) => {
+    setCalendarShowTasks(v);
+    try { localStorage.setItem(CALENDAR_SHOW_TASKS_KEY, v); } catch { /* ignore */ }
+    saveUpdatedAt(Date.now());
+    debouncedPush();
+  }, []);
+
+  const updateCalendarShowJournals = useCallback((v: CalendarLayerToggle) => {
+    setCalendarShowJournals(v);
+    try { localStorage.setItem(CALENDAR_SHOW_JOURNALS_KEY, v); } catch { /* ignore */ }
+    saveUpdatedAt(Date.now());
+    debouncedPush();
+  }, []);
+
   // ── Server sync (apply server values when server timestamp is newer) ──────────
 
   const applyFromServer = useCallback((server: ServerSettings) => {
@@ -291,6 +333,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const ctd = validateOr(server.calendarTaskDate, VALID_CALENDAR_TASK_DATES, 'due');
     setCalendarTaskDate(ctd);
     try { localStorage.setItem(CALENDAR_TASK_DATE_KEY, ctd); } catch { /* ignore */ }
+
+    const cst = validateOr(server.calendarShowTasks, VALID_CALENDAR_LAYER_TOGGLE, 'on');
+    setCalendarShowTasks(cst);
+    try { localStorage.setItem(CALENDAR_SHOW_TASKS_KEY, cst); } catch { /* ignore */ }
+
+    const csj = validateOr(server.calendarShowJournals, VALID_CALENDAR_LAYER_TOGGLE, 'on');
+    setCalendarShowJournals(csj);
+    try { localStorage.setItem(CALENDAR_SHOW_JOURNALS_KEY, csj); } catch { /* ignore */ }
 
     saveUpdatedAt(server.updatedAt);
   }, []); // state setters are stable references
@@ -342,7 +392,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [darkMode]);
 
   return (
-    <SettingsContext.Provider value={{ contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView, calendarTaskDate, updateCalendarTaskDate }}>
+    <SettingsContext.Provider value={{ contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView, calendarTaskDate, updateCalendarTaskDate, calendarShowTasks, updateCalendarShowTasks, calendarShowJournals, updateCalendarShowJournals }}>
       {children}
     </SettingsContext.Provider>
   );

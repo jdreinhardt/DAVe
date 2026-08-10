@@ -11,6 +11,7 @@ import { cn, lightenHex, darkenHex } from '../lib/utils';
 import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
+import { useSettings } from '../contexts/Settings';
 import { useContactDrag } from '../contexts/ContactDrag';
 import { useNoteDrag } from '../contexts/NoteDrag';
 import type { AddressBook, Calendar as CalendarType } from '@dave/shared';
@@ -469,6 +470,7 @@ function CollectionSection({
     showAllAddressBooks, hideAllAddressBooks,
     showAllCalendars, hideAllCalendars,
   } = useCollectionVisibility();
+  const { calendarShowTasks, calendarShowJournals } = useSettings();
 
   const { dragging } = useContactDrag();
   const isDraggingContact = kind === 'addressbook' && dragging !== null;
@@ -537,9 +539,9 @@ function CollectionSection({
         const isSameAb = isDraggingContact && dragging!.contact.addressBookId === item.id;
         const isOver = dropTargetId === item.id;
         const supportsTasks =
-          kind === 'calendar' && !!(item as CalendarType).components?.includes('VTODO');
+          kind === 'calendar' && calendarShowTasks === 'on' && !!(item as CalendarType).components?.includes('VTODO');
         const supportsJournals =
-          kind === 'calendar' && !!(item as CalendarType).components?.includes('VJOURNAL');
+          kind === 'calendar' && calendarShowJournals === 'on' && !!(item as CalendarType).components?.includes('VJOURNAL');
         const hasSubItems = supportsTasks || supportsJournals;
         const isExpanded = expandedCals.has(item.id);
         const taskColor = lightenHex(item.color || defaultColor);

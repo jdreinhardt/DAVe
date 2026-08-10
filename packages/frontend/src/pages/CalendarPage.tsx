@@ -217,7 +217,7 @@ function errorMessage(e: unknown, is412Special = false): string {
 
 export default function CalendarPage() {
   const { hiddenCalendars, hiddenCalendarTasks, hiddenCalendarJournals } = useCollectionVisibility();
-  const { calendarTaskDate } = useSettings();
+  const { calendarTaskDate, calendarShowTasks, calendarShowJournals } = useSettings();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
@@ -279,13 +279,16 @@ export default function CalendarPage() {
   });
 
   // ── Tasks layer ────────────────────────────────────────────────────────────
-  // Calendars that support VTODO and whose nested task layer is visible.
+  // Calendars that support VTODO and whose nested task layer is visible. When the
+  // tasks layer is globally disabled in settings, this is empty (query disabled).
   const taskVisibleCalendars = useMemo(
     () =>
-      (calQuery.data ?? []).filter(
-        (cal) => cal.components.includes('VTODO') && !hiddenCalendarTasks.has(cal.id),
-      ),
-    [calQuery.data, hiddenCalendarTasks],
+      calendarShowTasks === 'off'
+        ? []
+        : (calQuery.data ?? []).filter(
+            (cal) => cal.components.includes('VTODO') && !hiddenCalendarTasks.has(cal.id),
+          ),
+    [calQuery.data, hiddenCalendarTasks, calendarShowTasks],
   );
 
   // All VTODO-capable calendars (regardless of task-layer visibility) — used by
@@ -319,13 +322,16 @@ export default function CalendarPage() {
   }, [calQuery.data]);
 
   // ── Journals layer ─────────────────────────────────────────────────────────
-  // Calendars that support VJOURNAL and whose nested journal layer is visible.
+  // Calendars that support VJOURNAL and whose nested journal layer is visible. When
+  // the journals layer is globally disabled in settings, this is empty (query off).
   const journalVisibleCalendars = useMemo(
     () =>
-      (calQuery.data ?? []).filter(
-        (cal) => cal.components.includes('VJOURNAL') && !hiddenCalendarJournals.has(cal.id),
-      ),
-    [calQuery.data, hiddenCalendarJournals],
+      calendarShowJournals === 'off'
+        ? []
+        : (calQuery.data ?? []).filter(
+            (cal) => cal.components.includes('VJOURNAL') && !hiddenCalendarJournals.has(cal.id),
+          ),
+    [calQuery.data, hiddenCalendarJournals, calendarShowJournals],
   );
 
   const journalParams = useMemo<JournalsQueryParams | null>(() => {
