@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "concurrently -n backend,frontend -c cyan,green \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
     "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
+    "start": "NODE_ENV=production node --env-file=.env packages/backend/dist/server.js",
     "test": "npm test --workspaces --if-present",
     "test:integration": "vitest run --config packages/backend/vitest.integration.config.ts",
     "test:integration:baikal": "DAV_SERVER=baikal npm run test:integration",

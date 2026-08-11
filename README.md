@@ -4,11 +4,63 @@ A self-hosted web client for CalDAV + CardDAV servers.
 Tested against [Baikal](https://sabre.io/baikal/) and [Radicale](https://radicale.org/); it speaks
 standard DAV and holds no server-specific behavior, so other servers may work but are unverified.
 
-**Stack:** Node 22 · Fastify · React 19 · Vite · Tailwind v4 · TypeScript  
-**DAV:** [tsdav](https://github.com/natelindev/tsdav) · [ical.js](https://github.com/kewisch/ical.js)
+---
+
+## Screenshots
+
+All screenshots use seeded demo data (regenerate with `scripts/demo-seed.mjs` + `scripts/screenshots.mjs`).
+
+| | | |
+|---|---|---|
+| **Calendar** ![calendar](docs/images/calendar.png) | **Contacts** ![contacts](docs/images/contacts.png) | **Tasks — list** ![tasks list](docs/images/tasks-list.png) |
+| **Tasks — kanban** ![tasks kanban](docs/images/tasks-kanban.png) | **Tasks — gantt** ![tasks gantt](docs/images/tasks-gantt.png) | **Notes** ![notes](docs/images/notes.png) |
+| **Journals** ![journals](docs/images/journals.png) | **Global search** ![search](docs/images/search.png) | **Mobile** ![mobile calendar](docs/images/mobile-calendar.png) |
 
 ---
-![calendar](docs/images/calendar.png)
+
+## Quick start
+
+You need an existing CalDAV/CardDAV server. Point `DAV_BASE_URL` at its DAV endpoint:
+
+- **Baikal** — `https://baikal.example.com/dav.php`. Set **Basic auth** in Settings → WebDAV auth type.
+  tsdav authenticates with Basic; leaving it on Digest fails every login with 401.
+- **Radicale** — `http://radicale.example.com:5232` (served from the root, no path).
+  Use `[auth] type = htpasswd`; Radicale speaks Basic out of the box.
+
+Basic auth is a hard requirement. Digest is not supported.
+
+```bash
+git clone https://github.com/jdreinhardt/dave && cd dave
+
+cp .env.example .env
+
+# Update .env with correct DAV_BASE_URL and other
+# adjustments for your environment
+nano .env
+```
+
+### Docker
+
+```bash
+docker compose up -d
+# Login at http://localhost:3000
+```
+
+### Node
+
+```bash
+npm install
+npm run build
+DATA_DIR="$PWD/data" npm start
+# Login at http://localhost:3000
+```
+
+`npm start` reads `.env` via Node's `--env-file` and **fails to launch if `.env` does not exist** —
+create it first (see above). `DATA_DIR` overrides the `/data` default, which a bare host usually
+can't write to; alternatively set it in `.env`. The built frontend is found automatically
+(`packages/frontend/dist`); set `FRONTEND_DIST` only to serve it from somewhere else.
+
+For development setup (hot reload, dev Docker stack), see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ---
 
@@ -75,43 +127,6 @@ standard DAV and holds no server-specific behavior, so other servers may work bu
 - Optimistic UI for edits with rollback on failure
 - Multi-user: each user authenticates with their own DAV credentials and sees only their own collections
 
----
-
-## Quick start (development)
-
-You need an existing CalDAV/CardDAV server. Point `DAV_BASE_URL` at its DAV endpoint:
-
-- **Baikal** — `https://baikal.example.com/dav.php`. Set **Basic auth** in Settings → WebDAV auth type.
-  tsdav authenticates with Basic; leaving it on Digest fails every login with 401.
-- **Radicale** — `http://radicale.example.com:5232` (served from the root, no path).
-  Use `[auth] type = htpasswd`; Radicale speaks Basic out of the box.
-
-Basic auth is a hard requirement either way — Digest is not supported.
-
-```bash
-# 1. Clone and install
-git clone <repo> dave && cd dave
-npm install
-
-# 2. Configure
-cp .env.example .env
-# Edit .env — set DAV_BASE_URL, SESSION_SECRET, etc.
-
-# 3. Start dev servers (backend + frontend with hot reload)
-npm run dev
-# Backend → http://localhost:3000
-# Frontend → http://localhost:5173
-```
-
-Alternatively, use the dev Docker image (source bind-mounted for hot reload):
-
-```bash
-# Edit DAV_BASE_URL in docker-compose.dev.yml, then:
-docker compose -f docker-compose.dev.yml up -d
-# Backend → http://localhost:3000   Frontend → http://localhost:5173
-```
-
-Backend changes restart automatically via `tsx watch`; frontend changes apply instantly via Vite HMR.
 
 ### Collection setup for Tasks, Notes, and Journals
 
@@ -153,13 +168,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 ## Production deployment
 
-### Docker Compose
-
-```bash
-cp .env.example .env
-# Fill in DAV_BASE_URL, SESSION_SECRET, etc.
-docker compose up -d
-```
+Run commands live in [Quick start](#quick-start). Production-specific notes:
 
 The production image is a multi-stage build. Session data and the sync cache are stored in a named Docker volume (`data`) mounted at `/data`. Both persist across container restarts.
 
@@ -273,8 +282,10 @@ packages/
   frontend/   React SPA (Vite + Tailwind)
 scripts/
   seed.sh                  Populate a dev Baikal with a test user + collections
-  seed-test-baikal.sh             Seed the integration-test Baikal (testuser/testpass)
+  seed-test-baikal.sh      Seed the integration-test Baikal (testuser/testpass)
   seed-test-radicale.sh    Seed the integration-test Radicale (testuser/testpass)
+  demo-seed.mjs            Fake demo data for README screenshots
+  screenshots.mjs          Playwright capture of docs/images (see file headers)
 Dockerfile         Production multi-stage build
 Dockerfile.dev     Development image (source bind-mounted)
 docker-compose.yml           Production compose (app only)
@@ -299,7 +310,14 @@ DAVe is tested against Baikal and Radicale, and designed to round-trip cleanly w
 - **DAVx⁵** on Android for CalDAV/CardDAV sync
 - **jtx Board** on Android for tasks, notes, and journals (VTODO + VJOURNAL)
 
-DAVe reads and writes vCard 3.0 (what Baikal stores) and preserves all unknown properties and parameters on round-trip. Notes and journals are stored as plain text in `DESCRIPTION` (with markdown syntax visible as-is in other clients) so they remain readable outside DAVe.
+DAVe reads and writes vCard 3.0 and preserves all unknown properties and parameters on round-trip. Notes and journals are stored as plain text in `DESCRIPTION` (with markdown syntax visible as-is in other clients) so they remain readable outside DAVe.
+
+---
+
+**Stack:** Node 22 · Fastify · React 19 · Vite · Tailwind v4 · TypeScript  
+**DAV:** [tsdav](https://github.com/natelindev/tsdav) · [ical.js](https://github.com/kewisch/ical.js)
+
+***Disclaimer***: This project is almost entirely vibe-coded with [Claude Code](https://claude.com/product/claude-code). It has been thoroughly tested with my real data and calendars, but that doesn't mean I have caught everything. If you find issues please open a bug report.
 
 ---
 

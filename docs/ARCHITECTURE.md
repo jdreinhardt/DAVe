@@ -12,6 +12,8 @@ scripts/
   seed.sh                Populate dev Baikal with a test user + collections
   seed-test-baikal.sh    Non-interactive seed for the Baikal test stack
   seed-test-radicale.sh  Non-interactive seed for the Radicale test stack
+  demo-seed.mjs          Fake-but-believable demo data for README screenshots
+  screenshots.mjs        Playwright capture of docs/images (see file headers)
 docker-compose.yml               Production (app only)
 docker-compose.dev.yml           Dev stack (source bind-mounted)
 docker-compose.test.baikal.yml   Test stack (Baikal on 8801, seeded automatically)
