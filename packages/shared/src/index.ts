@@ -396,11 +396,11 @@ export interface DeleteTaskResponse {
   childErrors?: Array<{ uid: string; error: string }>;
 }
 
-/** A completed task found via Baikal archive search (not in the local cache). */
+/** A completed task found via server-side archive search (not in the local cache). */
 export interface ArchivedTask {
   uid: string;
   etag: string;
-  url: string;           // full Baikal object URL — required for the restore PUT
+  url: string;           // full DAV object URL — required for the restore PUT
   collectionUrl: string;
   collectionId: string;
   data: TaskJson;

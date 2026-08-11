@@ -14,7 +14,7 @@ beforeAll(async () => {
   // Find the seeded address book
   const abRes = await app.inject({ method: 'GET', url: '/api/addressbooks', headers: { cookie } });
   const books = abRes.json() as Array<{ id: string }>;
-  if (!books.length) throw new Error('No address books found — is Baikal seeded?');
+  if (!books.length) throw new Error('No address books found — is the DAV server seeded?');
   addressBookId = books[0]!.id;
 });
 

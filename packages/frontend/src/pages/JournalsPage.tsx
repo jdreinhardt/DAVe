@@ -159,7 +159,7 @@ function NoCollectionsState() {
       </h2>
       <p className="text-sm text-muted-foreground max-w-xs mb-4">
         Your calendars currently don&apos;t have Journals enabled. Enable Notes on
-        an existing calendar in the Baikal admin or create a new one to use this feature.
+        a calendar on your DAV server that accepts VJOURNAL, or create a new one here.
         Journals are a subcomponent of Notes.
       </p>
     </div>

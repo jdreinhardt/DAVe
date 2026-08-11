@@ -140,7 +140,7 @@ export async function initialSyncForComponentType(
  * the first time) is triggered by user navigation via the /api/sync/tasks and
  * /api/sync/notes endpoints, not by the background worker. This means the worker
  * never issues a PROPFIND/listCalendars call — it only processes collections
- * already recorded in collection_sync, which avoids spurious Baikal traffic for
+ * already recorded in collection_sync, which avoids spurious DAV traffic for
  * users who haven't visited Tasks/Notes/Journals yet (including stale sessions).
  */
 export async function syncAllCollectionsForUser(

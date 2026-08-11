@@ -15,7 +15,7 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
 export const TEST_SECRET = 'test-secret-that-is-32-chars-min!!';
 
 export const testConfig: Config = {
-  BAIKAL_BASE_URL: 'http://baikal.test/dav.php',
+  DAV_BASE_URL: 'http://dav.test/dav.php',
   SESSION_SECRET: TEST_SECRET,
   SESSION_TTL_HOURS: 168,
   PORT: 3001,
@@ -26,7 +26,7 @@ export const testConfig: Config = {
   SYNC_INTERVAL_SECONDS: 60,
   MAX_CACHED_ENTRIES_PER_USER: 10000,
   COMPLETED_TASK_RETENTION_DAYS: 7,
-  BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
+  DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
   EVENT_SEARCH_RANGE_DAYS: 60,
 };
 

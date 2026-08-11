@@ -60,7 +60,7 @@ function extractCategories(comp: any): string[] {
         if (typeof v === 'string' && v.trim()) cats.push(v.trim());
       }
     } else if (typeof vals === 'string' && vals.trim()) {
-      // Baikal sometimes returns a single comma-joined string.
+      // Some servers return a single comma-joined string.
       cats.push(...vals.split(',').map((s: string) => s.trim()).filter(Boolean));
     }
   }

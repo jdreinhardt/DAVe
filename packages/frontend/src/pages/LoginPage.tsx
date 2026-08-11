@@ -63,7 +63,7 @@ export default function LoginPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className={inputCls}
-                placeholder="your-baikal-username"
+                placeholder="your-username"
                 disabled={loginMutation.isPending}
               />
             </Field>

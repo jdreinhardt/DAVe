@@ -28,7 +28,7 @@ function baseTask(overrides: Partial<TaskJson> = {}): TaskJson {
     lastModified: null,
     categories: [],
     relations: [],
-    collectionUrl: 'https://baikal.example.com/cal/',
+    collectionUrl: 'https://dav.example.com/cal/',
     alarms: [],
     rrule: 'FREQ=DAILY',
     ...overrides,

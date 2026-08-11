@@ -11,7 +11,7 @@
 ```bash
 git clone <repo> dave && cd dave
 npm install
-cp .env.example .env   # fill in BAIKAL_BASE_URL and SESSION_SECRET
+cp .env.example .env   # fill in DAV_BASE_URL and SESSION_SECRET
 ```
 
 ## Development

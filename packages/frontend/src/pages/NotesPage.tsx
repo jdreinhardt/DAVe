@@ -57,7 +57,7 @@ function savePref(key: string, value: unknown): void {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Baikal stores colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
+// CalDAV servers store colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
 function hex6(color: string): string {
   if (color.startsWith('#') && color.length === 9) return color.slice(0, 7);
   return color;
@@ -99,7 +99,7 @@ function NoCollectionsState() {
       <h2 className="text-base font-semibold text-foreground mb-1">No notes collections found</h2>
       <p className="text-sm text-muted-foreground max-w-xs mb-4">
         Your calendars currently don&apos;t have Notes enabled. Enable Notes on
-        an existing calendar in the Baikal admin or create a new one to use this feature.
+        a calendar on your DAV server that accepts VJOURNAL, or create a new one here.
       </p>
     </div>
   );

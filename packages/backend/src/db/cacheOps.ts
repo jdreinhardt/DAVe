@@ -88,7 +88,7 @@ export function deleteEntryByObjectUrl(
 
 /**
  * Evict completed VTODO entries whose COMPLETED timestamp is older than retentionDays.
- * They remain on Baikal; this is a cache-only eviction.
+ * They remain on the DAV server; this is a cache-only eviction.
  */
 export function evictOldCompleted(
   cacheDb: CacheDbInstance,

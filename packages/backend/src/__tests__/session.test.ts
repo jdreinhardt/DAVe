@@ -16,9 +16,9 @@ const SAMPLE_DATA: SessionData = {
   username: 'alice',
   password: 'hunter2',
   displayName: 'Alice',
-  principalUrl: 'https://baikal.test/principals/alice',
-  calendarHomeUrl: 'https://baikal.test/cal/alice/',
-  addressBookHomeUrl: 'https://baikal.test/ab/alice/',
+  principalUrl: 'https://dav.test/principals/alice',
+  calendarHomeUrl: 'https://dav.test/cal/alice/',
+  addressBookHomeUrl: 'https://dav.test/ab/alice/',
 };
 
 let db: DbInstance;

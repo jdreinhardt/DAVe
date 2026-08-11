@@ -34,14 +34,14 @@ const SESSION_DATA: SessionData = {
   username: 'alice',
   password: 'hunter2',
   displayName: 'Alice',
-  principalUrl: 'https://baikal.test/principals/alice',
-  calendarHomeUrl: 'https://baikal.test/cal/alice/',
-  addressBookHomeUrl: 'https://baikal.test/ab/alice/',
+  principalUrl: 'https://dav.test/principals/alice',
+  calendarHomeUrl: 'https://dav.test/cal/alice/',
+  addressBookHomeUrl: 'https://dav.test/ab/alice/',
 };
 
 const STUB_CONTACT_RESULT = {
   id: 'contact-1',
-  url: 'https://baikal.test/ab/alice/contacts/contact-1.vcf',
+  url: 'https://dav.test/ab/alice/contacts/contact-1.vcf',
   etag: '"etag-1"',
   addressBookId: 'contacts',
   data: {
@@ -246,7 +246,7 @@ describe('contacts routes', () => {
   describe('GET /api/addressbooks/:id/export', () => {
     it('returns 200 with text/vcard content-type', async () => {
       vi.mocked(fetchRawContacts).mockResolvedValueOnce([
-        { url: 'https://baikal.test/ab/contacts/alice.vcf', etag: '"etag1"', raw: 'BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice\r\nUID:alice\r\nEND:VCARD' },
+        { url: 'https://dav.test/ab/contacts/alice.vcf', etag: '"etag1"', raw: 'BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice\r\nUID:alice\r\nEND:VCARD' },
       ]);
       const res = await app.inject({
         method: 'GET',

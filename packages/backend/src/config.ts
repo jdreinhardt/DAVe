@@ -2,7 +2,7 @@ import { z } from 'zod';
 import path from 'path';
 
 const schema = z.object({
-  BAIKAL_BASE_URL: z.string().url('BAIKAL_BASE_URL must be a valid URL'),
+  DAV_BASE_URL: z.string().url('DAV_BASE_URL must be a valid URL'),
   SESSION_SECRET: z
     .string()
     .min(32, 'SESSION_SECRET must be at least 32 characters'),
@@ -24,7 +24,7 @@ const schema = z.object({
   CACHE_DB_PATH: z.string().optional(),
   MAX_CACHED_ENTRIES_PER_USER: z.coerce.number().int().positive().default(10000),
   COMPLETED_TASK_RETENTION_DAYS: z.coerce.number().int().min(1).max(90).default(7),
-  BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: z.coerce.number().int().positive().default(365),
+  DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS: z.coerce.number().int().positive().default(365),
   EVENT_SEARCH_RANGE_DAYS: z.coerce.number().int().positive().default(60),
 });
 

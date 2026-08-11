@@ -77,7 +77,7 @@ A self-hosted web client for [Baikal](https://sabre.io/baikal/) (CalDAV + CardDA
 
 ## Quick start (development)
 
-You need an existing Baikal instance. Point `BAIKAL_BASE_URL` at its DAV endpoint and make sure **Basic auth is enabled** in Baikal's settings (Settings → WebDAV auth type). tsdav uses Basic auth; leaving it on Digest will cause all logins to fail with 401.
+You need an existing Baikal instance. Point `DAV_BASE_URL` at its DAV endpoint and make sure **Basic auth is enabled** in Baikal's settings (Settings → WebDAV auth type). tsdav uses Basic auth; leaving it on Digest will cause all logins to fail with 401.
 
 ```bash
 # 1. Clone and install
@@ -86,7 +86,7 @@ npm install
 
 # 2. Configure
 cp .env.example .env
-# Edit .env — set BAIKAL_BASE_URL, SESSION_SECRET, etc.
+# Edit .env — set DAV_BASE_URL, SESSION_SECRET, etc.
 
 # 3. Start dev servers (backend + frontend with hot reload)
 npm run dev
@@ -97,7 +97,7 @@ npm run dev
 Alternatively, use the dev Docker image (source bind-mounted for hot reload):
 
 ```bash
-# Edit BAIKAL_BASE_URL in docker-compose.dev.yml, then:
+# Edit DAV_BASE_URL in docker-compose.dev.yml, then:
 docker compose -f docker-compose.dev.yml up -d
 # Backend → http://localhost:3000   Frontend → http://localhost:5173
 ```
@@ -121,7 +121,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `BAIKAL_BASE_URL` | Yes | — | Root URL of the Baikal DAV endpoint, e.g. `https://baikal.example.com/dav.php` |
+| `DAV_BASE_URL` | Yes | — | Root URL of the Baikal DAV endpoint, e.g. `https://baikal.example.com/dav.php` |
 | `SESSION_SECRET` | Yes | — | Random secret ≥ 32 chars for encrypting session credentials. Generate: `openssl rand -hex 32` |
 | `SESSION_TTL_HOURS` | No | `168` | Session inactivity timeout in hours (sliding window). Default = 7 days. |
 | `PORT` | No | `3000` | Port to listen on |
@@ -131,7 +131,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 | `SYNC_INTERVAL_SECONDS` | No | `60` | How often the background worker polls Baikal for changes to tasks, notes, and journals |
 | `MAX_CACHED_ENTRIES_PER_USER` | No | `10000` | Safety cap on cached task/note/journal entries per user |
 | `COMPLETED_TASK_RETENTION_DAYS` | No | `7` | Days a completed task stays in the local cache after its `COMPLETED` timestamp (1–90). Older completions remain on Baikal and are reachable via "Search Baikal." |
-| `BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS` | No | `365` | How far back the "Search Baikal (slower)" task search queries for old completed tasks |
+| `DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS` | No | `365` | How far back the "Search Baikal (slower)" task search queries for old completed tasks |
 | `EVENT_SEARCH_RANGE_DAYS` | No | `60` | Days in each direction from today that global search queries Baikal for calendar events |
 | `CACHE_DB_PATH` | No | `$DATA_DIR/cache.db` | Override path for the sync cache SQLite file |
 
@@ -143,7 +143,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 ```bash
 cp .env.example .env
-# Fill in BAIKAL_BASE_URL, SESSION_SECRET, etc.
+# Fill in DAV_BASE_URL, SESSION_SECRET, etc.
 docker compose up -d
 ```
 

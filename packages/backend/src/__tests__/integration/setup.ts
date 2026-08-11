@@ -27,7 +27,7 @@ export const TEST_USER = process.env.TEST_USER ?? 'testuser';
 export const TEST_PASS = process.env.TEST_PASS ?? 'testpass';
 
 export const integrationConfig: Config = {
-  BAIKAL_BASE_URL: process.env.TEST_BAIKAL_URL ?? 'http://localhost:8801/dav.php',
+  DAV_BASE_URL: process.env.TEST_DAV_URL ?? 'http://localhost:8801/dav.php',
   SESSION_SECRET: 'integration-test-secret-32-chars!!',
   SESSION_TTL_HOURS: 1,
   PORT: 3001,
@@ -38,7 +38,7 @@ export const integrationConfig: Config = {
   SYNC_INTERVAL_SECONDS: 60,
   MAX_CACHED_ENTRIES_PER_USER: 10000,
   COMPLETED_TASK_RETENTION_DAYS: 7,
-  BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
+  DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
   EVENT_SEARCH_RANGE_DAYS: 60,
 };
 
@@ -98,7 +98,7 @@ export async function loginAndGetCookie(app: FastifyInstance): Promise<string> {
   if (res.statusCode !== 200) {
     throw new Error(
       `Integration login failed (${res.statusCode}): ${res.body}. ` +
-      `Is Baikal running at ${integrationConfig.BAIKAL_BASE_URL} with Basic auth and seeded?`,
+      `Is the DAV server running at ${integrationConfig.DAV_BASE_URL} with Basic auth and seeded?`,
     );
   }
   const setCookie = res.headers['set-cookie'];

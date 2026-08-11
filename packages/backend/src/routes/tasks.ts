@@ -274,13 +274,13 @@ export async function tasksRoutes(
 ) {
   const { cacheDb, config } = opts;
 
-  // ── GET /api/tasks/baikal-search — search Baikal for old completed tasks ────
+  // ── GET /api/tasks/archive-search — search the DAV server for old completed tasks ─
   // Registered before /api/tasks/:uid so Fastify's router doesn't capture
-  // "baikal-search" as a UID value (static segments win, but explicit ordering
+  // "archive-search" as a UID value (static segments win, but explicit ordering
   // makes the intent clear).
 
   app.get<{ Querystring: { q?: string } }>(
-    '/api/tasks/baikal-search',
+    '/api/tasks/archive-search',
     { preHandler: requireAuth },
     async (req, reply) => {
       const { q } = req.query;
@@ -305,8 +305,8 @@ export async function tasksRoutes(
       try {
         rawObjects = await fetchArchivedCompletedTasks(session, collectionUrls, config);
       } catch (err) {
-        app.log.error({ err }, 'Baikal archive search failed');
-        return reply.status(502).send({ error: 'Failed to search Baikal', statusCode: 502 });
+        app.log.error({ err }, 'archive search failed');
+        return reply.status(502).send({ error: 'Failed to search the DAV server', statusCode: 502 });
       }
 
       const tasks: ArchivedTask[] = [];
@@ -329,10 +329,10 @@ export async function tasksRoutes(
     },
   );
 
-  // ── POST /api/tasks/baikal-restore — restore a completed task to active ─────
+  // ── POST /api/tasks/archive-restore — restore a completed task to active ────
 
   app.post<{ Body: RestoreArchivedTaskRequest }>(
-    '/api/tasks/baikal-restore',
+    '/api/tasks/archive-restore',
     { preHandler: requireAuth },
     async (req, reply) => {
       const { url: objectUrl, etag, collectionUrl } = req.body ?? {};
@@ -348,7 +348,7 @@ export async function tasksRoutes(
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
         if (e.statusCode === 412) {
-          return reply.status(409).send({ error: 'Task was modified on Baikal — reload and try again', statusCode: 409 });
+          return reply.status(409).send({ error: 'Task was modified on the server — reload and try again', statusCode: 409 });
         }
         app.log.error({ err }, 'restoreArchivedTask failed');
         return reply.status(502).send({ error: 'Failed to restore task', statusCode: 502 });

@@ -33,7 +33,7 @@ import {
   applyCompletion,
   applyStatusChange,
   triggerTasksSync,
-  searchBaikal,
+  searchArchive,
   restoreArchivedTask as restoreArchivedTaskApi,
 } from '../api/tasks';
 import { getCalendars } from '../api/collections';
@@ -51,7 +51,7 @@ import {
   ToolbarPrimaryEnd,
 } from '../components/ToolbarFilters';
 
-// Baikal stores colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
+// CalDAV servers store colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
 function hex6(color: string): string {
   if (color.startsWith('#') && color.length === 9) return color.slice(0, 7);
   return color;
@@ -1479,11 +1479,11 @@ export default function TasksPage() {
   }, [location]);
   const [showCompleted, setShowCompleted] = useState(false);
 
-  // ── Baikal archive search state ───────────────────────────────────────────
-  const [baikalMode, setBaikalMode] = useState(false);
-  const [baikalResults, setBaikalResults] = useState<ArchivedTask[]>([]);
-  const [baikalLoading, setBaikalLoading] = useState(false);
-  const [baikalError, setBaikalError] = useState<string | null>(null);
+  // ── Server-side archive search state ───────────────────────────────────────────
+  const [archiveMode, setArchiveMode] = useState(false);
+  const [archiveResults, setArchiveResults] = useState<ArchivedTask[]>([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [selectedArchived, setSelectedArchived] = useState<ArchivedTask | null>(null);
   const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -1536,36 +1536,36 @@ export default function TasksPage() {
     return () => clearTimeout(t);
   }, [rawSearch]);
 
-  // ── Baikal archive search ─────────────────────────────────────────────────
+  // ── Server-side archive search ─────────────────────────────────────────────────
   useEffect(() => {
-    if (!baikalMode || !search.trim()) {
-      if (!baikalMode) {
-        setBaikalResults([]);
-        setBaikalError(null);
+    if (!archiveMode || !search.trim()) {
+      if (!archiveMode) {
+        setArchiveResults([]);
+        setArchiveError(null);
         setSelectedArchived(null);
       }
       return;
     }
     let cancelled = false;
-    setBaikalLoading(true);
-    setBaikalError(null);
-    searchBaikal(search)
+    setArchiveLoading(true);
+    setArchiveError(null);
+    searchArchive(search)
       .then((res) => {
         if (!cancelled) {
-          setBaikalResults(res.tasks);
-          setBaikalLoading(false);
+          setArchiveResults(res.tasks);
+          setArchiveLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setBaikalError('Failed to search Baikal. Check your connection and try again.');
-          setBaikalLoading(false);
+          setArchiveError('Failed to search the archive. Check your connection and try again.');
+          setArchiveLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [baikalMode, search]);
+  }, [archiveMode, search]);
 
   // ── Collection data ───────────────────────────────────────────────────────
   const calQuery = useQuery({
@@ -1609,8 +1609,8 @@ export default function TasksPage() {
       setRestoring(false);
       setRestoreConfirmOpen(false);
       setSelectedArchived(null);
-      setBaikalMode(false);
-      setBaikalResults([]);
+      setArchiveMode(false);
+      setArchiveResults([]);
       setRawSearch('');
       invalidateTasks();
       setSelectedUid(result.uid);
@@ -1619,7 +1619,7 @@ export default function TasksPage() {
       setRestoring(false);
       const e = err as { status?: number };
       if (e.status === 409) {
-        showToast('Task was modified on Baikal — please search again and retry.');
+        showToast('Task was modified on the server — please search again and retry.');
       } else {
         showToast('Failed to restore task. Please try again.');
       }
@@ -1830,8 +1830,8 @@ export default function TasksPage() {
   }, []);
 
   // ── Trigger initial sync once on mount ───────────────────────────────────
-  // The route now awaits the initial Baikal fetch, so invalidating after it
-  // resolves ensures the UI reflects tasks that were already on Baikal before
+  // The route now awaits the initial server fetch, so invalidating after it
+  // resolves ensures the UI reflects tasks that were already on the server before
   // the cache was seeded (e.g., after a cache clear or first login).
   useEffect(() => {
     triggerTasksSync()
@@ -2075,7 +2075,7 @@ export default function TasksPage() {
           <h2 className="text-lg font-semibold">No task lists found</h2>
           <p className="text-sm text-muted-foreground mt-1 max-w-sm">
             Your calendars currently don&apos;t have Tasks enabled. Enable Tasks on
-            an existing calendar in the Baikal admin or create a new one to use this feature.
+            a calendar on your DAV server that accepts VTODO, or create a new one here.
           </p>
         </div>
       </div>
@@ -2132,16 +2132,16 @@ export default function TasksPage() {
               active regardless of the disclosure, since it belongs to the search box rather
               than to the filters. `md:order-1` keeps its original desktop slot, after the
               filters and before the layout toggle. */}
-          {(rawSearch || baikalMode) && (
+          {(rawSearch || archiveMode) && (
             <label className="w-full md:w-auto md:order-1 flex items-center justify-end md:justify-start gap-1.5 text-xs text-muted-foreground cursor-pointer select-none shrink-0">
               <input
                 type="checkbox"
-                checked={baikalMode}
+                checked={archiveMode}
                 onChange={(e) => {
-                  setBaikalMode(e.target.checked);
+                  setArchiveMode(e.target.checked);
                   if (!e.target.checked) {
-                    setBaikalResults([]);
-                    setBaikalError(null);
+                    setArchiveResults([]);
+                    setArchiveError(null);
                     setSelectedArchived(null);
                   } else {
                     setSelectedUid(null);
@@ -2154,8 +2154,8 @@ export default function TasksPage() {
           )}
 
           <ToolbarFilterGroup open={filtersOpen}>
-          {/* Sort + filters — hidden in Baikal mode */}
-          {!baikalMode && (
+          {/* Sort + filters — hidden in archive mode */}
+          {!archiveMode && (
             <>
               <select
                 value={sort ?? ''}
@@ -2307,35 +2307,35 @@ export default function TasksPage() {
 
         {/* Task content */}
         <div ref={boardRef} className="flex-1 overflow-auto">
-          {/* Baikal archive search results */}
-          {baikalMode && (
+          {/* Server-side archive search results */}
+          {archiveMode && (
             <div className="py-2">
-              {baikalLoading && (
+              {archiveLoading && (
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">
-                  Searching Baikal…
+                  Searching archive…
                 </p>
               )}
-              {!baikalLoading && baikalError && (
+              {!archiveLoading && archiveError && (
                 <div className="flex items-center gap-2 px-4 py-4 text-sm text-destructive">
                   <AlertCircle className="h-4 w-4 shrink-0" />
-                  {baikalError}
+                  {archiveError}
                 </div>
               )}
-              {!baikalLoading && !baikalError && search.trim() === '' && (
+              {!archiveLoading && !archiveError && search.trim() === '' && (
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">
                   Search archived completed tasks on server. This will only return archived tasks.
                 </p>
               )}
-              {!baikalLoading &&
-                !baikalError &&
+              {!archiveLoading &&
+                !archiveError &&
                 search.trim() !== '' &&
-                baikalResults.length === 0 && (
+                archiveResults.length === 0 && (
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">
                     No archived completed tasks found matching &ldquo;{search}&rdquo;.
                   </p>
                 )}
-              {!baikalLoading &&
-                baikalResults.map((task) => (
+              {!archiveLoading &&
+                archiveResults.map((task) => (
                   <button
                     key={task.uid}
                     onClick={() => {
@@ -2372,14 +2372,14 @@ export default function TasksPage() {
             </div>
           )}
 
-          {!baikalMode && tasksQuery.isError && (
+          {!archiveMode && tasksQuery.isError && (
             <div className="flex items-center gap-2 p-4 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               Failed to load tasks.
             </div>
           )}
 
-          {!baikalMode && !tasksQuery.isError && layout !== 'kanban' && (
+          {!archiveMode && !tasksQuery.isError && layout !== 'kanban' && (
             <div className="py-2">
               {/* Incomplete tasks */}
               {incompleteTasks.map((task) => (
@@ -2456,7 +2456,7 @@ export default function TasksPage() {
             </div>
           )}
 
-          {!baikalMode && !tasksQuery.isError && layout === 'kanban' && (
+          {!archiveMode && !tasksQuery.isError && layout === 'kanban' && (
             <div className="flex flex-col h-full overflow-hidden">
               {kanbanMode !== 'swipe' && (
                 <div

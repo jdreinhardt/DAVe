@@ -30,9 +30,9 @@ import { discoverAndValidate } from '../lib/dav.js';
 
 const DISCOVERY_RESULT = {
   displayName: 'Alice',
-  principalUrl: 'https://baikal.test/principals/alice',
-  calendarHomeUrl: 'https://baikal.test/cal/alice/',
-  addressBookHomeUrl: 'https://baikal.test/ab/alice/',
+  principalUrl: 'https://dav.test/principals/alice',
+  calendarHomeUrl: 'https://dav.test/cal/alice/',
+  addressBookHomeUrl: 'https://dav.test/ab/alice/',
 };
 
 describe('POST /api/auth/login', () => {
@@ -87,10 +87,10 @@ describe('POST /api/auth/login', () => {
       payload: { username: 'alice', password: 'pass' },
     });
     expect(res.statusCode).toBe(502);
-    expect(res.json().error).toContain('Baikal server');
+    expect(res.json().error).toContain('DAV server');
   });
 
-  it('returns 502 on unexpected Baikal response', async () => {
+  it('returns 502 on unexpected DAV server response', async () => {
     vi.mocked(discoverAndValidate).mockRejectedValueOnce(new Error('Received HTML instead of XML'));
     const res = await app.inject({
       method: 'POST',
@@ -98,7 +98,7 @@ describe('POST /api/auth/login', () => {
       payload: { username: 'alice', password: 'pass' },
     });
     expect(res.statusCode).toBe(502);
-    expect(res.json().error).toContain('setup wizard');
+    expect(res.json().error).toContain('responded unexpectedly');
   });
 
   it('returns 200 and sets a session cookie on success', async () => {

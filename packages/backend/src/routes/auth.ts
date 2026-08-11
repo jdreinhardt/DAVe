@@ -44,9 +44,9 @@ export async function authRoutes(
         const msg = e instanceof Error ? e.message : String(e);
         const msgLower = msg.toLowerCase();
         // tsdav surfaces a 401 either explicitly in the message, or implicitly:
-        // when Baikal rejects credentials it returns a 401 error page that has no
-        // DAV properties, so tsdav throws "cannot find principalUrl" instead of a
-        // proper 401 error. Treat that the same as a credential failure.
+        // when a server rejects credentials it returns a 401 error page that has
+        // no DAV properties, so tsdav throws "cannot find principalUrl" instead of
+        // a proper 401 error. Treat that the same as a credential failure.
         if (
           msg.includes('401') ||
           msgLower.includes('unauthorized') ||
@@ -59,7 +59,9 @@ export async function authRoutes(
         // the basic-auth Authorization header from the underlying DAV request.
         app.log.error({ msg }, 'DAV discovery failed');
         // ECONNREFUSED / ENOTFOUND → server is not reachable at all.
-        // Anything else (e.g. Baikal setup wizard returning HTML) → reachable but not ready.
+        // Anything else → reachable but not answering DAV. Common causes: the URL
+        // points at a non-DAV path, or the server is mid-setup and serving HTML
+        // (Baikal's install wizard does exactly this).
         const isNetworkError =
           e instanceof Error &&
           ('code' in e
@@ -67,8 +69,8 @@ export async function authRoutes(
               (e as NodeJS.ErrnoException).code === 'ENOTFOUND'
             : msgLower.includes('econnrefused') || msgLower.includes('enotfound'));
         const errorText = isNetworkError
-          ? 'Could not reach the Baikal server — check BAIKAL_BASE_URL and that Baikal is running'
-          : 'Baikal responded unexpectedly — make sure the Baikal admin setup wizard has been completed';
+          ? 'Could not reach the DAV server — check DAV_BASE_URL and that the server is running'
+          : 'The DAV server responded unexpectedly — check DAV_BASE_URL points at the DAV endpoint and the server is fully configured';
         return reply.status(502).send({ error: errorText, statusCode: 502 });
       }
 

@@ -28,7 +28,7 @@ const {
 /**
  * All authenticated DAV requests go through this wrapper so the SSRF defense is
  * the default, not something each call site has to remember. `redirect: 'error'`
- * ensures a 3xx from Baikal is never followed — otherwise the user's basic-auth
+ * ensures a 3xx from the DAV server is never followed — otherwise the user's basic-auth
  * Authorization header could be replayed to an arbitrary redirect target.
  * Listed first so it can't be silently dropped, but still overridable if a
  * future caller has a genuine reason.
@@ -93,13 +93,13 @@ export async function discoverAndValidate(
   // home set based on accountType (caldav → calendar-home-set,
   // carddav → addressbook-home-set).
   const calClient = new DAVClient({
-    serverUrl: config.BAIKAL_BASE_URL,
+    serverUrl: config.DAV_BASE_URL,
     credentials: creds,
     authMethod: 'Basic',
     defaultAccountType: 'caldav',
   });
   const cardClient = new DAVClient({
-    serverUrl: config.BAIKAL_BASE_URL,
+    serverUrl: config.DAV_BASE_URL,
     credentials: creds,
     authMethod: 'Basic',
     defaultAccountType: 'carddav',
@@ -120,8 +120,8 @@ export async function discoverAndValidate(
 function calAccount(session: SessionData, config: Config): DAVAccount {
   return {
     accountType: 'caldav',
-    serverUrl: config.BAIKAL_BASE_URL,
-    rootUrl: config.BAIKAL_BASE_URL,
+    serverUrl: config.DAV_BASE_URL,
+    rootUrl: config.DAV_BASE_URL,
     credentials: { username: session.username, password: session.password },
     principalUrl: session.principalUrl,
     homeUrl: session.calendarHomeUrl,
@@ -131,8 +131,8 @@ function calAccount(session: SessionData, config: Config): DAVAccount {
 function cardAccount(session: SessionData, config: Config): DAVAccount {
   return {
     accountType: 'carddav',
-    serverUrl: config.BAIKAL_BASE_URL,
-    rootUrl: config.BAIKAL_BASE_URL,
+    serverUrl: config.DAV_BASE_URL,
+    rootUrl: config.DAV_BASE_URL,
     credentials: { username: session.username, password: session.password },
     principalUrl: session.principalUrl,
     homeUrl: session.addressBookHomeUrl,
@@ -195,7 +195,7 @@ export async function listAddressBooks(
     .map((rs) => {
       const props = (rs.props ?? {}) as Record<string, unknown>;
       const rawUrl = typeof rs.href === 'string' ? rs.href : '';
-      const fullUrl = new URL(rawUrl, account.rootUrl ?? config.BAIKAL_BASE_URL).href;
+      const fullUrl = new URL(rawUrl, account.rootUrl ?? config.DAV_BASE_URL).href;
       const id = collectionId(fullUrl);
 
       const stored = colorMap.get(id);
@@ -270,22 +270,22 @@ function basicAuthHeader(session: SessionData): Record<string, string> {
 
 /**
  * Guard against SSRF: client-supplied collection/object URLs are fetched
- * directly (raw PUT/GET) with the user's Baikal credentials attached, so we
- * must confirm they point at the configured Baikal server. Reject anything
- * whose scheme/host/port differs from BAIKAL_BASE_URL — otherwise an
+ * directly (raw PUT/GET) with the user's DAV credentials attached, so we
+ * must confirm they point at the configured DAV server. Reject anything
+ * whose scheme/host/port differs from DAV_BASE_URL — otherwise an
  * authenticated user could redirect the request (and the Authorization header)
  * to an arbitrary internal or external host.
  */
-function assertBaikalOrigin(targetUrl: string, config: Config): void {
+function assertDavOrigin(targetUrl: string, config: Config): void {
   let parsed: URL;
   try {
     parsed = new URL(targetUrl);
   } catch {
     throw Object.assign(new Error('Invalid target URL'), { statusCode: 400 });
   }
-  const base = new URL(config.BAIKAL_BASE_URL);
+  const base = new URL(config.DAV_BASE_URL);
   if (parsed.origin !== base.origin) {
-    throw Object.assign(new Error('Target URL host is not the configured Baikal server'), {
+    throw Object.assign(new Error('Target URL host is not the configured DAV server'), {
       statusCode: 400,
     });
   }
@@ -1165,7 +1165,7 @@ export async function createTask(
   data: TaskJson,
   config: Config,
 ): Promise<TaskWriteResult> {
-  assertBaikalOrigin(collectionUrl, config);
+  assertDavOrigin(collectionUrl, config);
   const uid = data.uid || crypto.randomUUID();
   const taskData: TaskJson = { ...data, uid };
   const icsStr = serializeIcalTask(taskData);
@@ -1238,14 +1238,14 @@ export async function deleteTask(
   }
 }
 
-// ── Baikal archive search ─────────────────────────────────────────────────────
+// ── DAV archive search ─────────────────────────────────────────────────────
 
 /**
  * Fetch VTODO objects whose COMPLETED timestamp falls strictly between the
  * retention window and the max archive age — i.e. tasks that have been evicted
- * from the local cache but are still within the Baikal search cap.
+ * from the local cache but are still within the server-side search cap.
  *
- * time-range start = now - BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS  (oldest to fetch)
+ * time-range start = now - DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS  (oldest to fetch)
  * time-range end   = now - COMPLETED_TASK_RETENTION_DAYS       (exclude still-cached tasks)
  *
  * Per-collection failures are caught and logged so one bad collection
@@ -1261,7 +1261,7 @@ export async function fetchArchivedCompletedTasks(
     new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
 
   // Oldest tasks to include
-  const startStr = toIso(Date.now() - config.BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS * 86_400_000);
+  const startStr = toIso(Date.now() - config.DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS * 86_400_000);
   // Exclude tasks still within the retention window (they're in the local cache)
   const endStr = toIso(Date.now() - config.COMPLETED_TASK_RETENTION_DAYS * 86_400_000);
 
@@ -1350,7 +1350,7 @@ export async function fetchEventsForSearch(
 }
 
 /**
- * Restore an archived completed task: GET the current ICS from Baikal,
+ * Restore an archived completed task: GET the current ICS from the server,
  * reset STATUS to NEEDS-ACTION, clear COMPLETED and PERCENT-COMPLETE,
  * then PUT it back. Returns the TaskWriteResult for the caller to cache.
  */
@@ -1361,7 +1361,7 @@ export async function restoreArchivedTask(
   etag: string,
   config: Config,
 ): Promise<TaskWriteResult> {
-  assertBaikalOrigin(objectUrl, config);
+  assertDavOrigin(objectUrl, config);
   const authHeaders = basicAuthHeader(session);
 
   // Fetch latest ICS (in case it changed since the search was run)
@@ -1414,7 +1414,7 @@ export async function createJournal(
   data: NoteJson,
   config: Config,
 ): Promise<JournalWriteResult> {
-  assertBaikalOrigin(collectionUrl, config);
+  assertDavOrigin(collectionUrl, config);
   const uid = data.uid || crypto.randomUUID();
   const entryData: NoteJson = { ...data, uid };
   const icsStr = serializeIcalJournal(entryData);
@@ -1495,7 +1495,7 @@ export async function createTaskRaw(
   rawIcs: string,
   config: Config,
 ): Promise<{ url: string; etag: string; collectionUrl: string }> {
-  assertBaikalOrigin(collectionUrl, config);
+  assertDavOrigin(collectionUrl, config);
   const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
   const res = await davFetch(url, {
     method: 'PUT',
