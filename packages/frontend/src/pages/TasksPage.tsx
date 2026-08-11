@@ -11,7 +11,7 @@ import {
   ClipboardList,
   CornerUpLeft,
   Edit2,
-  ExternalLink,
+  GanttChartSquare,
   GitBranch,
   List,
   LayoutGrid,
@@ -25,7 +25,7 @@ import {
   X,
   ArrowUpDown,
 } from 'lucide-react';
-import type { Calendar, Task, TaskJson, TasksQueryParams, ArchivedTask } from '@dave/shared';
+import type { Calendar, Task, TaskJson, TasksQueryParams, TasksResponse, ArchivedTask, TaskLayout } from '@dave/shared';
 import {
   fetchTasks,
   fetchTask,
@@ -35,7 +35,7 @@ import {
   applyCompletion,
   applyStatusChange,
   triggerTasksSync,
-  searchBaikal,
+  searchArchive,
   restoreArchivedTask as restoreArchivedTaskApi,
 } from '../api/tasks';
 import { getCalendars } from '../api/collections';
@@ -44,11 +44,20 @@ import { useSettings } from '../contexts/Settings';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../lib/utils';
 import TaskEditForm, { emptyTaskJson } from '../components/TaskEditForm';
+import TaskGantt from '../components/TaskGantt';
+import { computeUnschedule } from '../lib/gantt';
+import type { GanttZoom } from '../lib/gantt';
+import { useHotkey } from '../hooks/useHotkey';
 import BulkDeleteDialog from '../components/BulkDeleteDialog';
 import TaskBulkEditModal, { applyTaskBulkEdit } from '../components/TaskBulkEditModal';
 import type { TaskBulkEditConfig, TaskBulkEditFieldId } from '../components/TaskBulkEditModal';
+import {
+  ToolbarFilterToggle,
+  ToolbarFilterGroup,
+  ToolbarPrimaryEnd,
+} from '../components/ToolbarFilters';
 
-// Baikal stores colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
+// CalDAV servers store colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
 function hex6(color: string): string {
   if (color.startsWith('#') && color.length === 9) return color.slice(0, 7);
   return color;
@@ -955,6 +964,7 @@ function TaskDetailPanel({
   childrenOf,
   parentOf,
   fullscreen = false,
+  calendarColor,
 }: {
   task: Task;
   onClose: () => void;
@@ -966,6 +976,7 @@ function TaskDetailPanel({
   childrenOf: Map<string, Task[]>;
   parentOf: Map<string, Task>;
   fullscreen?: boolean;
+  calendarColor?: string;
 }) {
   const due = dueDateDisplay(task.data.due);
   const rows: { label: string; value: React.ReactNode }[] = [];
@@ -1008,6 +1019,11 @@ function TaskDetailPanel({
         fullscreen ? 'flex-1' : 'flex-1 border-l border-border',
       )}
     >
+      {/* Colour accent bar — matches the calendar's task/event popups. */}
+      <div
+        className="h-1.5 w-full shrink-0"
+        style={{ backgroundColor: hex6(calendarColor || '#0082C9') }}
+      />
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         {fullscreen && (
           <button
@@ -1146,7 +1162,7 @@ function TaskDetailPanel({
   );
 
   if (fullscreen) {
-    return <div className="fixed inset-0 z-50 flex flex-col bg-background">{panel}</div>;
+    return <div className="absolute inset-0 z-20 flex flex-col bg-background">{panel}</div>;
   }
 
   return panel;
@@ -1403,7 +1419,6 @@ function MultiTaskPanel({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-type Layout = 'list' | 'compact' | 'kanban';
 type SortField = TasksQueryParams['sort'];
 type FilterStatus = TasksQueryParams['status'];
 type FilterDue = TasksQueryParams['due'];
@@ -1433,7 +1448,7 @@ export default function TasksPage() {
   const { taskDefaultLayout } = useSettings();
 
   // ── Persisted UI state ────────────────────────────────────────────────────
-  const [layout, setLayout] = useState<Layout>(() =>
+  const [layout, setLayout] = useState<TaskLayout>(() =>
     loadPref('dave:tasks:layout', taskDefaultLayout),
   );
   const [sort, setSort] = useState<SortField>(() => loadPref('dave:tasks:sort', undefined));
@@ -1447,11 +1462,18 @@ export default function TasksPage() {
   const [filterPriority, setFilterPriority] = useState<FilterPriority>(() =>
     loadPref('dave:tasks:filter:priority', undefined),
   );
+  // Gantt zoom is device-local — it never round-trips to the server the way
+  // taskDefaultLayout does, so it stays out of the shared settings enum.
+  const [ganttZoom, setGanttZoom] = useState<GanttZoom>(() =>
+    loadPref<GanttZoom>('dave:tasks:ganttZoom', 'day'),
+  );
 
   // ── Ephemeral UI state ────────────────────────────────────────────────────
   const location = useLocation();
   const navigate = useNavigate();
   const [rawSearch, setRawSearch] = useState('');
+  // Mobile-only: collapses the secondary toolbar controls. Resets on remount.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedUid, setSelectedUid] = useState<string | null>(null);
   const [pendingSelectUid, setPendingSelectUid] = useState<string | null>(null);
@@ -1467,11 +1489,11 @@ export default function TasksPage() {
   }, [location]);
   const [showCompleted, setShowCompleted] = useState(false);
 
-  // ── Baikal archive search state ───────────────────────────────────────────
-  const [baikalMode, setBaikalMode] = useState(false);
-  const [baikalResults, setBaikalResults] = useState<ArchivedTask[]>([]);
-  const [baikalLoading, setBaikalLoading] = useState(false);
-  const [baikalError, setBaikalError] = useState<string | null>(null);
+  // ── Server-side archive search state ───────────────────────────────────────────
+  const [archiveMode, setArchiveMode] = useState(false);
+  const [archiveResults, setArchiveResults] = useState<ArchivedTask[]>([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const [selectedArchived, setSelectedArchived] = useState<ArchivedTask | null>(null);
   const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -1503,6 +1525,9 @@ export default function TasksPage() {
     savePref('dave:tasks:layout', layout);
   }, [layout]);
   useEffect(() => {
+    savePref('dave:tasks:ganttZoom', ganttZoom);
+  }, [ganttZoom]);
+  useEffect(() => {
     savePref('dave:tasks:sort', sort);
   }, [sort]);
   useEffect(() => {
@@ -1524,36 +1549,36 @@ export default function TasksPage() {
     return () => clearTimeout(t);
   }, [rawSearch]);
 
-  // ── Baikal archive search ─────────────────────────────────────────────────
+  // ── Server-side archive search ─────────────────────────────────────────────────
   useEffect(() => {
-    if (!baikalMode || !search.trim()) {
-      if (!baikalMode) {
-        setBaikalResults([]);
-        setBaikalError(null);
+    if (!archiveMode || !search.trim()) {
+      if (!archiveMode) {
+        setArchiveResults([]);
+        setArchiveError(null);
         setSelectedArchived(null);
       }
       return;
     }
     let cancelled = false;
-    setBaikalLoading(true);
-    setBaikalError(null);
-    searchBaikal(search)
+    setArchiveLoading(true);
+    setArchiveError(null);
+    searchArchive(search)
       .then((res) => {
         if (!cancelled) {
-          setBaikalResults(res.tasks);
-          setBaikalLoading(false);
+          setArchiveResults(res.tasks);
+          setArchiveLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setBaikalError('Failed to search Baikal. Check your connection and try again.');
-          setBaikalLoading(false);
+          setArchiveError('Failed to search the archive. Check your connection and try again.');
+          setArchiveLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [baikalMode, search]);
+  }, [archiveMode, search]);
 
   // ── Collection data ───────────────────────────────────────────────────────
   const calQuery = useQuery({
@@ -1597,8 +1622,8 @@ export default function TasksPage() {
       setRestoring(false);
       setRestoreConfirmOpen(false);
       setSelectedArchived(null);
-      setBaikalMode(false);
-      setBaikalResults([]);
+      setArchiveMode(false);
+      setArchiveResults([]);
       setRawSearch('');
       invalidateTasks();
       setSelectedUid(result.uid);
@@ -1607,7 +1632,7 @@ export default function TasksPage() {
       setRestoring(false);
       const e = err as { status?: number };
       if (e.status === 409) {
-        showToast('Task was modified on Baikal — please search again and retry.');
+        showToast('Task was modified on the server — please search again and retry.');
       } else {
         showToast('Failed to restore task. Please try again.');
       }
@@ -1660,6 +1685,64 @@ export default function TasksPage() {
       }
     },
   });
+
+  // Gantt drags write dates only, and need the bar to stay where it was dropped
+  // rather than jump back and forth across a refetch. Kept separate from
+  // updateMutation, whose onSuccess side effects (edit-form teardown, recurrence
+  // toasts, childMoveErrors) don't apply here and whose 12 callers would have to
+  // opt out of the optimism.
+  const ganttDateMutation = useMutation({
+    mutationFn: ({ data, etag }: { data: TaskJson; etag: string }) => updateTask(data.uid, data, etag),
+    onMutate: async ({ data }) => {
+      // Prefix filter, not the exact ['tasks', params] key: the cache holds one
+      // entry per filter/sort/search variant, and patching only the active one
+      // would leave stale dates behind if the user changes a filter mid-flight.
+      const filter = { queryKey: ['tasks'] };
+      // Without this, an in-flight background refetch (staleTime is 30s) can
+      // resolve after the optimistic write and clobber it — the snap-back.
+      await queryClient.cancelQueries(filter);
+      const snapshots = queryClient.getQueriesData<TasksResponse>(filter);
+      queryClient.setQueriesData<TasksResponse>(filter, (old) =>
+        old
+          ? { ...old, tasks: old.tasks.map((t) => (t.uid === data.uid ? { ...t, data } : t)) }
+          : old,
+      );
+      return { snapshots };
+    },
+    onSuccess: (result) => {
+      // Fold the fresh etag back in, or a second drag on the same bar sends the
+      // stale one and is guaranteed to 412.
+      queryClient.setQueriesData<TasksResponse>({ queryKey: ['tasks'] }, (old) =>
+        old
+          ? {
+              ...old,
+              tasks: old.tasks.map((t) =>
+                t.uid === result.uid ? { ...t, etag: result.etag, data: result.data } : t,
+              ),
+            }
+          : old,
+      );
+    },
+    onError: (err: unknown, _vars, ctx) => {
+      for (const [key, value] of ctx?.snapshots ?? []) queryClient.setQueryData(key, value);
+      const e = err as { status?: number };
+      if (e.status === 412) {
+        setConflictMessage('This task was modified elsewhere. Reload to see the latest version.');
+      } else {
+        showToast('Failed to reschedule task. Please try again.');
+      }
+    },
+    // Fires on error too, deliberately: a rolled-back task still holds a stale
+    // etag, and the refetch repairs it before the next drag.
+    onSettled: invalidateTasks,
+  });
+
+  const handleGanttCommit = useCallback(
+    (task: Task, data: TaskJson) => {
+      ganttDateMutation.mutate({ data, etag: task.etag });
+    },
+    [ganttDateMutation],
+  );
 
   const deleteMutation = useMutation({
     mutationFn: ({
@@ -1818,8 +1901,8 @@ export default function TasksPage() {
   }, []);
 
   // ── Trigger initial sync once on mount ───────────────────────────────────
-  // The route now awaits the initial Baikal fetch, so invalidating after it
-  // resolves ensures the UI reflects tasks that were already on Baikal before
+  // The route now awaits the initial server fetch, so invalidating after it
+  // resolves ensures the UI reflects tasks that were already on the server before
   // the cache was seeded (e.g., after a cache clear or first login).
   useEffect(() => {
     triggerTasksSync()
@@ -1949,6 +2032,29 @@ export default function TasksPage() {
     [allTasks, selectedUid],
   );
 
+  // Clearing a task's dates — the inverse of the Gantt's drag and sweep gestures,
+  // which otherwise have no counterpart in the chart. Shared by the row button and
+  // the Backspace hotkey so both behave identically.
+  const handleUnschedule = useCallback(
+    (task: Task) => {
+      const next = computeUnschedule(task.data);
+      if (!next) return; // already unscheduled — don't spend a PUT saying so
+      handleGanttCommit(task, next);
+      showToast('Task unscheduled');
+    },
+    [handleGanttCommit, showToast],
+  );
+
+  // useHotkey suppresses this whenever focus is in an input, textarea, select or
+  // contenteditable, so it can't fire while the detail panel or search is in use.
+  useHotkey('Backspace', (e) => {
+    if (layout !== 'gantt' || archiveMode || !selectedTask) return;
+    // Only swallow the keystroke when there is something to clear.
+    if (!selectedTask.data.dtstart && !selectedTask.data.due) return;
+    e.preventDefault();
+    handleUnschedule(selectedTask);
+  });
+
   const isMobile = useIsMobile();
 
   // ── Panel resize ──────────────────────────────────────────────────────────
@@ -2062,17 +2168,10 @@ export default function TasksPage() {
         <div>
           <h2 className="text-lg font-semibold">No task lists found</h2>
           <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-            Your Baikal collections don&apos;t currently advertise support for VTODO components.
-            Enable VTODO on an existing collection or create a new one in Baikal.
+            Your calendars currently don&apos;t have Tasks enabled. Enable Tasks on
+            a calendar on your DAV server that accepts VTODO, or create a new one here.
           </p>
         </div>
-        <a
-          href="#"
-          className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
-        >
-          Set up in Baikal
-          <ExternalLink className="h-3.5 w-3.5" />
-        </a>
       </div>
     );
   }
@@ -2095,8 +2194,9 @@ export default function TasksPage() {
             New task
           </button>
 
+          <ToolbarPrimaryEnd>
           {/* Search */}
-          <div className="relative flex-1 min-w-40 max-w-72">
+          <div className="relative w-40 shrink-0 md:w-auto md:flex-1 md:min-w-40 md:max-w-72">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <input
               type="search"
@@ -2115,8 +2215,41 @@ export default function TasksPage() {
             )}
           </div>
 
-          {/* Sort — hidden in Baikal mode */}
-          {!baikalMode && (
+          <ToolbarFilterToggle
+            open={filtersOpen}
+            onToggle={() => setFiltersOpen((o) => !o)}
+            activeCount={activeFilters}
+          />
+          </ToolbarPrimaryEnd>
+
+          {/* Archive search — its own full-width bar on mobile, shown whenever a search is
+              active regardless of the disclosure, since it belongs to the search box rather
+              than to the filters. `md:order-1` keeps its original desktop slot, after the
+              filters and before the layout toggle. */}
+          {(rawSearch || archiveMode) && (
+            <label className="w-full md:w-auto md:order-1 flex items-center justify-end md:justify-start gap-1.5 text-xs text-muted-foreground cursor-pointer select-none shrink-0">
+              <input
+                type="checkbox"
+                checked={archiveMode}
+                onChange={(e) => {
+                  setArchiveMode(e.target.checked);
+                  if (!e.target.checked) {
+                    setArchiveResults([]);
+                    setArchiveError(null);
+                    setSelectedArchived(null);
+                  } else {
+                    setSelectedUid(null);
+                  }
+                }}
+                className="rounded"
+              />
+              Search Archived
+            </label>
+          )}
+
+          <ToolbarFilterGroup open={filtersOpen}>
+          {/* Sort + filters — hidden in archive mode */}
+          {!archiveMode && (
             <>
               <select
                 value={sort ?? ''}
@@ -2135,14 +2268,16 @@ export default function TasksPage() {
                 <button
                   onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
                   title={`Sort ${order === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
-                  className="text-muted-foreground hover:text-foreground"
+                  className="flex h-7.75 items-center justify-center rounded-md border border-input bg-background px-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                 >
                   <ArrowUpDown className="h-4 w-4" />
                 </button>
               )}
 
-              {/* Filters */}
-              <div className="flex items-center gap-1">
+              {/* Filters. `contents` on mobile so the three selects wrap individually into
+                  the cluster instead of forming one unbreakable item that strands the sort
+                  select on a row of its own. */}
+              <div className="contents md:flex md:items-center md:gap-1">
                 <select
                   value={filterStatus ?? ''}
                   onChange={(e) => setFilterStatus((e.target.value as FilterStatus) || undefined)}
@@ -2207,34 +2342,11 @@ export default function TasksPage() {
                   </button>
                 )}
               </div>
-            </>
-          )}
 
-          {/* Baikal search toggle — shown when search box has text, or while already active */}
-          {(rawSearch || baikalMode) && (
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none shrink-0">
-              <input
-                type="checkbox"
-                checked={baikalMode}
-                onChange={(e) => {
-                  setBaikalMode(e.target.checked);
-                  if (!e.target.checked) {
-                    setBaikalResults([]);
-                    setBaikalError(null);
-                    setSelectedArchived(null);
-                  } else {
-                    setSelectedUid(null);
-                  }
-                }}
-                className="rounded"
-              />
-              Search Archived
-            </label>
-          )}
-
-          {/* Layout toggle — hidden in Baikal mode; pushed to right */}
-          {!baikalMode && (
-            <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto shrink-0">
+          {/* Layout toggle — `ml-auto` right-justifies it on whichever wrapped line it
+              lands on, so it shares the last row of filters instead of claiming one of its
+              own. `md:order-2` keeps it last on desktop. */}
+            <div className="flex items-center gap-0.5 rounded-md border border-input p-0.5 ml-auto md:order-2 shrink-0">
               <LayoutToggleButton
                 icon={<List className="h-4 w-4" />}
                 active={layout === 'list'}
@@ -2253,8 +2365,16 @@ export default function TasksPage() {
                 title="Kanban"
                 onClick={() => setLayout('kanban')}
               />
+              <LayoutToggleButton
+                icon={<GanttChartSquare className="h-4 w-4" />}
+                active={layout === 'gantt'}
+                title="Gantt"
+                onClick={() => setLayout('gantt')}
+              />
             </div>
+            </>
           )}
+          </ToolbarFilterGroup>
         </div>
 
         {/* Multi-select bar */}
@@ -2287,35 +2407,35 @@ export default function TasksPage() {
 
         {/* Task content */}
         <div ref={boardRef} className="flex-1 overflow-auto">
-          {/* Baikal archive search results */}
-          {baikalMode && (
+          {/* Server-side archive search results */}
+          {archiveMode && (
             <div className="py-2">
-              {baikalLoading && (
+              {archiveLoading && (
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">
-                  Searching Baikal…
+                  Searching archive…
                 </p>
               )}
-              {!baikalLoading && baikalError && (
+              {!archiveLoading && archiveError && (
                 <div className="flex items-center gap-2 px-4 py-4 text-sm text-destructive">
                   <AlertCircle className="h-4 w-4 shrink-0" />
-                  {baikalError}
+                  {archiveError}
                 </div>
               )}
-              {!baikalLoading && !baikalError && search.trim() === '' && (
+              {!archiveLoading && !archiveError && search.trim() === '' && (
                 <p className="px-4 py-6 text-sm text-muted-foreground text-center">
                   Search archived completed tasks on server. This will only return archived tasks.
                 </p>
               )}
-              {!baikalLoading &&
-                !baikalError &&
+              {!archiveLoading &&
+                !archiveError &&
                 search.trim() !== '' &&
-                baikalResults.length === 0 && (
+                archiveResults.length === 0 && (
                   <p className="px-4 py-6 text-sm text-muted-foreground text-center">
                     No archived completed tasks found matching &ldquo;{search}&rdquo;.
                   </p>
                 )}
-              {!baikalLoading &&
-                baikalResults.map((task) => (
+              {!archiveLoading &&
+                archiveResults.map((task) => (
                   <button
                     key={task.uid}
                     onClick={() => {
@@ -2352,14 +2472,14 @@ export default function TasksPage() {
             </div>
           )}
 
-          {!baikalMode && tasksQuery.isError && (
+          {!archiveMode && tasksQuery.isError && (
             <div className="flex items-center gap-2 p-4 text-sm text-destructive">
               <AlertCircle className="h-4 w-4 shrink-0" />
               Failed to load tasks.
             </div>
           )}
 
-          {!baikalMode && !tasksQuery.isError && layout !== 'kanban' && (
+          {!archiveMode && !tasksQuery.isError && (layout === 'list' || layout === 'compact') && (
             <div className="py-2">
               {/* Incomplete tasks */}
               {incompleteTasks.map((task) => (
@@ -2436,7 +2556,7 @@ export default function TasksPage() {
             </div>
           )}
 
-          {!baikalMode && !tasksQuery.isError && layout === 'kanban' && (
+          {!archiveMode && !tasksQuery.isError && layout === 'kanban' && (
             <div className="flex flex-col h-full overflow-hidden">
               {kanbanMode !== 'swipe' && (
                 <div
@@ -2541,6 +2661,22 @@ export default function TasksPage() {
               )}
             </div>
           )}
+
+          {!archiveMode && !tasksQuery.isError && layout === 'gantt' && (
+            <TaskGantt
+              roots={roots}
+              childrenOf={childrenOf}
+              orphanedParentUid={orphanedParentUid}
+              selectedUid={selectedUid}
+              onSelect={handleSelect}
+              collectionColorMap={collectionColorMap}
+              zoom={ganttZoom}
+              onZoomChange={setGanttZoom}
+              onCommitDates={handleGanttCommit}
+              onUnschedule={handleUnschedule}
+              dragEnabled={!isMobile}
+            />
+          )}
         </div>
       </div>
 
@@ -2571,7 +2707,7 @@ export default function TasksPage() {
         </div>
       )}
       {selectedUids.size >= 2 && isMobile && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-background">
+        <div className="absolute inset-0 z-20 flex flex-col bg-background">
           <MultiTaskPanel
             tasks={selectedTasks}
             taskCollections={taskCollections}
@@ -2638,6 +2774,7 @@ export default function TasksPage() {
             childrenOf={childrenOf}
             parentOf={parentOf}
             fullscreen={false}
+            calendarColor={collectionColorMap.get(selectedTask.collectionUrl)}
           />
         </div>
       )}
@@ -2653,6 +2790,7 @@ export default function TasksPage() {
           childrenOf={childrenOf}
           parentOf={parentOf}
           fullscreen={true}
+          calendarColor={collectionColorMap.get(selectedTask.collectionUrl)}
         />
       )}
 
@@ -2661,10 +2799,15 @@ export default function TasksPage() {
         <div
           className={cn(
             'flex flex-col bg-card border-l border-border overflow-y-auto',
-            isMobile ? 'fixed inset-0 z-50' : 'shrink-0',
+            isMobile ? 'absolute inset-0 z-20' : 'shrink-0',
           )}
           style={!isMobile ? { width: panelWidth } : undefined}
         >
+          {/* Colour accent bar — matches the calendar's task/event popups. */}
+          <div
+            className="h-1.5 w-full shrink-0"
+            style={{ backgroundColor: hex6(collectionColorMap.get(editingTaskData.task.collectionUrl) || '#0082C9') }}
+          />
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border shrink-0">
             <h2 className="text-sm font-semibold flex-1">Edit task</h2>
             <button
@@ -2691,6 +2834,11 @@ export default function TasksPage() {
       {createMode && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <div className="bg-card rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            {/* Colour accent bar — matches the calendar's task/event popups. */}
+            <div
+              className="h-1.5 w-full rounded-t-lg"
+              style={{ backgroundColor: hex6(collectionColorMap.get(subtaskParent?.collectionUrl ?? defaultCreateCollectionUrl ?? taskCollections[0]?.url ?? '') || '#0082C9') }}
+            />
             <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
               <h2 className="text-sm font-semibold flex-1">
                 {subtaskParent
@@ -2903,7 +3051,7 @@ export default function TasksPage() {
 
       {/* Toast */}
       {toastMessage && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-foreground text-background text-sm shadow-lg">
+        <div className="fixed bottom-20 md:bottom-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-foreground text-background text-sm shadow-lg">
           {toastMessage}
         </div>
       )}

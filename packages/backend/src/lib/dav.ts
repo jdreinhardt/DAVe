@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { xml2js } from 'xml-js';
 import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
@@ -19,7 +20,6 @@ const {
   fetchVCards: _fetchVCards,
   getBasicAuthHeaders: _getBasicAuthHeaders,
   propfind: _propfind,
-  syncCollection: _syncCollection,
   DAVNamespaceShort,
 } = _req('tsdav') as typeof TsdavTypes;
 
@@ -28,7 +28,7 @@ const {
 /**
  * All authenticated DAV requests go through this wrapper so the SSRF defense is
  * the default, not something each call site has to remember. `redirect: 'error'`
- * ensures a 3xx from Baikal is never followed — otherwise the user's basic-auth
+ * ensures a 3xx from the DAV server is never followed — otherwise the user's basic-auth
  * Authorization header could be replayed to an arbitrary redirect target.
  * Listed first so it can't be silently dropped, but still overridable if a
  * future caller has a genuine reason.
@@ -93,13 +93,13 @@ export async function discoverAndValidate(
   // home set based on accountType (caldav → calendar-home-set,
   // carddav → addressbook-home-set).
   const calClient = new DAVClient({
-    serverUrl: config.BAIKAL_BASE_URL,
+    serverUrl: config.DAV_BASE_URL,
     credentials: creds,
     authMethod: 'Basic',
     defaultAccountType: 'caldav',
   });
   const cardClient = new DAVClient({
-    serverUrl: config.BAIKAL_BASE_URL,
+    serverUrl: config.DAV_BASE_URL,
     credentials: creds,
     authMethod: 'Basic',
     defaultAccountType: 'carddav',
@@ -120,8 +120,8 @@ export async function discoverAndValidate(
 function calAccount(session: SessionData, config: Config): DAVAccount {
   return {
     accountType: 'caldav',
-    serverUrl: config.BAIKAL_BASE_URL,
-    rootUrl: config.BAIKAL_BASE_URL,
+    serverUrl: config.DAV_BASE_URL,
+    rootUrl: config.DAV_BASE_URL,
     credentials: { username: session.username, password: session.password },
     principalUrl: session.principalUrl,
     homeUrl: session.calendarHomeUrl,
@@ -131,8 +131,8 @@ function calAccount(session: SessionData, config: Config): DAVAccount {
 function cardAccount(session: SessionData, config: Config): DAVAccount {
   return {
     accountType: 'carddav',
-    serverUrl: config.BAIKAL_BASE_URL,
-    rootUrl: config.BAIKAL_BASE_URL,
+    serverUrl: config.DAV_BASE_URL,
+    rootUrl: config.DAV_BASE_URL,
     credentials: { username: session.username, password: session.password },
     principalUrl: session.principalUrl,
     homeUrl: session.addressBookHomeUrl,
@@ -195,7 +195,7 @@ export async function listAddressBooks(
     .map((rs) => {
       const props = (rs.props ?? {}) as Record<string, unknown>;
       const rawUrl = typeof rs.href === 'string' ? rs.href : '';
-      const fullUrl = new URL(rawUrl, account.rootUrl ?? config.BAIKAL_BASE_URL).href;
+      const fullUrl = new URL(rawUrl, account.rootUrl ?? config.DAV_BASE_URL).href;
       const id = collectionId(fullUrl);
 
       const stored = colorMap.get(id);
@@ -270,22 +270,22 @@ function basicAuthHeader(session: SessionData): Record<string, string> {
 
 /**
  * Guard against SSRF: client-supplied collection/object URLs are fetched
- * directly (raw PUT/GET) with the user's Baikal credentials attached, so we
- * must confirm they point at the configured Baikal server. Reject anything
- * whose scheme/host/port differs from BAIKAL_BASE_URL — otherwise an
+ * directly (raw PUT/GET) with the user's DAV credentials attached, so we
+ * must confirm they point at the configured DAV server. Reject anything
+ * whose scheme/host/port differs from DAV_BASE_URL — otherwise an
  * authenticated user could redirect the request (and the Authorization header)
  * to an arbitrary internal or external host.
  */
-function assertBaikalOrigin(targetUrl: string, config: Config): void {
+function assertDavOrigin(targetUrl: string, config: Config): void {
   let parsed: URL;
   try {
     parsed = new URL(targetUrl);
   } catch {
     throw Object.assign(new Error('Invalid target URL'), { statusCode: 400 });
   }
-  const base = new URL(config.BAIKAL_BASE_URL);
+  const base = new URL(config.DAV_BASE_URL);
   if (parsed.origin !== base.origin) {
-    throw Object.assign(new Error('Target URL host is not the configured Baikal server'), {
+    throw Object.assign(new Error('Target URL host is not the configured DAV server'), {
       statusCode: 400,
     });
   }
@@ -966,6 +966,8 @@ export interface AddressBookSyncResult {
   syncToken: string;
   changed: Contact[];
   deleted: string[];
+  /** True when `changed` is the entire collection, not a delta. See syncAddressBook. */
+  full: boolean;
 }
 
 export interface CalendarSyncResult {
@@ -973,16 +975,174 @@ export interface CalendarSyncResult {
   dirty: boolean;
 }
 
-// Extract the new sync-token from a tsdav sync-collection REPORT response.
-// tsdav puts it at result[n].raw.multistatus.syncToken for the response that
-// carries the root <D:multistatus> element.
-function extractSyncToken(results: TsdavTypes.DAVResponse[]): string | undefined {
-  for (const r of results) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = (r as any).raw?.multistatus?.syncToken;
-    if (token) return String(token);
+/**
+ * The server refused our sync-token and wants a fresh start.
+ *
+ * RFC 6578 §3.2 defines this as a 403 carrying the DAV:valid-sync-token
+ * precondition. It is not an exotic case: Radicale prunes tokens older than
+ * `max_sync_token_age` (30 days by default), and sabre/dav does the same for
+ * tokens it has forgotten, so any collection that goes unsynced for long enough
+ * lands here. Callers must discard the stored token and re-sync from scratch.
+ */
+export class SyncTokenInvalidError extends Error {
+  constructor(public readonly collectionUrl: string) {
+    super(`Server rejected the sync token for ${collectionUrl}`);
+    this.name = 'SyncTokenInvalidError';
+  }
+}
+
+export interface SyncCollectionResult {
+  /** The server's new token, or undefined if it omitted one (spec violation). */
+  syncToken: string | undefined;
+  /** hrefs of added/modified members. */
+  changed: string[];
+  /** hrefs of removed members. */
+  deleted: string[];
+}
+
+/** One element of xml-js compact output: child elements plus an optional `_text`. */
+type XmlNode = Record<string, unknown>;
+
+// xml-js compact output puts character data under `_text`.
+function xmlText(node: unknown): string | undefined {
+  if (node === null || node === undefined) return undefined;
+  if (typeof node === 'string') return node;
+  if (typeof node === 'object') {
+    const t = (node as Record<string, unknown>)['_text'];
+    if (typeof t === 'string') return t;
+    if (typeof t === 'number') return String(t);
   }
   return undefined;
+}
+
+// '<D:status>HTTP/1.1 404 Not Found</D:status>' → 404
+function parseStatusCode(status: unknown): number | undefined {
+  const text = xmlText(status);
+  if (!text) return undefined;
+  const m = /\s(\d{3})(?:\s|$)/.exec(text);
+  return m ? Number.parseInt(m[1]!, 10) : undefined;
+}
+
+function asArray<T>(v: T | T[] | undefined): T[] {
+  if (v === undefined || v === null) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
+/**
+ * Run a sync-collection REPORT (RFC 6578) and parse the multistatus ourselves.
+ *
+ * This deliberately bypasses tsdav's `syncCollection`, for two reasons:
+ *
+ *  1. Reading the token out of `raw.multistatus.syncToken` depended on tsdav's
+ *     internal parse shape, which a version bump could change silently — and the
+ *     failure mode is invisible, since a missing token just looks like "nothing
+ *     changed".
+ *  2. tsdav attaches the parsed document as `raw` only to *member* responses, so
+ *     when a REPORT reports no changes there are no `<D:response>` elements, no
+ *     `raw`, and the `<D:sync-token>` is unrecoverable. We then had to guess by
+ *     reusing the previous token. Both Baikal and Radicale happen to return the
+ *     same token in that case (sabre's is a changelog sequence, Radicale's a hash
+ *     of collection state), so the guess was right on both — but RFC 6578 does
+ *     not require a content-derived token, and a server that issues a fresh one
+ *     per REPORT would have had it silently dropped.
+ *
+ * The response is small and rigidly specified, so parsing it directly is less
+ * fragile than either. Namespace prefixes are stripped because servers disagree:
+ * Radicale serves a default `xmlns="DAV:"` with unprefixed names, Baikal uses
+ * `d:`.
+ */
+async function runSyncCollection(
+  url: string,
+  syncToken: string,
+  authHeaders: Record<string, string>,
+): Promise<SyncCollectionResult> {
+  // An empty <sync-token/> is RFC 6578's "send me everything".
+  const body =
+    `<?xml version="1.0" encoding="utf-8" ?>` +
+    `<D:sync-collection xmlns:D="DAV:">` +
+    `<D:sync-token>${escapeXml(syncToken)}</D:sync-token>` +
+    `<D:sync-level>1</D:sync-level>` +
+    `<D:prop><D:getetag/></D:prop>` +
+    `</D:sync-collection>`;
+
+  const res = await davFetch(url, {
+    method: 'REPORT',
+    headers: { ...authHeaders, 'Content-Type': 'text/xml;charset=UTF-8', Depth: '0' },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    // 409 is not what the RFC specifies, but some servers use it for the same
+    // precondition, so accept both. A 403 without the precondition element is
+    // treated the same way: the only other plausible cause is a permission
+    // change, and the resulting full re-sync will surface that as a real error
+    // instead of hiding it behind a stalled token. Log which of the two it was,
+    // since that is the first thing worth knowing if this shows up in the wild.
+    if (res.status === 403 || res.status === 409) {
+      const declared = /valid-sync-token/i.test(text);
+      console.warn(
+        `sync-collection for ${url} rejected with ${res.status}` +
+          `${declared ? ' (DAV:valid-sync-token)' : ' without a DAV:valid-sync-token precondition'}`,
+      );
+      throw new SyncTokenInvalidError(url);
+    }
+    throw Object.assign(
+      new Error(`sync-collection REPORT failed: ${res.status} ${res.statusText ?? ''}`.trim()),
+      { statusCode: res.status },
+    );
+  }
+
+  const text = await res.text();
+  let doc: Record<string, unknown>;
+  try {
+    doc = xml2js(text, {
+      compact: true,
+      trim: true,
+      ignoreDeclaration: true,
+      ignoreAttributes: true,
+      elementNameFn: (name) => name.replace(/^.+:/, ''),
+    }) as Record<string, unknown>;
+  } catch (err) {
+    throw Object.assign(new Error(`sync-collection REPORT returned unparseable XML for ${url}`), {
+      cause: err,
+    });
+  }
+
+  const multistatus = doc.multistatus as Record<string, unknown> | undefined;
+  if (!multistatus) {
+    throw new Error(`sync-collection REPORT for ${url} returned no DAV:multistatus element`);
+  }
+
+  const token = xmlText(multistatus['sync-token']);
+  if (!token) {
+    console.warn(`sync-collection for ${url} returned no sync-token; reusing the previous one`);
+  }
+
+  const changed: string[] = [];
+  const deleted: string[] = [];
+
+  for (const response of asArray<XmlNode>(multistatus.response as XmlNode | XmlNode[])) {
+    const href = xmlText(response?.href);
+    if (!href) continue;
+
+    // Removals carry a response-level <status>; survivors carry their status
+    // inside <propstat>. Fall back to the first propstat when there is no
+    // response-level status.
+    const firstPropstat = asArray<XmlNode>(response.propstat as XmlNode | XmlNode[])[0];
+    const status = parseStatusCode(response.status) ?? parseStatusCode(firstPropstat?.status);
+
+    if (status === 404 || status === 410) {
+      deleted.push(href);
+    } else if (status === undefined || (status >= 200 && status < 300)) {
+      // No parseable status at all still means "this member exists" — the href
+      // was listed. Treating it as changed re-fetches it, which is harmless;
+      // dropping it would silently lose an update.
+      changed.push(href);
+    }
+  }
+
+  return { syncToken: token, changed, deleted };
 }
 
 export async function syncAddressBook(
@@ -995,19 +1155,29 @@ export async function syncAddressBook(
   const abUrl = `${homeUrl}/${abId}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
-  const results = await _syncCollection({
-    url: abUrl,
-    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
-    syncLevel: 1,
-    syncToken: currentSyncToken,
-    headers: authHeaders,
-  });
+  // An empty sync-token means "send me everything" (RFC 6578 §3.2), so recovery
+  // from a rejected token is just the same REPORT with the token dropped. The
+  // `full` flag tells the client to replace its contact list rather than merge a
+  // delta into it — the response is the whole collection, and anything deleted
+  // while our token was stale is absent rather than reported as a deletion.
+  let full = false;
+  let result: SyncCollectionResult;
+  try {
+    result = await runSyncCollection(abUrl, currentSyncToken, authHeaders);
+  } catch (err) {
+    if (!(err instanceof SyncTokenInvalidError)) throw err;
+    full = true;
+    result = await runSyncCollection(abUrl, '', authHeaders);
+  }
 
-  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
+  const newSyncToken = result.syncToken ?? currentSyncToken;
 
-  const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
-  const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
-  const deleted = deletedHrefs.map(contactId);
+  const changedHrefs = result.changed;
+  // Resolve before deriving the id: servers report members as relative hrefs
+  // ("/dav.php/…/x.vcf"), and contactId's `new URL(href)` throws on those and
+  // falls back to returning the href verbatim. That yields ids that match no
+  // cached contact, so deletions would silently never apply.
+  const deleted = result.deleted.map((href) => contactId(new URL(href, abUrl).href));
 
   let changed: Contact[] = [];
   if (changedHrefs.length > 0) {
@@ -1027,7 +1197,7 @@ export async function syncAddressBook(
       }));
   }
 
-  return { syncToken: newSyncToken, changed, deleted };
+  return { syncToken: newSyncToken, changed, deleted, full };
 }
 
 export async function syncCalendar(
@@ -1039,16 +1209,21 @@ export async function syncCalendar(
   const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${calId}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
-  const results = await _syncCollection({
-    url: calUrl,
-    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
-    syncLevel: 1,
-    syncToken: currentSyncToken,
-    headers: authHeaders,
-  });
+  // Calendars only report a dirty bit, so a rejected token needs no special
+  // result shape: refetch with an empty token and force `dirty` so the client
+  // reloads the collection outright.
+  let forceDirty = false;
+  let result: SyncCollectionResult;
+  try {
+    result = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
+  } catch (err) {
+    if (!(err instanceof SyncTokenInvalidError)) throw err;
+    forceDirty = true;
+    result = await runSyncCollection(calUrl, '', authHeaders);
+  }
 
-  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
-  const dirty = results.some((r) => (r.ok && r.href) || r.status === 404);
+  const newSyncToken = result.syncToken ?? currentSyncToken;
+  const dirty = forceDirty || result.changed.length > 0 || result.deleted.length > 0;
 
   return { syncToken: newSyncToken, dirty };
 }
@@ -1103,6 +1278,11 @@ export async function fetchAllCalendarObjects(
  * Incremental sync via sync-collection REPORT.
  * Unlike syncCalendar(), this also fetches the bodies of changed objects
  * so the cache can be updated without a second round-trip.
+ *
+ * Unlike the other two sync helpers this one does *not* recover from a rejected
+ * token on its own: it throws SyncTokenInvalidError so the caller can clear the
+ * collection's cached rows before refetching. Retrying here would repopulate the
+ * cache while leaving rows for objects deleted in the meantime.
  */
 export async function syncCalendarForCache(
   session: SessionData,
@@ -1112,23 +1292,16 @@ export async function syncCalendarForCache(
 ): Promise<CalendarCacheSyncResult> {
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
-  const results = await _syncCollection({
-    url: calUrl,
-    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
-    syncLevel: 1,
-    syncToken: currentSyncToken,
-    headers: authHeaders,
-  });
+  const result = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
 
-  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
-  const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
-  const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
+  const newSyncToken = result.syncToken ?? currentSyncToken;
+  const changedHrefs = result.changed;
 
   // Resolve relative hrefs to absolute URLs so they match what is stored in the cache.
   const resolveHref = (href: string): string => {
     try { return new URL(href, calUrl).href; } catch { return href; }
   };
-  const deleted = deletedHrefs.map(resolveHref);
+  const deleted = result.deleted.map(resolveHref);
 
   let changed: CalendarObjectRaw[] = [];
   if (changedHrefs.length > 0) {
@@ -1165,7 +1338,7 @@ export async function createTask(
   data: TaskJson,
   config: Config,
 ): Promise<TaskWriteResult> {
-  assertBaikalOrigin(collectionUrl, config);
+  assertDavOrigin(collectionUrl, config);
   const uid = data.uid || crypto.randomUUID();
   const taskData: TaskJson = { ...data, uid };
   const icsStr = serializeIcalTask(taskData);
@@ -1238,15 +1411,35 @@ export async function deleteTask(
   }
 }
 
-// ── Baikal archive search ─────────────────────────────────────────────────────
+// ── DAV archive search ─────────────────────────────────────────────────────
+
+/**
+ * The COMPLETED window the archive search covers, as epoch milliseconds.
+ *
+ * start = now - DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS  (oldest to fetch)
+ * end   = now - COMPLETED_TASK_RETENTION_DAYS    (exclude still-cached tasks)
+ *
+ * Exported so callers can re-check what the server returned against the same
+ * bounds that were asked for.
+ */
+export function archiveSearchWindow(config: Config): { startMs: number; endMs: number } {
+  const now = Date.now();
+  return {
+    startMs: now - config.DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS * 86_400_000,
+    endMs: now - config.COMPLETED_TASK_RETENTION_DAYS * 86_400_000,
+  };
+}
 
 /**
  * Fetch VTODO objects whose COMPLETED timestamp falls strictly between the
  * retention window and the max archive age — i.e. tasks that have been evicted
- * from the local cache but are still within the Baikal search cap.
+ * from the local cache but are still within the server-side search cap.
  *
- * time-range start = now - BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS  (oldest to fetch)
- * time-range end   = now - COMPLETED_TASK_RETENTION_DAYS       (exclude still-cached tasks)
+ * The time-range filter is only a request. Radicale and sabre/dav both evaluate
+ * `time-range` inside a `prop-filter`, but a server that ignores it answers with
+ * every VTODO in the collection, which would flood the archive UI with tasks the
+ * user can already see. Callers must re-check COMPLETED against
+ * archiveSearchWindow() rather than trusting the result set.
  *
  * Per-collection failures are caught and logged so one bad collection
  * doesn't abort the entire search.
@@ -1260,10 +1453,9 @@ export async function fetchArchivedCompletedTasks(
   const toIso = (ms: number): string =>
     new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
 
-  // Oldest tasks to include
-  const startStr = toIso(Date.now() - config.BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS * 86_400_000);
-  // Exclude tasks still within the retention window (they're in the local cache)
-  const endStr = toIso(Date.now() - config.COMPLETED_TASK_RETENTION_DAYS * 86_400_000);
+  const { startMs, endMs } = archiveSearchWindow(config);
+  const startStr = toIso(startMs);
+  const endStr = toIso(endMs);
 
   const results: CalendarObjectRaw[] = [];
   for (const calUrl of collectionUrls) {
@@ -1350,7 +1542,7 @@ export async function fetchEventsForSearch(
 }
 
 /**
- * Restore an archived completed task: GET the current ICS from Baikal,
+ * Restore an archived completed task: GET the current ICS from the server,
  * reset STATUS to NEEDS-ACTION, clear COMPLETED and PERCENT-COMPLETE,
  * then PUT it back. Returns the TaskWriteResult for the caller to cache.
  */
@@ -1361,7 +1553,7 @@ export async function restoreArchivedTask(
   etag: string,
   config: Config,
 ): Promise<TaskWriteResult> {
-  assertBaikalOrigin(objectUrl, config);
+  assertDavOrigin(objectUrl, config);
   const authHeaders = basicAuthHeader(session);
 
   // Fetch latest ICS (in case it changed since the search was run)
@@ -1414,7 +1606,7 @@ export async function createJournal(
   data: NoteJson,
   config: Config,
 ): Promise<JournalWriteResult> {
-  assertBaikalOrigin(collectionUrl, config);
+  assertDavOrigin(collectionUrl, config);
   const uid = data.uid || crypto.randomUUID();
   const entryData: NoteJson = { ...data, uid };
   const icsStr = serializeIcalJournal(entryData);
@@ -1495,7 +1687,7 @@ export async function createTaskRaw(
   rawIcs: string,
   config: Config,
 ): Promise<{ url: string; etag: string; collectionUrl: string }> {
-  assertBaikalOrigin(collectionUrl, config);
+  assertDavOrigin(collectionUrl, config);
   const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
   const res = await davFetch(url, {
     method: 'PUT',

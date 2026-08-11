@@ -9,6 +9,10 @@ build/
 *.sqlite-wal
 *.sqlite-shm
 
+# Local data dir created by the README's bare-Node quickstart (DATA_DIR=$PWD/data).
+# cache.db holds plaintext copies of calendar/contact data — never commit it.
+data/
+
 # OS
 .DS_Store
 Thumbs.db
@@ -31,3 +35,5 @@ coverage/
 .vitest/
 playwright-report/
 test-results/
+# Shared signed-in session written by the Playwright setup project
+e2e/.auth/

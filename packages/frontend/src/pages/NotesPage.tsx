@@ -2,9 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowUpDown,
-  ChevronDown,
-  ExternalLink,
-  Grid,
+  ChevronDown,  Grid,
   List,
   MoreVertical,
   PencilLine,
@@ -31,6 +29,11 @@ import NoteBulkEditModal, {
 } from '../components/NoteBulkEditModal';
 import TagInput from '../components/TagInput';
 import TagFilterButton from '../components/TagFilterButton';
+import {
+  ToolbarFilterToggle,
+  ToolbarFilterGroup,
+  ToolbarPrimaryEnd,
+} from '../components/ToolbarFilters';
 import { useSettings } from '../contexts/Settings';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
@@ -54,7 +57,7 @@ function savePref(key: string, value: unknown): void {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Baikal stores colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
+// CalDAV servers store colors as #RRGGBBAA. Strip alpha so we can append our own opacity suffix.
 function hex6(color: string): string {
   if (color.startsWith('#') && color.length === 9) return color.slice(0, 7);
   return color;
@@ -95,17 +98,9 @@ function NoCollectionsState() {
       <div className="text-4xl mb-4">📝</div>
       <h2 className="text-base font-semibold text-foreground mb-1">No notes collections found</h2>
       <p className="text-sm text-muted-foreground max-w-xs mb-4">
-        Your Baikal calendars don&apos;t currently support VJOURNAL components. Enable VJOURNAL on
-        an existing collection or create a new one.
+        Your calendars currently don&apos;t have Notes enabled. Enable Notes on
+        a calendar on your DAV server that accepts VJOURNAL, or create a new one here.
       </p>
-      <a
-        href="https://sabre.io/baikal/"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
-      >
-        Set up in Baikal <ExternalLink className="h-3.5 w-3.5" />
-      </a>
     </div>
   );
 }
@@ -318,6 +313,8 @@ export default function NotesPage() {
     return Array.isArray(v) ? (v as string[]) : [];
   });
   const [searchQuery, setSearchQuery] = useState('');
+  // Mobile-only: collapses the secondary toolbar controls. Resets on remount.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
   // UI state
@@ -368,20 +365,28 @@ export default function NotesPage() {
   );
 
   const [detailPanelWidth, setDetailPanelWidth] = useState<number>(() =>
-    loadPref('notes.detailPanelWidth', 440),
+    loadPref('notes.detailWidth', PANEL_MAX),
   );
   useEffect(() => {
-    savePref('notes.detailPanelWidth', detailPanelWidth);
+    savePref('notes.detailWidth', detailPanelWidth);
   }, [detailPanelWidth]);
 
   const startDetailResize = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
+      const paneEl = (e.currentTarget as HTMLElement).parentElement;
+      const rowEl = paneEl?.parentElement;
       const startX = e.clientX;
-      const startWidth = detailPanelWidth;
+      // Start from the rendered width (which may be capped below the stored value)
+      // so there's no dead zone at the start of the drag.
+      const startWidth = paneEl?.getBoundingClientRect().width ?? detailPanelWidth;
       const onMove = (ev: MouseEvent) => {
         const delta = startX - ev.clientX;
-        setDetailPanelWidth(Math.max(PANEL_MIN, Math.min(PANEL_MAX, startWidth + delta)));
+        // Cap to the space actually available (row width minus the list minimum)
+        // so the pane can never overflow the row and clip its header buttons.
+        const rowW = rowEl?.getBoundingClientRect().width ?? PANEL_MAX;
+        const cap = Math.min(PANEL_MAX, rowW - 320);
+        setDetailPanelWidth(Math.max(PANEL_MIN, Math.min(cap, startWidth + delta)));
       };
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
@@ -813,8 +818,9 @@ export default function NotesPage() {
           New note
         </button>
 
+        <ToolbarPrimaryEnd>
         {/* Search */}
-        <div className="relative flex-1 min-w-40 max-w-72">
+        <div className="relative w-40 shrink-0 md:w-auto md:flex-1 md:min-w-40 md:max-w-72">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <input
             type="search"
@@ -833,6 +839,14 @@ export default function NotesPage() {
           )}
         </div>
 
+        <ToolbarFilterToggle
+          open={filtersOpen}
+          onToggle={() => setFiltersOpen((o) => !o)}
+          activeCount={categoryFilter.length}
+        />
+        </ToolbarPrimaryEnd>
+
+        <ToolbarFilterGroup open={filtersOpen}>
         {/* Sort */}
         <select
           value={sort ?? ''}
@@ -850,7 +864,7 @@ export default function NotesPage() {
           <button
             onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
             title={`Sort ${order === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
-            className="text-muted-foreground hover:text-foreground"
+            className="flex h-7.75 items-center justify-center rounded-md border border-input bg-background px-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
           >
             <ArrowUpDown className="h-4 w-4" />
           </button>
@@ -889,6 +903,7 @@ export default function NotesPage() {
             <Grid className="h-4 w-4" />
           </button>
         </div>
+        </ToolbarFilterGroup>
       </div>
 
 
@@ -1001,7 +1016,7 @@ export default function NotesPage() {
           </div>
         )}
         {showMultiPanel && isMobile && (
-          <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <div className="absolute inset-0 z-20 flex flex-col bg-background">
             <NoteMultiSelectPanel
               notes={selectedNotes}
               noteCollections={vjournalCalendars}
@@ -1018,7 +1033,7 @@ export default function NotesPage() {
 
         {/* Detail / edit panel — desktop */}
         {showDetailPanel && !isMobile && (
-          <div className="flex shrink-0" style={{ width: detailPanelWidth }}>
+          <div className="flex shrink-0 min-w-0" style={{ width: detailPanelWidth, maxWidth: 'calc(100% - 20rem)' }}>
             <div
               className="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
               onMouseDown={startDetailResize}
@@ -1162,7 +1177,7 @@ export default function NotesPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-foreground text-background text-xs px-4 py-2 shadow-lg pointer-events-none">
+        <div className="fixed bottom-20 md:bottom-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-foreground text-background text-xs px-4 py-2 shadow-lg pointer-events-none">
           {toast}
         </div>
       )}

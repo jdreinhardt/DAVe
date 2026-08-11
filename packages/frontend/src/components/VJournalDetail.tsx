@@ -22,7 +22,11 @@ interface VJournalDetailProps {
 function formatDate(iso: string | null | undefined): string {
   if (!iso) return '';
   try {
-    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(iso));
+    // A date-only value ('YYYY-MM-DD') parses as UTC midnight, which renders as the
+    // previous day in negative-offset timezones. Parse it as local midnight instead
+    // so the displayed date matches the list/timeline (which key off the date string).
+    const d = iso.length <= 10 ? new Date(iso + 'T00:00:00') : new Date(iso);
+    return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(d);
   } catch {
     return iso;
   }
@@ -48,7 +52,12 @@ export default function VJournalDetail({
     <>
       {/* Delete confirm — renders in both edit and view modes */}
       {showDeleteConfirm && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Delete this ${mode}?`}
+          className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 backdrop-blur-sm"
+        >
           <div className="bg-card border border-border rounded-lg shadow-lg p-5 mx-4 max-w-sm w-full">
             <p className="text-sm font-medium text-foreground mb-1">Delete this {mode}?</p>
             <p className="text-xs text-muted-foreground mb-4">This action cannot be undone.</p>
@@ -94,7 +103,7 @@ export default function VJournalDetail({
       {/* Header */}
       <div className="px-4 pt-3 pb-3 shrink-0 border-b border-border">
         <div className="flex items-center gap-2 mb-2">
-          <h2 className="text-sm font-semibold text-foreground leading-tight flex-1 min-w-0 truncate">
+          <h2 className="text-xl font-semibold text-foreground leading-tight flex-1 min-w-0 truncate">
             {data.summary || <span className="text-muted-foreground italic">Untitled</span>}
           </h2>
           <button
@@ -150,7 +159,7 @@ export default function VJournalDetail({
       {/* Body */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         {data.description ? (
-          <div className="prose prose-sm dark:prose-invert max-w-none">
+          <div className="prose prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.description}</ReactMarkdown>
           </div>
         ) : (

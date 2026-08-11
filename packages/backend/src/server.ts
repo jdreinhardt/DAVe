@@ -89,10 +89,16 @@ await app.register(searchRoutes, { cacheDb, config });
 // ── Static frontend (production only) ────────────────────────────────────────
 
 if (config.NODE_ENV === 'production') {
-  const publicDir =
-    config.FRONTEND_DIST ?? path.resolve(__dirname, 'public');
+  // First existing candidate wins: explicit override (resolved so a relative
+  // FRONTEND_DIST works), the Docker image layout, then a repo checkout.
+  const candidates = [
+    ...(config.FRONTEND_DIST ? [path.resolve(config.FRONTEND_DIST)] : []),
+    path.resolve(__dirname, 'public'),
+    path.resolve(__dirname, '../../frontend/dist'),
+  ];
+  const publicDir = candidates.find((dir) => fs.existsSync(dir));
 
-  if (fs.existsSync(publicDir)) {
+  if (publicDir) {
     await app.register(fastifyStatic, {
       root: publicDir,
       prefix: '/',
@@ -106,7 +112,9 @@ if (config.NODE_ENV === 'production') {
       return reply.sendFile('index.html');
     });
   } else {
-    app.log.warn(`Frontend build not found at ${publicDir} — static serving disabled`);
+    app.log.warn(
+      `Frontend build not found (tried ${candidates.join(', ')}) — static serving disabled`,
+    );
   }
 }
 

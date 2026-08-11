@@ -9,6 +9,11 @@ export interface ServerSettings {
   taskLayout: string;
   notesView: string;
   journalsView: string;
+  calendarTaskDate: string;
+  calendarShowTasks: string;
+  calendarShowJournals: string;
+  calendarDefaultView: string;
+  homeView: string;
   updatedAt: number;
 }
 

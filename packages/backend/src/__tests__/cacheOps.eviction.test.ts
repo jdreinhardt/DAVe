@@ -12,7 +12,7 @@ import {
 } from '../db/cacheOps.js';
 import type { ParsedEntry } from '../lib/entryParser.js';
 
-const COL_URL = 'http://baikal.test/dav.php/calendars/alice/tasks/';
+const COL_URL = 'http://dav.test/dav.php/calendars/alice/tasks/';
 const USER = 'alice';
 
 function makeEntry(overrides: Partial<ParsedEntry> = {}): ParsedEntry {

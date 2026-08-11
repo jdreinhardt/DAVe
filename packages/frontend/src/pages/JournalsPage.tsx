@@ -10,10 +10,7 @@ import {
   ArrowUpDown,
   BookOpen,
   CalendarDays,
-  CalendarSearch,
-  ChevronDown,
-  ExternalLink,
-  List,
+  ChevronDown,  List,
   MoreVertical,
   PencilLine,
   Plus,
@@ -38,6 +35,7 @@ import { cn } from '../lib/utils';
 import VJournalDetail from '../components/VJournalDetail';
 import VJournalEditForm, { emptyJournalJson } from '../components/VJournalEditForm';
 import BulkDeleteDialog from '../components/BulkDeleteDialog';
+import DateJumpButton from '../components/DateJumper';
 import NoteBulkEditModal, {
   applyNoteBulkEdit,
   type NoteBulkEditConfig,
@@ -45,6 +43,11 @@ import NoteBulkEditModal, {
 } from '../components/NoteBulkEditModal';
 import TagInput from '../components/TagInput';
 import TagFilterButton from '../components/TagFilterButton';
+import {
+  ToolbarFilterToggle,
+  ToolbarFilterGroup,
+  ToolbarPrimaryEnd,
+} from '../components/ToolbarFilters';
 import { useSettings } from '../contexts/Settings';
 
 // ── localStorage helpers ──────────────────────────────────────────────────────
@@ -155,17 +158,10 @@ function NoCollectionsState() {
         No journals collections found
       </h2>
       <p className="text-sm text-muted-foreground max-w-xs mb-4">
-        Your Baikal calendars don&apos;t currently support VJOURNAL components. Enable VJOURNAL on
-        an existing collection or create a new one.
+        Your calendars currently don&apos;t have Journals enabled. Enable Notes on
+        a calendar on your DAV server that accepts VJOURNAL, or create a new one here.
+        Journals are a subcomponent of Notes.
       </p>
-      <a
-        href="https://sabre.io/baikal/"
-        target="_blank"
-        rel="noreferrer"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary/80 transition-colors"
-      >
-        Set up in Baikal <ExternalLink className="h-3.5 w-3.5" />
-      </a>
     </div>
   );
 }
@@ -794,13 +790,7 @@ function DateJumperButton({
   monthGroups: MonthGroup[];
   calendarRef: React.RefObject<FullCalendar | null>;
 }) {
-  const dateInputRef = useRef<HTMLInputElement>(null);
-  const [jumpDate, setJumpDate] = useState(() => new Date().toISOString().substring(0, 10));
-
-  function handleDateChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const date = e.target.value;
-    if (!date) return;
-    setJumpDate(date);
+  function handleDateChange(date: string) {
     if (view === 'calendar') {
       calendarRef.current?.getApi().gotoDate(date);
     } else {
@@ -823,32 +813,8 @@ function DateJumperButton({
     }
   }
 
-  return (
-    <div className="relative shrink-0">
-      <input
-        ref={dateInputRef}
-        type="date"
-        value={jumpDate}
-        onChange={handleDateChange}
-        className="sr-only"
-        tabIndex={-1}
-        aria-hidden="true"
-      />
-      <button
-        onClick={() => {
-          try {
-            dateInputRef.current?.showPicker();
-          } catch {
-            dateInputRef.current?.focus();
-          }
-        }}
-        title="Jump to date"
-        className="flex items-center gap-1.5 text-sm rounded-md border border-input bg-background px-2 py-1.5 hover:bg-muted transition-colors"
-      >
-        <CalendarSearch className="h-3.5 w-3.5 text-muted-foreground" />
-      </button>
-    </div>
-  );
+  // h-7.75 matches the neighbouring toolbar controls on this page.
+  return <DateJumpButton onPick={handleDateChange} className="h-7.75" />;
 }
 
 // ── Calendar view ─────────────────────────────────────────────────────────────
@@ -974,6 +940,8 @@ export default function JournalsPage() {
     return Array.isArray(v) ? (v as string[]) : [];
   });
   const [searchQuery, setSearchQuery] = useState('');
+  // Mobile-only: collapses the secondary toolbar controls. Resets on remount.
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState('');
 
   const location = useLocation();
@@ -1028,20 +996,28 @@ export default function JournalsPage() {
   );
 
   const [detailPanelWidth, setDetailPanelWidth] = useState<number>(() =>
-    loadPref('journals.detailPanelWidth', 440),
+    loadPref('journals.detailWidth', PANEL_MAX),
   );
   useEffect(() => {
-    savePref('journals.detailPanelWidth', detailPanelWidth);
+    savePref('journals.detailWidth', detailPanelWidth);
   }, [detailPanelWidth]);
 
   const startDetailResize = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault();
+      const paneEl = (e.currentTarget as HTMLElement).parentElement;
+      const rowEl = paneEl?.parentElement;
       const startX = e.clientX;
-      const startWidth = detailPanelWidth;
+      // Start from the rendered width (which may be capped below the stored value)
+      // so there's no dead zone at the start of the drag.
+      const startWidth = paneEl?.getBoundingClientRect().width ?? detailPanelWidth;
       const onMove = (ev: MouseEvent) => {
         const delta = startX - ev.clientX;
-        setDetailPanelWidth(Math.max(PANEL_MIN, Math.min(PANEL_MAX, startWidth + delta)));
+        // Cap to the space actually available (row width minus the list minimum)
+        // so the pane can never overflow the row and clip its header buttons.
+        const rowW = rowEl?.getBoundingClientRect().width ?? PANEL_MAX;
+        const cap = Math.min(PANEL_MAX, rowW - 320);
+        setDetailPanelWidth(Math.max(PANEL_MIN, Math.min(cap, startWidth + delta)));
       };
       const onUp = () => {
         window.removeEventListener('mousemove', onMove);
@@ -1534,8 +1510,9 @@ export default function JournalsPage() {
           New journal
         </button>
 
+        <ToolbarPrimaryEnd>
         {/* Search */}
-        <div className="relative flex-1 min-w-40 max-w-72">
+        <div className="relative w-40 shrink-0 md:w-auto md:flex-1 md:min-w-40 md:max-w-72">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <input
             type="search"
@@ -1554,6 +1531,14 @@ export default function JournalsPage() {
           )}
         </div>
 
+        <ToolbarFilterToggle
+          open={filtersOpen}
+          onToggle={() => setFiltersOpen((o) => !o)}
+          activeCount={categoryFilter.length}
+        />
+        </ToolbarPrimaryEnd>
+
+        <ToolbarFilterGroup open={filtersOpen}>
         {/* Sort controls — list view only */}
         {effectiveView === 'list' && (
           <>
@@ -1576,7 +1561,7 @@ export default function JournalsPage() {
               <button
                 onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
                 title={`Sort ${order === 'asc' ? 'ascending' : 'descending'} — click to toggle`}
-                className="text-muted-foreground hover:text-foreground"
+                className="flex h-7.75 items-center justify-center rounded-md border border-input bg-background px-2 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
               >
                 <ArrowUpDown className="h-4 w-4" />
               </button>
@@ -1636,6 +1621,7 @@ export default function JournalsPage() {
             </button>
           )}
         </div>
+        </ToolbarFilterGroup>
       </div>
 
 
@@ -1782,7 +1768,7 @@ export default function JournalsPage() {
           </div>
         )}
         {showMultiPanel && isMobile && (
-          <div className="fixed inset-0 z-50 flex flex-col bg-background">
+          <div className="absolute inset-0 z-20 flex flex-col bg-background">
             <JournalMultiSelectPanel
               journals={selectedJournals}
               journalCollections={vjournalCalendars}
@@ -1799,7 +1785,7 @@ export default function JournalsPage() {
 
         {/* Detail / edit panel — desktop */}
         {showDetailPanel && !isMobile && (
-          <div className="flex shrink-0" style={{ width: detailPanelWidth }}>
+          <div className="flex shrink-0 min-w-0" style={{ width: detailPanelWidth, maxWidth: 'calc(100% - 20rem)' }}>
             <div
               className="w-1 shrink-0 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors"
               onMouseDown={startDetailResize}
@@ -1950,7 +1936,7 @@ export default function JournalsPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg bg-foreground text-background text-xs px-4 py-2 shadow-lg">
+        <div className="fixed bottom-20 md:bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg bg-foreground text-background text-xs px-4 py-2 shadow-lg">
           <span>{toast.msg}</span>
           {toast.action && (
             <button

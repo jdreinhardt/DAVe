@@ -22,7 +22,12 @@ export function useSyncCollections() {
 
       // Apply address book deltas surgically.
       for (const abSync of result.addressbooks) {
-        if (abSync.changed.length > 0 || abSync.deleted.length > 0) {
+        if (abSync.full) {
+          // The server rejected our sync token, so `changed` is the entire
+          // collection. Merging would resurrect contacts deleted while the token
+          // was stale, since a full sync reports them as absent, not deleted.
+          queryClient.setQueryData<Contact[]>(['contacts', abSync.id], abSync.changed);
+        } else if (abSync.changed.length > 0 || abSync.deleted.length > 0) {
           queryClient.setQueryData<Contact[]>(['contacts', abSync.id], (old) => {
             let updated = old ?? [];
             // Remove deleted contacts.

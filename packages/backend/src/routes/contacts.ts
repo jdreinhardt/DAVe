@@ -51,7 +51,7 @@ async function handleDavError(
   }
 
   app.log.error({ err: e }, 'DAV contact write failed');
-  await reply.status(502).send({ error: 'Failed to communicate with Baikal', statusCode: 502 });
+  await reply.status(502).send({ error: 'Failed to communicate with the DAV server', statusCode: 502 });
 }
 
 export async function contactsRoutes(

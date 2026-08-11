@@ -49,7 +49,10 @@ VOLUME ["/data"]
 USER dave
 EXPOSE 3000
 
+# Shell-form CMD is not substituted at build time, so ${PORT} is expanded by the
+# container's shell on every probe — the check follows whatever port the app was
+# told to bind (config.PORT), instead of assuming 3000.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:3000/healthz || exit 1
+  CMD wget -qO- http://localhost:${PORT:-3000}/healthz || exit 1
 
 CMD ["node", "server.js"]

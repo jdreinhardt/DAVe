@@ -32,7 +32,7 @@ export default function TagFilterButton({ allTags, selected, onChange }: TagFilt
         onClick={() => setOpen((o) => !o)}
         title="Filter by tag"
         className={cn(
-          'flex items-center gap-1.5 text-sm rounded-md border px-2 py-1.5 transition-colors',
+          'flex h-7.75 items-center gap-1.5 text-sm rounded-md border px-2 py-1.5 transition-colors',
           selected.length > 0
             ? 'border-primary/50 bg-primary/10 text-primary hover:bg-primary/15'
             : 'border-input bg-background text-muted-foreground hover:bg-muted',
@@ -43,8 +43,11 @@ export default function TagFilterButton({ allTags, selected, onChange }: TagFilt
           <span className="text-xs font-medium tabular-nums">{selected.length}</span>
         )}
       </button>
+      {/* Panel is anchored left on mobile: the button sits near the left edge there, so
+          right-anchoring pushes it off-screen. Desktop keeps right-anchoring, where the
+          button is near the right edge and left would overflow instead. */}
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 bg-background border border-border rounded-lg shadow-lg min-w-[190px] max-h-72 overflow-y-auto">
+        <div className="absolute left-0 md:left-auto md:right-0 top-full mt-1 z-50 bg-background border border-border rounded-lg shadow-lg min-w-[190px] max-h-72 overflow-y-auto">
           {/* All / None quick-select */}
           <div className="flex items-center border-b border-border">
             <button

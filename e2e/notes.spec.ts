@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login } from './helpers';
+import { listRow, login } from './helpers';
 
 const NOTE_TITLE = 'E2E Test Note';
 const EDITED_TITLE = 'E2E Test Note Edited';
@@ -28,17 +28,17 @@ test.describe('Notes', () => {
     await page.getByRole('button', { name: 'Create' }).click();
 
     // Note appears in the list
-    await expect(page.getByText(NOTE_TITLE)).toBeVisible();
+    await expect(listRow(page, NOTE_TITLE)).toBeVisible();
   });
 
   test('view note content', async ({ page }) => {
-    await page.getByText(NOTE_TITLE).first().click();
+    await listRow(page, NOTE_TITLE).click();
     // Detail panel shows the note title
-    await expect(page.getByText(NOTE_TITLE)).toBeVisible();
+    await expect(page.getByRole('heading', { name: NOTE_TITLE })).toBeVisible();
   });
 
   test('edit a note title', async ({ page }) => {
-    await page.getByText(NOTE_TITLE).first().click();
+    await listRow(page, NOTE_TITLE).click();
 
     // In the detail panel, click the edit icon (pencil) to open the editor
     await page.locator('[title="Edit"]').first().click().catch(async () => {
@@ -51,19 +51,21 @@ test.describe('Notes', () => {
     await titleInput.fill(EDITED_TITLE);
     await page.getByRole('button', { name: 'Save' }).click();
 
-    await expect(page.getByText(EDITED_TITLE)).toBeVisible();
+    await expect(listRow(page, EDITED_TITLE)).toBeVisible();
   });
 
   test('delete a note', async ({ page }) => {
-    await page.getByText(EDITED_TITLE).first().click();
+    await listRow(page, EDITED_TITLE).click();
 
     // Delete button in detail panel toolbar
     await page.getByTitle('Delete').click();
 
     // Confirmation dialog: "Delete this note?"
-    await expect(page.getByText(/delete this note/i)).toBeVisible();
-    await page.getByRole('button', { name: 'Delete' }).click();
+    // Scoped to the dialog: the detail toolbar has its own Delete icon button.
+    const confirm = page.getByRole('dialog', { name: /delete this note/i });
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole('button', { name: 'Delete' }).click();
 
-    await expect(page.getByText(EDITED_TITLE)).not.toBeVisible();
+    await expect(listRow(page, EDITED_TITLE)).not.toBeVisible();
   });
 });

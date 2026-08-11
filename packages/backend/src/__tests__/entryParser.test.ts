@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseEntry } from '../lib/entryParser.js';
 
-const COL_URL = 'http://baikal.test/dav.php/calendars/alice/tasks/';
+const COL_URL = 'http://dav.test/dav.php/calendars/alice/tasks/';
 const OBJ_URL = `${COL_URL}todo-1.ics`;
 const USER_ID = 'alice';
 const ETAG = '"abc123"';

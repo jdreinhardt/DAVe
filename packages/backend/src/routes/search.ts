@@ -142,7 +142,7 @@ export async function searchRoutes(
       const notes = noteRows.map((r) => rowToResult(r, 'note', categories));
       const journals = journalRows.map((r) => rowToResult(r, 'journal', categories));
 
-      // ── Baikal VEVENT search ──────────────────────────────────────────────
+      // ── DAV VEVENT search ──────────────────────────────────────────────
       const events: GlobalSearchResult[] = [];
       try {
         const allCalendars = await listCalendars(req.sessionData!, config);

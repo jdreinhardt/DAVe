@@ -10,9 +10,9 @@ const SESSION_DATA: SessionData = {
   username: 'alice',
   password: 'hunter2',
   displayName: 'Alice',
-  principalUrl: 'https://baikal.test/principals/alice',
-  calendarHomeUrl: 'https://baikal.test/cal/alice/',
-  addressBookHomeUrl: 'https://baikal.test/ab/alice/',
+  principalUrl: 'https://dav.test/principals/alice',
+  calendarHomeUrl: 'https://dav.test/cal/alice/',
+  addressBookHomeUrl: 'https://dav.test/ab/alice/',
 };
 
 const VALID_BODY = {
@@ -24,6 +24,11 @@ const VALID_BODY = {
   taskLayout: 'list',
   notesView: 'list',
   journalsView: 'timeline',
+  calendarTaskDate: 'due',
+  calendarShowTasks: 'on',
+  calendarShowJournals: 'on',
+  calendarDefaultView: 'dayGridMonth',
+  homeView: 'contacts',
   updatedAt: 1000,
 };
 
@@ -33,21 +38,8 @@ describe('PUT /api/settings validation', () => {
   let cookie: string;
 
   beforeEach(async () => {
+    // makeDb() applies the real session schema, user_settings included.
     db = makeDb();
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS user_settings (
-        username         TEXT    PRIMARY KEY,
-        contact_sort_by  TEXT    NOT NULL DEFAULT 'last',
-        contact_sort_dir TEXT    NOT NULL DEFAULT 'asc',
-        contact_subtitle TEXT    NOT NULL DEFAULT '',
-        map_service      TEXT    NOT NULL DEFAULT 'osm',
-        dark_mode        TEXT    NOT NULL DEFAULT 'system',
-        task_layout      TEXT    NOT NULL DEFAULT 'list',
-        notes_view       TEXT    NOT NULL DEFAULT 'list',
-        journals_view    TEXT    NOT NULL DEFAULT 'timeline',
-        updated_at       INTEGER NOT NULL DEFAULT 0
-      );
-    `);
     app = await buildApp(async (a) => {
       await a.register(settingsRoutes, { db });
     }, db);
@@ -108,6 +100,30 @@ describe('PUT /api/settings validation', () => {
       .get('alice') as { updated_at: number };
     // Stored timestamp must not be the year-2100 value — it is clamped to now+skew.
     expect(row.updated_at).toBeLessThan(Date.now() + 120_000);
+  });
+
+  it('rejects a homeView outside the known routes', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      headers: { cookie },
+      payload: { ...VALID_BODY, homeView: 'settings' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('round-trips the calendar default view and home view', async () => {
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      headers: { cookie },
+      payload: { ...VALID_BODY, calendarDefaultView: 'timeGridWeek', homeView: 'tasks' },
+    });
+    expect(put.statusCode).toBe(204);
+
+    const get = await app.inject({ method: 'GET', url: '/api/settings', headers: { cookie } });
+    expect(get.statusCode).toBe(200);
+    expect(get.json()).toMatchObject({ calendarDefaultView: 'timeGridWeek', homeView: 'tasks' });
   });
 
   it('requires authentication', async () => {

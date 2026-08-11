@@ -800,7 +800,7 @@ export function applyCompletion(data: TaskJson): TaskJson {
 
 /**
  * Parse a raw VTODO ICS string into a partial TaskJson plus its UID.
- * Used by the Baikal archive search to build ArchivedTask objects from raw ICS
+ * Used by the archive search to build ArchivedTask objects from raw ICS
  * without going through the SQLite cache.
  * The caller is responsible for setting collectionUrl on the returned data.
  */

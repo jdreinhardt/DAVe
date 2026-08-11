@@ -40,12 +40,12 @@ export async function deleteTask(
   });
 }
 
-export async function searchBaikal(q: string): Promise<ArchivedTasksResponse> {
-  return apiFetch<ArchivedTasksResponse>(`/api/tasks/baikal-search?${new URLSearchParams({ q }).toString()}`);
+export async function searchArchive(q: string): Promise<ArchivedTasksResponse> {
+  return apiFetch<ArchivedTasksResponse>(`/api/tasks/archive-search?${new URLSearchParams({ q }).toString()}`);
 }
 
 export async function restoreArchivedTask(req: RestoreArchivedTaskRequest): Promise<TaskWriteResponse> {
-  return apiFetch<TaskWriteResponse>('/api/tasks/baikal-restore', {
+  return apiFetch<TaskWriteResponse>('/api/tasks/archive-restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(req),

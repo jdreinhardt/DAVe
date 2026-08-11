@@ -27,7 +27,21 @@ export function getDb(config: Config): DbInstance {
   _db.exec('PRAGMA journal_mode = WAL');
   _db.exec('PRAGMA foreign_keys = ON');
 
-  _db.exec(`
+  applySessionSchema(_db);
+
+  return _db;
+}
+
+/**
+ * Create the session-database tables on an already-open connection.
+ *
+ * Exported so tests build their database from the same definition the app uses.
+ * They previously inlined their own copy of just the `sessions` table, which
+ * meant any route touching `address_book_colors` or `user_settings` failed with
+ * an opaque 502 that looked like a DAV error.
+ */
+export function applySessionSchema(db: DbInstance): void {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id               TEXT    PRIMARY KEY,
       data             TEXT    NOT NULL,
@@ -47,6 +61,11 @@ export function getDb(config: Config): DbInstance {
       task_layout      TEXT    NOT NULL DEFAULT 'list',
       notes_view       TEXT    NOT NULL DEFAULT 'list',
       journals_view    TEXT    NOT NULL DEFAULT 'timeline',
+      calendar_task_date TEXT  NOT NULL DEFAULT 'due',
+      calendar_show_tasks    TEXT NOT NULL DEFAULT 'on',
+      calendar_show_journals TEXT NOT NULL DEFAULT 'on',
+      calendar_default_view  TEXT NOT NULL DEFAULT 'dayGridMonth',
+      home_view        TEXT    NOT NULL DEFAULT 'contacts',
       updated_at       INTEGER NOT NULL DEFAULT 0
     );
 
@@ -58,5 +77,21 @@ export function getDb(config: Config): DbInstance {
     );
   `);
 
-  return _db;
+  // Migrations: add newer user_settings columns to existing databases.
+  const settingsCols = db.prepare("PRAGMA table_info(user_settings)").all() as { name: string }[];
+  if (!settingsCols.some((c) => c.name === 'calendar_task_date')) {
+    db.exec("ALTER TABLE user_settings ADD COLUMN calendar_task_date TEXT NOT NULL DEFAULT 'due'");
+  }
+  if (!settingsCols.some((c) => c.name === 'calendar_show_tasks')) {
+    db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_tasks TEXT NOT NULL DEFAULT 'on'");
+  }
+  if (!settingsCols.some((c) => c.name === 'calendar_show_journals')) {
+    db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_journals TEXT NOT NULL DEFAULT 'on'");
+  }
+  if (!settingsCols.some((c) => c.name === 'calendar_default_view')) {
+    db.exec("ALTER TABLE user_settings ADD COLUMN calendar_default_view TEXT NOT NULL DEFAULT 'dayGridMonth'");
+  }
+  if (!settingsCols.some((c) => c.name === 'home_view')) {
+    db.exec("ALTER TABLE user_settings ADD COLUMN home_view TEXT NOT NULL DEFAULT 'contacts'");
+  }
 }

@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import {
   SORT_BY, SORT_DIR, CONTACT_SUBTITLE_FIELDS, MAP_SERVICES,
-  DARK_MODES, TASK_LAYOUTS, NOTES_VIEWS, JOURNALS_VIEWS,
+  DARK_MODES, TASK_LAYOUTS, NOTES_VIEWS, JOURNALS_VIEWS, CALENDAR_TASK_DATES,
+  CALENDAR_LAYER_TOGGLE, CALENDAR_DEFAULT_VIEWS, HOME_VIEWS,
 } from '@dave/shared';
 import type { DbInstance } from '../db/index.js';
 import { requireAuth } from '../plugins/session.js';
@@ -16,6 +17,11 @@ interface SettingsRow {
   task_layout: string;
   notes_view: string;
   journals_view: string;
+  calendar_task_date: string;
+  calendar_show_tasks: string;
+  calendar_show_journals: string;
+  calendar_default_view: string;
+  home_view: string;
   updated_at: number;
 }
 
@@ -28,6 +34,11 @@ interface SettingsBody {
   taskLayout: string;
   notesView: string;
   journalsView: string;
+  calendarTaskDate: string;
+  calendarShowTasks: string;
+  calendarShowJournals: string;
+  calendarDefaultView: string;
+  homeView: string;
   updatedAt: number;
 }
 
@@ -55,6 +66,11 @@ export async function settingsRoutes(
       taskLayout:     row.task_layout,
       notesView:      row.notes_view,
       journalsView:   row.journals_view,
+      calendarTaskDate: row.calendar_task_date,
+      calendarShowTasks: row.calendar_show_tasks,
+      calendarShowJournals: row.calendar_show_journals,
+      calendarDefaultView: row.calendar_default_view,
+      homeView:       row.home_view,
       updatedAt:      row.updated_at,
     } satisfies SettingsBody);
   });
@@ -76,6 +92,11 @@ export async function settingsRoutes(
           taskLayout:      { type: 'string', enum: [...TASK_LAYOUTS] },
           notesView:       { type: 'string', enum: [...NOTES_VIEWS] },
           journalsView:    { type: 'string', enum: [...JOURNALS_VIEWS] },
+          calendarTaskDate: { type: 'string', enum: [...CALENDAR_TASK_DATES] },
+          calendarShowTasks: { type: 'string', enum: [...CALENDAR_LAYER_TOGGLE] },
+          calendarShowJournals: { type: 'string', enum: [...CALENDAR_LAYER_TOGGLE] },
+          calendarDefaultView: { type: 'string', enum: [...CALENDAR_DEFAULT_VIEWS] },
+          homeView:        { type: 'string', enum: [...HOME_VIEWS] },
           updatedAt:       { type: 'integer', minimum: 0 },
         },
       },
@@ -90,8 +111,10 @@ export async function settingsRoutes(
     db.prepare(`
       INSERT INTO user_settings
         (username, contact_sort_by, contact_sort_dir, contact_subtitle,
-         map_service, dark_mode, task_layout, notes_view, journals_view, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         map_service, dark_mode, task_layout, notes_view, journals_view,
+         calendar_task_date, calendar_show_tasks, calendar_show_journals,
+         calendar_default_view, home_view, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(username) DO UPDATE SET
         contact_sort_by  = excluded.contact_sort_by,
         contact_sort_dir = excluded.contact_sort_dir,
@@ -101,6 +124,11 @@ export async function settingsRoutes(
         task_layout      = excluded.task_layout,
         notes_view       = excluded.notes_view,
         journals_view    = excluded.journals_view,
+        calendar_task_date = excluded.calendar_task_date,
+        calendar_show_tasks = excluded.calendar_show_tasks,
+        calendar_show_journals = excluded.calendar_show_journals,
+        calendar_default_view = excluded.calendar_default_view,
+        home_view        = excluded.home_view,
         updated_at       = excluded.updated_at
       WHERE excluded.updated_at > user_settings.updated_at
     `).run(
@@ -113,6 +141,11 @@ export async function settingsRoutes(
       body.taskLayout     ?? 'list',
       body.notesView      ?? 'list',
       body.journalsView   ?? 'timeline',
+      body.calendarTaskDate ?? 'due',
+      body.calendarShowTasks ?? 'on',
+      body.calendarShowJournals ?? 'on',
+      body.calendarDefaultView ?? 'dayGridMonth',
+      body.homeView       ?? 'contacts',
       updatedAt,
     );
 

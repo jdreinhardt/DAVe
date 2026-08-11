@@ -1,9 +1,14 @@
 import { useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { GitBranch } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { login, getMe } from '../api/auth';
 import { ApiError } from '../api/client';
+
+// Public source repo. The AGPL §13 source offer to network users lives here —
+// keep this link present and current if the repo ever moves.
+const REPO_URL = 'https://github.com/jdreinhardt/dave';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -24,12 +29,13 @@ export default function LoginPage() {
     onSuccess: async () => {
       // Invalidate the me cache so AppLayout re-fetches with fresh session.
       await queryClient.invalidateQueries({ queryKey: ['me'] });
-      navigate('/contacts', { replace: true });
+      // "/" resolves the configured home view — LoginPage sits outside SettingsProvider.
+      navigate('/', { replace: true });
     },
   });
 
   if (meQuery.isSuccess) {
-    return <Navigate to="/contacts" replace />;
+    return <Navigate to="/" replace />;
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -48,7 +54,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm space-y-6">
         <div className="text-center space-y-1">
           <h1 className="text-3xl font-bold tracking-tight text-foreground">DAVe</h1>
-          <p className="text-sm text-muted-foreground">Baikal web client</p>
+          <p className="text-sm text-muted-foreground">CalDAV web client</p>
         </div>
 
         <div className="rounded-lg border border-border bg-card p-6 shadow-sm">
@@ -63,7 +69,7 @@ export default function LoginPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className={inputCls}
-                placeholder="your-baikal-username"
+                placeholder="your-username"
                 disabled={loginMutation.isPending}
               />
             </Field>
@@ -100,6 +106,18 @@ export default function LoginPage() {
             </button>
           </form>
         </div>
+
+        <p className="text-center">
+          <a
+            href={REPO_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <GitBranch className="h-3.5 w-3.5" aria-hidden="true" />
+            Source · AGPL-3.0
+          </a>
+        </p>
       </div>
     </div>
   );

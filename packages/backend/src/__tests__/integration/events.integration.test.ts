@@ -14,7 +14,7 @@ beforeAll(async () => {
   // Find the seeded calendar
   const calRes = await app.inject({ method: 'GET', url: '/api/calendars', headers: { cookie } });
   const cals = calRes.json() as Array<{ id: string }>;
-  if (!cals.length) throw new Error('No calendars found — is Baikal seeded?');
+  if (!cals.length) throw new Error('No calendars found — is the DAV server seeded?');
   calendarId = cals[0]!.id;
 });
 

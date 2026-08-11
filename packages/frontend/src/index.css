@@ -66,6 +66,10 @@
    are theme-aware and visually consistent with the rest of the UI. */
 :root {
   --fc-border-color: var(--border);
+  /* Theme-aware surfaces so the "+N more" popover (and other neutral surfaces)
+     follow light/dark mode instead of FullCalendar's hardcoded white. */
+  --fc-page-bg-color: var(--background);
+  --fc-neutral-bg-color: var(--muted);
 
   /* Button colours — replaces FullCalendar's default dark navy palette. */
   --fc-button-text-color: var(--foreground);
@@ -75,6 +79,11 @@
   --fc-button-hover-border-color: var(--border);
   --fc-button-active-bg-color: var(--primary);
   --fc-button-active-border-color: var(--primary);
+
+  /* lucide "calendar-search", inlined so the desktop jump-to-date button can wear
+     the same icon <DateJumpButton> uses. Kept in sync by hand — if the icon in
+     components/DateJumper.tsx changes, change this path data too. */
+  --dave-icon-calendar-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 12V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h7.5'/%3E%3Cpath d='M16 2v4'/%3E%3Cpath d='M8 2v4'/%3E%3Cpath d='M3 10h18'/%3E%3Ccircle cx='18' cy='18' r='3'/%3E%3Cpath d='m22 22-1.5-1.5'/%3E%3C/svg%3E");
 }
 
 /* Active / pressed view buttons need light text to stay legible on --primary. */
@@ -103,6 +112,83 @@
 .fc .fc-button:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 1px;
+}
+
+/* Jump-to-date in the calendar's desktop toolbar. FullCalendar's customButtons take
+   a text string and nothing else, so the lucide calendar-search icon — the same one
+   <DateJumpButton> renders on mobile and in Journals — is applied as a mask on
+   ::before. currentColor keeps it in step with the button's hover/active states.
+
+   The 1.5em box with vertical-align: middle is not arbitrary — it mirrors FullCalendar's
+   own `.fc .fc-button .fc-icon` rule. Buttons inside a .fc-button-group are flex items
+   and stretch to the tallest, but this one stands alone, so it only lines up with its
+   neighbours if its line box is built the same way theirs is. The mask is drawn at
+   0.875rem inside that box, matching the lucide icons elsewhere in the app. */
+.fc .fc-jumpTo-button::before {
+  content: '';
+  display: inline-block;
+  width: 1.5em;
+  height: 1.5em;
+  vertical-align: middle;
+  background-color: currentColor;
+  -webkit-mask: var(--dave-icon-calendar-search) center / 0.875rem 0.875rem no-repeat;
+  mask: var(--dave-icon-calendar-search) center / 0.875rem 0.875rem no-repeat;
+}
+
+/* The "+N more" popover is portaled to <body> (outside .fc), so it needs its own
+   theme-aware text colour on top of the --fc-*-bg-color variables above. */
+.fc-popover {
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
+/* Task tiles on the calendar's synthetic tasks layer. A checkbox glyph prefixes
+   the title so tasks read distinctly from events; completed tasks show a checked
+   box and are dimmed + struck through. Rendering stays on FullCalendar's default
+   (no eventContent override), so real events keep their normal block height. */
+.fc .dave-task-tile .fc-event-title::before {
+  content: '\2610'; /* ☐ empty checkbox */
+  margin-right: 0.25em;
+}
+.fc .dave-task-done .fc-event-title::before {
+  content: '\2611'; /* ☑ checked box */
+}
+.fc .dave-task-done {
+  opacity: 0.55;
+}
+.fc .dave-task-done .fc-event-title {
+  text-decoration: line-through;
+}
+
+/* Journal tiles on the calendar's synthetic journals layer — a book glyph
+   prefixes the title so journals read distinctly from events and tasks. */
+.fc .dave-journal-tile .fc-event-title::before {
+  content: '\1F4D6'; /* 📖 open book */
+  margin-right: 0.25em;
+  font-size: 0.9em;
+}
+
+/* Wire Tailwind Typography (@tailwindcss/typography) to the app's design tokens
+   so rendered markdown (notes/journals) uses full-contrast foreground text in
+   light mode instead of the plugin's default light-gray. The tokens already flip
+   for dark mode, so no `dark:prose-invert` is needed. */
+.prose {
+  --tw-prose-body: var(--foreground);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-lead: var(--foreground);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--muted-foreground);
+  --tw-prose-bullets: var(--muted-foreground);
+  --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--foreground);
+  --tw-prose-quote-borders: var(--border);
+  --tw-prose-captions: var(--muted-foreground);
+  --tw-prose-code: var(--foreground);
+  --tw-prose-pre-code: var(--foreground);
+  --tw-prose-pre-bg: var(--muted);
+  --tw-prose-links: var(--primary);
+  --tw-prose-th-borders: var(--border);
+  --tw-prose-td-borders: var(--border);
 }
 
 *,

@@ -1,13 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Menu } from 'lucide-react';
+import { Menu, Search } from 'lucide-react';
 import { getMe } from '../api/auth';
 import { ApiError } from '../api/client';
 import Sidebar from '../components/Sidebar';
+import BottomNav from '../components/BottomNav';
 import GlobalSearchModal from '../components/GlobalSearchModal';
+import { VIEW_NAV_ITEMS } from '../hooks/useViewNavItems';
 import { CollectionVisibilityProvider } from '../contexts/CollectionVisibility';
 import { ContactDragProvider } from '../contexts/ContactDrag';
+import { MobileHeaderProvider } from '../contexts/MobileHeader';
 import { NoteDragProvider } from '../contexts/NoteDrag';
 import { SettingsProvider } from '../contexts/Settings';
 import { useSyncCollections } from '../hooks/useSyncCollections';
@@ -30,6 +33,11 @@ export default function AppLayout() {
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  // A page can replace the mobile header's title with something contextual —
+  // the Calendar shows its current date range here. Null falls back to the view
+  // name. Stable identity so the consumer's effect doesn't re-fire each render.
+  const [mobileTitle, setMobileTitle] = useState<string | null>(null);
+  const setMobileTitleStable = useCallback((title: string | null) => setMobileTitle(title), []);
   const { pathname } = useLocation();
 
   // Cmd+K / Ctrl+K opens global search
@@ -49,15 +57,8 @@ export default function AppLayout() {
     setSidebarOpen(false);
   }, [pathname]);
 
-  const pageTitle = pathname.startsWith('/contacts')
-    ? 'Contacts'
-    : pathname.startsWith('/tasks')
-      ? 'Tasks'
-      : pathname.startsWith('/notes')
-        ? 'Notes'
-        : pathname.startsWith('/journals')
-          ? 'Journals'
-          : 'Calendar';
+  const pageTitle =
+    VIEW_NAV_ITEMS.find((item) => pathname.startsWith(item.to))?.label ?? 'Calendar';
 
   if (meQuery.isLoading) {
     return (
@@ -77,6 +78,7 @@ export default function AppLayout() {
         <ContactDragProvider>
           <NoteDragProvider>
           <SyncPoller />
+          <MobileHeaderProvider value={setMobileTitleStable}>
           <div className="flex h-screen overflow-hidden bg-background">
             <Sidebar
               me={meQuery.data!}
@@ -95,13 +97,26 @@ export default function AppLayout() {
                 >
                   <Menu className="h-5 w-5" />
                 </button>
-                <span className="font-semibold text-sm text-foreground">{pageTitle}</span>
+                <span className="font-semibold text-sm text-foreground flex-1 truncate">
+                  {mobileTitle ?? pageTitle}
+                </span>
+                <button
+                  onClick={() => setSearchOpen(true)}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Search"
+                >
+                  <Search className="h-5 w-5" />
+                </button>
               </header>
-              <main className="flex-1 overflow-auto min-h-0">
+              {/* `relative` contains the pages' full-bleed mobile detail panes, so the
+                  header and bottom nav stay visible behind them. */}
+              <main className="flex-1 overflow-auto min-h-0 relative">
                 <Outlet />
               </main>
+              <BottomNav />
             </div>
           </div>
+          </MobileHeaderProvider>
           </NoteDragProvider>
         </ContactDragProvider>
       </CollectionVisibilityProvider>

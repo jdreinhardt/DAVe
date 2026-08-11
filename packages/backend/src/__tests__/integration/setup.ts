@@ -13,7 +13,7 @@ import { collectionsRoutes } from '../../routes/collections.js';
 import { contactsRoutes } from '../../routes/contacts.js';
 import { eventsRoutes } from '../../routes/events.js';
 import { syncRoutes } from '../../routes/sync.js';
-import type { DbInstance } from '../../db/index.js';
+import { applySessionSchema, type DbInstance } from '../../db/index.js';
 import { applySchema } from '../../db/cache.js';
 import type { CacheDbInstance } from '../../db/cache.js';
 import { SyncWorker } from '../../workers/syncWorker.js';
@@ -26,8 +26,26 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
 export const TEST_USER = process.env.TEST_USER ?? 'testuser';
 export const TEST_PASS = process.env.TEST_PASS ?? 'testpass';
 
+/**
+ * Which server this run targets. Both stacks seed the same user and the same
+ * two collections, so nothing below this line — and no test — should branch on
+ * it. If a test ever needs to, that difference is a portability finding worth
+ * surfacing rather than papering over.
+ *
+ * Note the two base URLs exercise genuinely different shapes: Baikal is served
+ * from a path (`/dav.php`) while Radicale is served from the root.
+ */
+export type DavServer = 'baikal' | 'radicale';
+export const DAV_SERVER: DavServer =
+  (process.env.DAV_SERVER as DavServer | undefined) ?? 'baikal';
+
+const DEFAULT_URLS: Record<DavServer, string> = {
+  baikal: 'http://localhost:8801/dav.php',
+  radicale: 'http://localhost:8802',
+};
+
 export const integrationConfig: Config = {
-  BAIKAL_BASE_URL: process.env.TEST_BAIKAL_URL ?? 'http://localhost:8801/dav.php',
+  DAV_BASE_URL: process.env.TEST_DAV_URL ?? DEFAULT_URLS[DAV_SERVER],
   SESSION_SECRET: 'integration-test-secret-32-chars!!',
   SESSION_TTL_HOURS: 1,
   PORT: 3001,
@@ -38,7 +56,7 @@ export const integrationConfig: Config = {
   SYNC_INTERVAL_SECONDS: 60,
   MAX_CACHED_ENTRIES_PER_USER: 10000,
   COMPLETED_TASK_RETENTION_DAYS: 7,
-  BAIKAL_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
+  DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
   EVENT_SEARCH_RANGE_DAYS: 60,
 };
 
@@ -50,16 +68,7 @@ export function getTestDb(): DbInstance {
   fs.mkdirSync(integrationConfig.DATA_DIR, { recursive: true });
   const dbPath = path.join(integrationConfig.DATA_DIR, 'sessions.sqlite');
   _db = new DatabaseSync(dbPath);
-  _db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id               TEXT    PRIMARY KEY,
-      data             TEXT    NOT NULL,
-      created_at       INTEGER NOT NULL,
-      last_activity_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_sessions_last_activity
-      ON sessions(last_activity_at);
-  `);
+  applySessionSchema(_db);
   return _db;
 }
 
@@ -98,7 +107,7 @@ export async function loginAndGetCookie(app: FastifyInstance): Promise<string> {
   if (res.statusCode !== 200) {
     throw new Error(
       `Integration login failed (${res.statusCode}): ${res.body}. ` +
-      `Is Baikal running at ${integrationConfig.BAIKAL_BASE_URL} with Basic auth and seeded?`,
+      `Is the DAV server running at ${integrationConfig.DAV_BASE_URL} with Basic auth and seeded?`,
     );
   }
   const setCookie = res.headers['set-cookie'];

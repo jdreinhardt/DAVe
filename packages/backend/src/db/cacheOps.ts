@@ -87,8 +87,27 @@ export function deleteEntryByObjectUrl(
 }
 
 /**
+ * Drop every cached entry belonging to one collection.
+ *
+ * Used when a sync token is rejected and the collection has to be rebuilt from
+ * scratch: a full sync-collection REPORT only lists members that still exist, so
+ * without clearing first, objects deleted while our token was stale would linger
+ * in the cache forever.
+ */
+export function deleteEntriesForCollection(
+  cacheDb: CacheDbInstance,
+  collectionUrl: string,
+  userId: string,
+): number {
+  const result = cacheDb
+    .prepare('DELETE FROM entries WHERE collection_url = ? AND user_id = ?')
+    .run(collectionUrl, userId) as { changes: number };
+  return result.changes;
+}
+
+/**
  * Evict completed VTODO entries whose COMPLETED timestamp is older than retentionDays.
- * They remain on Baikal; this is a cache-only eviction.
+ * They remain on the DAV server; this is a cache-only eviction.
  */
 export function evictOldCompleted(
   cacheDb: CacheDbInstance,

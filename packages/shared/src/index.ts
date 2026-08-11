@@ -29,9 +29,19 @@ export const SORT_DIR = ['asc', 'desc'] as const;
 export const CONTACT_SUBTITLE_FIELDS = ['nickname', 'email', 'phone', 'organization', 'title', ''] as const;
 export const MAP_SERVICES = ['osm', 'google', 'apple'] as const;
 export const DARK_MODES = ['light', 'dark', 'system'] as const;
-export const TASK_LAYOUTS = ['list', 'compact', 'kanban'] as const;
+export const TASK_LAYOUTS = ['list', 'compact', 'kanban', 'gantt'] as const;
 export const NOTES_VIEWS = ['list', 'grid'] as const;
 export const JOURNALS_VIEWS = ['timeline', 'list', 'calendar'] as const;
+// Which task date positions a task on the Calendar view's tasks layer.
+export const CALENDAR_TASK_DATES = ['due', 'dtstart', 'span'] as const;
+// Whether the Calendar view shows the tasks / journals overlay layer at all.
+export const CALENDAR_LAYER_TOGGLE = ['on', 'off'] as const;
+// FullCalendar view names the Calendar page opens in. Must stay in sync with the
+// views CalendarPage registers in its toolbar.
+export const CALENDAR_DEFAULT_VIEWS = ['dayGridMonth', 'timeGridWeek', 'timeGridDay'] as const;
+// Which top-level view "/" redirects to after login. Values are route paths
+// without the leading slash.
+export const HOME_VIEWS = ['contacts', 'calendar', 'tasks', 'notes', 'journals'] as const;
 
 export type SortBy = (typeof SORT_BY)[number];
 export type SortDir = (typeof SORT_DIR)[number];
@@ -41,6 +51,10 @@ export type DarkMode = (typeof DARK_MODES)[number];
 export type TaskLayout = (typeof TASK_LAYOUTS)[number];
 export type NotesView = (typeof NOTES_VIEWS)[number];
 export type JournalsView = (typeof JOURNALS_VIEWS)[number];
+export type CalendarTaskDate = (typeof CALENDAR_TASK_DATES)[number];
+export type CalendarLayerToggle = (typeof CALENDAR_LAYER_TOGGLE)[number];
+export type CalendarDefaultView = (typeof CALENDAR_DEFAULT_VIEWS)[number];
+export type HomeView = (typeof HOME_VIEWS)[number];
 
 // ── Collections ───────────────────────────────────────────────────────────────
 
@@ -294,6 +308,9 @@ export interface AddressBookSyncResult {
   syncToken: string;
   changed: Contact[];  // added + modified contacts
   deleted: string[];   // IDs of deleted contacts
+  // True when the server rejected our sync token and `changed` is therefore the
+  // whole collection rather than a delta. Clients must replace, not merge.
+  full: boolean;
 }
 
 export interface CalendarSyncResult {
@@ -390,11 +407,11 @@ export interface DeleteTaskResponse {
   childErrors?: Array<{ uid: string; error: string }>;
 }
 
-/** A completed task found via Baikal archive search (not in the local cache). */
+/** A completed task found via server-side archive search (not in the local cache). */
 export interface ArchivedTask {
   uid: string;
   etag: string;
-  url: string;           // full Baikal object URL — required for the restore PUT
+  url: string;           // full DAV object URL — required for the restore PUT
   collectionUrl: string;
   collectionId: string;
   data: TaskJson;

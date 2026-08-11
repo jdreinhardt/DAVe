@@ -6,9 +6,9 @@ import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
 import timeGridPlugin from '@fullcalendar/timegrid';
 import interactionPlugin from '@fullcalendar/interaction';
-import type { EventInput, DatesSetArg, EventClickArg } from '@fullcalendar/core';
-import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2 } from 'lucide-react';
-import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope } from '@dave/shared';
+import type { EventInput, DatesSetArg, EventClickArg, EventContentArg } from '@fullcalendar/core';
+import { X, MapPin, AlignLeft, Clock, Repeat, Users, Bell, Pencil, Trash2, CalendarDays, Flag, Tag, ChevronLeft, ChevronRight, ChevronDown, CalendarRange, CalendarClock } from 'lucide-react';
+import type { Calendar, CalendarEvent, EventJson, RecurrenceRule, AttendeeJson, RecurrenceScope, Task, TaskJson, TasksQueryParams, Note, NoteJson, JournalsQueryParams } from '@dave/shared';
 import {
   getCalendars,
   getCalendarEvents,
@@ -16,12 +16,34 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent,
 } from '../api/collections';
+import { fetchTasks, updateTask } from '../api/tasks';
+import { fetchJournals, updateJournal } from '../api/journals';
 import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
+import { useMobileHeaderTitle } from '../contexts/MobileHeader';
 import { useSettings } from '../contexts/Settings';
-import { cn, buildMapUrl } from '../lib/utils';
+import { cn, buildMapUrl, lightenHex, darkenHex } from '../lib/utils';
+import DateJumpButton, { useDateJumper } from '../components/DateJumper';
 import EventEditForm, { emptyEventJson } from '../components/EventEditForm';
+import TaskEditForm from '../components/TaskEditForm';
+import { taskToFcEvent, journalToFcEvent, computeTaskDrop, computeJournalDrop } from '../lib/calendarLayers';
 import { useHotkey } from '../hooks/useHotkey';
+
+// Small localStorage helpers for persisting the calendar's current view + date.
+function readLs(key: string, fallback: string): string {
+  try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
+}
+function writeLs(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* ignore */ }
+}
+
+// The views FullCalendar is configured with, in toolbar order. Shared by the
+// desktop headerToolbar button list and the mobile view menu.
+const CALENDAR_VIEWS = [
+  { type: 'dayGridMonth', label: 'Month', Icon: CalendarDays },
+  { type: 'timeGridWeek', label: 'Week', Icon: CalendarRange },
+  { type: 'timeGridDay', label: 'Day', Icon: CalendarClock },
+] as const;
 
 function formatAlarmTrigger(trigger: string): string {
   const negative = trigger.startsWith('-');
@@ -204,20 +226,42 @@ function errorMessage(e: unknown, is412Special = false): string {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function CalendarPage() {
-  const { hiddenCalendars } = useCollectionVisibility();
+  const { hiddenCalendars, hiddenCalendarTasks, hiddenCalendarJournals } = useCollectionVisibility();
+  const { calendarTaskDate, calendarShowTasks, calendarShowJournals, calendarDefaultView } = useSettings();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
   const location = useLocation();
   const navigate = useNavigate();
   const calRef = useRef<FullCalendar>(null);
+  // Restore the view type + date the user last had, so leaving and returning to
+  // the Calendar tab doesn't reset to the current month. Read once on mount.
+  // With nothing remembered, fall back to the configured default view.
+  const initialCalView = useRef<string>(readLs('calendar.view', calendarDefaultView));
+  const initialCalDate = useRef<string | undefined>(readLs('calendar.date', '') || undefined);
   const [pendingSelectEventId, setPendingSelectEventId] = useState<string | null>(null);
+  // Mirrors of FullCalendar's own view state, kept in sync from datesSet. The mobile
+  // toolbar is ours rather than FullCalendar's, so it needs these to render.
+  const [viewType, setViewType] = useState<string>(initialCalView.current);
+  const [viewTitle, setViewTitle] = useState('');
+  const [todayEnabled, setTodayEnabled] = useState(false);
+
+  // On mobile the date range lives in the app header instead of the calendar's own
+  // toolbar, which frees that row for the nav cluster and the view menu.
+  useMobileHeaderTitle(viewTitle || null);
+
+  const gotoDate = useCallback((date: string) => calRef.current?.getApi().gotoDate(date), []);
+  // Desktop's toolbar is FullCalendar's, so the jump button there is a customButton
+  // and only the hidden input is ours. Mobile uses the whole DateJumpButton.
+  const desktopJumper = useDateJumper(gotoDate);
 
   const [dateRange, setDateRange] = useState<{ start: string; end: string } | null>(null);
   const [popup, setPopup] = useState<PopupData | null>(null);
   const [editModal, setEditModal] = useState<EditModalState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CalendarEvent | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
+  const [taskEdit, setTaskEdit] = useState<Task | null>(null);
+  const [taskPopup, setTaskPopup] = useState<Task | null>(null);
 
   // Pending scope confirmation: when a recurring event is about to be edited or
   // deleted, we park the action here and show the scope dialog first.
@@ -259,7 +303,86 @@ export default function CalendarPage() {
     })),
   });
 
-  const isLoadingEvents = dateRange !== null && eventQueries.some((q) => q.isFetching);
+  // ── Tasks layer ────────────────────────────────────────────────────────────
+  // Calendars that support VTODO and whose nested task layer is visible. When the
+  // tasks layer is globally disabled in settings, this is empty (query disabled).
+  const taskVisibleCalendars = useMemo(
+    () =>
+      calendarShowTasks === 'off'
+        ? []
+        : (calQuery.data ?? []).filter(
+            (cal) => cal.components.includes('VTODO') && !hiddenCalendarTasks.has(cal.id),
+          ),
+    [calQuery.data, hiddenCalendarTasks, calendarShowTasks],
+  );
+
+  // All VTODO-capable calendars (regardless of task-layer visibility) — used by
+  // the task editor's move-to-collection selector.
+  const vtodoCalendars = useMemo(
+    () => (calQuery.data ?? []).filter((cal) => cal.components.includes('VTODO')),
+    [calQuery.data],
+  );
+
+  const taskParams = useMemo<TasksQueryParams>(() => {
+    const urls = taskVisibleCalendars.map((c) => c.url);
+    return { collections: urls.length > 0 ? urls.join(',') : undefined, order: 'asc' };
+  }, [taskVisibleCalendars]);
+
+  const tasksQuery = useQuery({
+    // Shares the ['tasks', …] key prefix with the Tasks tab, so task mutations
+    // anywhere (and the background sync worker) refresh this layer automatically.
+    queryKey: ['tasks', taskParams],
+    queryFn: () => fetchTasks(taskParams),
+    enabled: taskVisibleCalendars.length > 0,
+    staleTime: 30_000,
+  });
+
+  const allTasks = useMemo(() => tasksQuery.data?.tasks ?? [], [tasksQuery.data]);
+
+  // collectionId → calendar, for coloring task/journal tiles by their source calendar.
+  const calendarById = useMemo(() => {
+    const m = new Map<string, Calendar>();
+    for (const cal of calQuery.data ?? []) m.set(cal.id, cal);
+    return m;
+  }, [calQuery.data]);
+
+  // ── Journals layer ─────────────────────────────────────────────────────────
+  // Calendars that support VJOURNAL and whose nested journal layer is visible. When
+  // the journals layer is globally disabled in settings, this is empty (query off).
+  const journalVisibleCalendars = useMemo(
+    () =>
+      calendarShowJournals === 'off'
+        ? []
+        : (calQuery.data ?? []).filter(
+            (cal) => cal.components.includes('VJOURNAL') && !hiddenCalendarJournals.has(cal.id),
+          ),
+    [calQuery.data, hiddenCalendarJournals, calendarShowJournals],
+  );
+
+  const journalParams = useMemo<JournalsQueryParams | null>(() => {
+    if (!dateRange || journalVisibleCalendars.length === 0) return null;
+    return {
+      collections: journalVisibleCalendars.map((c) => c.url).join(','),
+      from: dateRange.start.substring(0, 10),
+      to: dateRange.end.substring(0, 10),
+    };
+  }, [journalVisibleCalendars, dateRange]);
+
+  const journalsQuery = useQuery({
+    // Shares the ['journals', …] key prefix with the Journals tab, so journal
+    // mutations anywhere (and the sync worker) refresh this layer automatically.
+    queryKey: ['journals', 'calendar', journalParams],
+    queryFn: () => fetchJournals(journalParams!),
+    enabled: journalParams !== null,
+    staleTime: 30_000,
+  });
+
+  const allJournals = useMemo(() => journalsQuery.data?.journals ?? [], [journalsQuery.data]);
+
+  const isLoadingEvents =
+    (dateRange !== null && eventQueries.some((q) => q.isFetching)) ||
+    tasksQuery.isFetching ||
+    journalsQuery.isFetching;
 
   // ── Toast helper ─────────────────────────────────────────────────────────
 
@@ -350,6 +473,27 @@ export default function CalendarPage() {
     },
   });
 
+  const updateTaskMutation = useMutation({
+    mutationFn: ({ task, data }: { task: Task; data: TaskJson }) =>
+      updateTask(task.data.uid, data, task.etag),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      setTaskEdit(null);
+      showToast('Task saved');
+    },
+    onError: (e) => showToast(errorMessage(e, true), 'err'),
+  });
+
+  const updateJournalMutation = useMutation({
+    mutationFn: ({ journal, data }: { journal: Note; data: NoteJson }) =>
+      updateJournal(journal.uid, data, journal.etag),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['journals'] });
+      showToast('Journal saved');
+    },
+    onError: (e) => showToast(errorMessage(e, true), 'err'),
+  });
+
   const allLoadedEvents = useMemo(
     () => visibleCalendars.flatMap((cal, i) => (eventQueries[i]?.data ?? []).map((ev) => ({ cal, ev }))),
     [eventQueries, visibleCalendars],
@@ -368,7 +512,7 @@ export default function CalendarPage() {
   // ── FullCalendar event mapping ─────────────────────────────────────────────
 
   const fcEvents = useMemo<EventInput[]>(() => {
-    return visibleCalendars.flatMap((cal, i) => {
+    const eventInputs = visibleCalendars.flatMap((cal, i) => {
       const events = eventQueries[i]?.data ?? [];
       return events.map((ev) => ({
         id: `${cal.id}::${ev.id}::${ev.data.start}`,
@@ -386,7 +530,41 @@ export default function CalendarPage() {
         },
       }));
     });
-  }, [visibleCalendars, eventQueries]);
+
+    const taskInputs = allTasks.flatMap((task) => {
+      // Tint tasks a slightly lighter shade of their calendar's color so they
+      // read as related to that calendar but distinct from its events.
+      const color = lightenHex(calendarById.get(task.collectionId)?.color ?? '#6C757D');
+      const input = taskToFcEvent(task, color, calendarTaskDate);
+      return input ? [input] : [];
+    });
+
+    const journalInputs = allJournals.flatMap((journal) => {
+      // Journals are tinted a shade darker than their calendar (mirror of tasks,
+      // which are lighter) so the three layers are easy to tell apart.
+      const color = darkenHex(calendarById.get(journal.collectionId)?.color ?? '#6C757D');
+      const input = journalToFcEvent(journal, color);
+      return input ? [input] : [];
+    });
+
+    return [...eventInputs, ...taskInputs, ...journalInputs];
+  }, [visibleCalendars, eventQueries, allTasks, allJournals, calendarById, calendarTaskDate]);
+
+  // ── Distinct rendering for the task layer ──────────────────────────────────
+  // We deliberately do NOT override `eventContent`: returning undefined from a
+  // global eventContent callback does not fall back to FullCalendar's default
+  // rendering (it renders empty), which collapses real events to a colored line.
+  // Instead, tasks are distinguished with CSS classes (checkbox glyph + dimming);
+  // see `.dave-task-tile` in index.css.
+  const getEventClassNames = useCallback((arg: EventContentArg) => {
+    const type = arg.event.extendedProps.componentType;
+    if (type === 'journal') return ['dave-journal-tile'];
+    if (type !== 'task') return [];
+    const task = arg.event.extendedProps.task as Task;
+    return task.data.status === 'COMPLETED'
+      ? ['dave-task-tile', 'dave-task-done']
+      : ['dave-task-tile'];
+  }, []);
 
   // ── Scope dialog confirm ──────────────────────────────────────────────────
 
@@ -421,6 +599,16 @@ export default function CalendarPage() {
 
   const handleDatesSet = (arg: DatesSetArg) => {
     setDateRange({ start: arg.start.toISOString(), end: arg.end.toISOString() });
+    setViewType(arg.view.type);
+    setViewTitle(arg.view.title);
+    // Mirrors FullCalendar's own isTodayEnabled: Today is inert while the view we're
+    // looking at already contains today. currentStart/currentEnd (not arg.start/end)
+    // so a month view doesn't count today showing as a greyed-out trailing day.
+    const now = new Date();
+    setTodayEnabled(now < arg.view.currentStart || now >= arg.view.currentEnd);
+    // Remember where the user is so we can restore it after navigating away.
+    writeLs('calendar.view', arg.view.type);
+    writeLs('calendar.date', arg.view.currentStart.toISOString());
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -451,6 +639,16 @@ export default function CalendarPage() {
 
   const handleEventClick = (arg: EventClickArg) => {
     arg.jsEvent.preventDefault();
+    if (arg.event.extendedProps.componentType === 'task') {
+      setTaskPopup(arg.event.extendedProps.task as Task);
+      return;
+    }
+    if (arg.event.extendedProps.componentType === 'journal') {
+      // Journals are edited in the Journals tab; open there with this entry selected.
+      const journal = arg.event.extendedProps.journal as Note;
+      navigate('/journals', { state: { selectUid: journal.uid } });
+      return;
+    }
     const { calendarEvent, calendar } = arg.event.extendedProps as {
       eventData: EventJson;
       calendarEvent: CalendarEvent;
@@ -461,6 +659,26 @@ export default function CalendarPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEventDrop = (arg: any) => {
+    // Task tiles reschedule the anchor date(s) per the configured basis.
+    if (arg.event.extendedProps.componentType === 'task') {
+      const task = arg.event.extendedProps.task as Task;
+      const newStart = (arg.event.startStr as string).substring(0, 10);
+      const data = computeTaskDrop(task.data, calendarTaskDate, newStart);
+      if (!data) { arg.revert(); return; } // span task with no anchor date
+      updateTaskMutation.mutate({ task, data }, { onError: () => arg.revert() });
+      return;
+    }
+
+    // Journal tiles reschedule DTSTART to the dropped day (preserving any time).
+    if (arg.event.extendedProps.componentType === 'journal') {
+      const journal = arg.event.extendedProps.journal as Note;
+      if (!journal.data.dtstart) { arg.revert(); return; }
+      const newStart = (arg.event.startStr as string).substring(0, 10);
+      const data = computeJournalDrop(journal.data, newStart);
+      updateJournalMutation.mutate({ journal, data }, { onError: () => arg.revert() });
+      return;
+    }
+
     const { calendarEvent, eventData } = arg.event.extendedProps as {
       eventData: EventJson;
       calendarEvent: CalendarEvent;
@@ -487,6 +705,9 @@ export default function CalendarPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleEventResize = (arg: any) => {
+    // Tasks and journals render as all-day markers; no resize.
+    const ct = arg.event.extendedProps.componentType;
+    if (ct === 'task' || ct === 'journal') { arg.revert(); return; }
     const { calendarEvent, eventData } = arg.event.extendedProps as {
       eventData: EventJson;
       calendarEvent: CalendarEvent;
@@ -565,6 +786,8 @@ export default function CalendarPage() {
   useHotkey('n', handleNewEvent);
 
   useHotkey('Escape', () => {
+    if (taskEdit) { setTaskEdit(null); return; }
+    if (taskPopup) { setTaskPopup(null); return; }
     if (editModal) { setEditModal(null); return; }
     if (popup) { setPopup(null); return; }
     if (deleteTarget) { setDeleteTarget(null); return; }
@@ -575,30 +798,55 @@ export default function CalendarPage() {
 
   return (
     <div className="h-full flex flex-col p-2 md:p-4 relative">
-      {/* Sync indicator */}
-      {isLoadingEvents && (
+      {/* Sync indicator. Desktop only — on mobile it would land on top of the view
+          menu, so the mobile toolbar renders its own inline copy instead. */}
+      {isLoadingEvents && !isMobile && (
         <div className="absolute top-2 right-4 z-10 text-xs text-muted-foreground flex items-center gap-1.5">
           <span className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse" />
           Syncing…
         </div>
       )}
 
+      {!isMobile && desktopJumper.input}
+
+      {isMobile && (
+        <MobileCalendarToolbar
+          viewType={viewType}
+          syncing={isLoadingEvents}
+          todayEnabled={todayEnabled}
+          onPrev={() => calRef.current?.getApi().prev()}
+          onToday={() => calRef.current?.getApi().today()}
+          onNext={() => calRef.current?.getApi().next()}
+          onChangeView={(v) => calRef.current?.getApi().changeView(v)}
+          onJumpToDate={gotoDate}
+        />
+      )}
+
       <div className="flex-1 overflow-hidden">
         <FullCalendar
           ref={calRef}
           plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-          initialView="dayGridMonth"
-          headerToolbar={isMobile ? {
-            left: 'prev,next',
+          initialView={initialCalView.current}
+          initialDate={initialCalDate.current}
+          // Mobile gets MobileCalendarToolbar above instead — one row rather than two.
+          headerToolbar={isMobile ? false : {
+            left: 'prev,today,next',
             center: 'title',
-            right: 'dayGridMonth,timeGridDay',
-          } : {
-            left: 'prev,next today',
-            center: 'title',
-            right: 'dayGridMonth,timeGridWeek,timeGridDay',
+            // Space, not comma: jumpTo stands alone ahead of the view group, mirroring
+            // where MobileCalendarToolbar puts it.
+            right: `jumpTo ${CALENDAR_VIEWS.map((v) => v.type).join(',')}`,
+          }}
+          customButtons={{
+            // No text: the icon comes from a CSS mask on .fc-jumpTo-button (index.css),
+            // since customButtons can't render an element. `hint` becomes the button's
+            // title attribute, which is its only accessible name. FullCalendar hands
+            // the click handler the button element — pass it along so the date picker
+            // opens under the button rather than wherever the hidden input sits.
+            jumpTo: { hint: 'Jump to date', click: (_ev, el) => desktopJumper.open(el) },
           }}
           buttonText={{ today: 'Today', month: 'Month', week: 'Week', day: 'Day' }}
           events={fcEvents}
+          eventClassNames={getEventClassNames}
           datesSet={handleDatesSet}
           eventClick={handleEventClick}
           dateClick={handleDateClick}
@@ -610,7 +858,7 @@ export default function CalendarPage() {
           unselectAuto={true}
           height="100%"
           eventDisplay="block"
-          dayMaxEvents={4}
+          dayMaxEvents={true}
         />
       </div>
 
@@ -667,6 +915,47 @@ export default function CalendarPage() {
         />
       )}
 
+      {/* Task detail popup — minimal read-only view, mirrors EventPopup */}
+      {taskPopup && !taskEdit && (
+        <TaskPopup
+          task={taskPopup}
+          calendar={calendarById.get(taskPopup.collectionId) ?? null}
+          onClose={() => setTaskPopup(null)}
+          onEdit={() => { setTaskEdit(taskPopup); setTaskPopup(null); }}
+        />
+      )}
+
+      {/* Task editor modal — wrapped in the same centered modal shell as the
+          event editor so it reads as a popup rather than a full-page view.
+          TaskEditForm renders only its content (no overlay of its own). */}
+      {taskEdit && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setTaskEdit(null)}
+        >
+          <div
+            className="bg-background rounded-lg shadow-xl border border-border w-full max-w-lg mx-4 flex flex-col max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="h-1.5 w-full rounded-t-lg shrink-0"
+              style={{ backgroundColor: lightenHex(calendarById.get(taskEdit.collectionId)?.color ?? '#0082C9') }}
+            />
+            <div className="flex-1 overflow-y-auto min-h-0">
+              <TaskEditForm
+                initial={taskEdit.data}
+                calendars={vtodoCalendars}
+                isNew={false}
+                saving={updateTaskMutation.isPending}
+                onSave={(data) => updateTaskMutation.mutate({ task: taskEdit, data })}
+                onCancel={() => setTaskEdit(null)}
+                allTasks={allTasks}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete confirmation */}
       {deleteTarget && (
         <div
@@ -716,7 +1005,7 @@ export default function CalendarPage() {
       {toast && (
         <div
           className={cn(
-            'fixed bottom-4 right-4 z-[70] rounded-lg px-4 py-2.5 text-sm shadow-lg',
+            'fixed bottom-20 md:bottom-4 right-4 z-[70] rounded-lg px-4 py-2.5 text-sm shadow-lg',
             toast.type === 'ok'
               ? 'bg-background border border-border text-foreground'
               : 'bg-destructive text-destructive-foreground',
@@ -725,6 +1014,117 @@ export default function CalendarPage() {
           {toast.msg}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Mobile toolbar ────────────────────────────────────────────────────────────
+
+/**
+ * Replaces FullCalendar's built-in header on phones, where it wraps onto two rows
+ * and still can't fit every view button. Everything lives on one row: a grouped
+ * ‹ Today › cluster on the left, and a menu on the right whose trigger shows the
+ * active view, so Week is reachable again without spending the width on a third
+ * button. The date range is pushed into the app header (see useMobileHeaderTitle).
+ */
+function MobileCalendarToolbar({
+  viewType,
+  syncing,
+  todayEnabled,
+  onPrev,
+  onToday,
+  onNext,
+  onChangeView,
+  onJumpToDate,
+}: {
+  viewType: string;
+  syncing: boolean;
+  todayEnabled: boolean;
+  onPrev: () => void;
+  onToday: () => void;
+  onNext: () => void;
+  onChangeView: (view: string) => void;
+  onJumpToDate: (date: string) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const active = CALENDAR_VIEWS.find((v) => v.type === viewType) ?? CALENDAR_VIEWS[0];
+  const ActiveIcon = active.Icon;
+
+  const navBtn = 'flex items-center justify-center px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors';
+
+  return (
+    <div className="flex items-center gap-2 pb-2">
+      {/* ‹ Today › — one segmented cluster, thumb-reachable on the left */}
+      <div className="flex items-center rounded-md border border-input divide-x divide-input overflow-hidden">
+        <button type="button" onClick={onPrev} aria-label="Previous" className={navBtn}>
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onToday}
+          disabled={!todayEnabled}
+          // 0.65 is FullCalendar's own disabled opacity, so the two toolbars dim to
+          // the same degree.
+          className={cn(navBtn, 'text-sm disabled:opacity-65 disabled:hover:bg-transparent')}
+        >
+          Today
+        </button>
+        <button type="button" onClick={onNext} aria-label="Next" className={navBtn}>
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="ml-auto flex items-center gap-2">
+        {syncing && (
+          <span
+            className="inline-block h-2 w-2 rounded-full bg-primary animate-pulse"
+            aria-label="Syncing"
+          />
+        )}
+
+        <DateJumpButton onPick={onJumpToDate} />
+
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-label="Change view"
+            className="flex h-8 items-center gap-1.5 rounded-md border border-input px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            <ActiveIcon className="h-4 w-4" />
+            {active.label}
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', menuOpen && 'rotate-180')} />
+          </button>
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+              {/* right-0: the trigger sits at the right edge, so anchoring left would
+                  push the panel off-screen. */}
+              <div className="absolute right-0 top-full mt-1 z-20 w-36 rounded-md border border-border bg-background shadow-lg py-1 text-sm">
+                {CALENDAR_VIEWS.map(({ type, label, Icon }) => (
+                  <button
+                    key={type}
+                    type="button"
+                    aria-current={type === viewType}
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onChangeView(type);
+                    }}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-muted',
+                      type === viewType && 'bg-primary/10 text-primary',
+                    )}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -949,6 +1349,144 @@ function EventPopup({
                   </p>
                 )}
               </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Task detail popup ─────────────────────────────────────────────────────────
+
+function formatTaskDate(iso: string): string {
+  // Task dates may be date-only ('YYYY-MM-DD') or datetime; treat the former as all-day.
+  return formatEventTime(iso, !iso.includes('T'));
+}
+
+function priorityLabel(p: number): string {
+  if (p >= 1 && p <= 3) return 'High';
+  if (p >= 4 && p <= 6) return 'Medium';
+  return 'Low';
+}
+
+function taskStatusStyle(status: string | null): { label: string; cls: string } {
+  switch (status) {
+    case 'COMPLETED':  return { label: 'Completed',   cls: 'bg-green-500/15 text-green-600 dark:text-green-400' };
+    case 'IN-PROCESS': return { label: 'In progress', cls: 'bg-blue-500/15 text-blue-600 dark:text-blue-400' };
+    case 'CANCELLED':  return { label: 'Cancelled',   cls: 'bg-muted text-muted-foreground line-through' };
+    default:           return { label: 'To do',       cls: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' };
+  }
+}
+
+function TaskPopup({
+  task,
+  calendar,
+  onClose,
+  onEdit,
+}: {
+  task: Task;
+  calendar: Calendar | null;
+  onClose: () => void;
+  onEdit: () => void;
+}) {
+  const t = task.data;
+  const accent = calendar ? lightenHex(calendar.color) : '#6C757D';
+  const status = taskStatusStyle(t.status);
+  const done = t.status === 'COMPLETED';
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="bg-background rounded-lg shadow-xl border border-border w-full max-w-sm mx-4 overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Task colour accent bar */}
+        <div className="h-1.5 w-full" style={{ backgroundColor: accent }} />
+
+        <div className="p-4 space-y-3">
+          {/* Title + actions */}
+          <div className="flex items-start justify-between gap-3">
+            <h3 className={cn('font-semibold text-base leading-snug', done && 'line-through text-muted-foreground')}>
+              {t.summary || '(No title)'}
+            </h3>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                onClick={onEdit}
+                className="rounded p-1 text-muted-foreground hover:bg-muted"
+                title="Edit task"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={onClose}
+                className="rounded p-0.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Calendar label + status badge */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {calendar && (
+              <>
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: accent }}
+                />
+                <span className="text-xs text-muted-foreground">{calendar.displayName}</span>
+              </>
+            )}
+            <span className={cn('text-xs rounded px-1.5 py-0.5', status.cls)}>{status.label}</span>
+          </div>
+
+          {/* Due */}
+          {t.due && (
+            <div className="flex items-center gap-2 text-sm">
+              <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span>Due {formatTaskDate(t.due)}</span>
+            </div>
+          )}
+
+          {/* Start */}
+          {t.dtstart && (
+            <div className="flex items-center gap-2 text-sm">
+              <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span>Starts {formatTaskDate(t.dtstart)}</span>
+            </div>
+          )}
+
+          {/* Priority */}
+          {t.priority != null && (
+            <div className="flex items-center gap-2 text-sm">
+              <Flag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="text-muted-foreground">{priorityLabel(t.priority)} priority</span>
+            </div>
+          )}
+
+          {/* Categories */}
+          {t.categories.length > 0 && (
+            <div className="flex items-start gap-2 text-sm">
+              <Tag className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+              <div className="flex flex-wrap gap-1">
+                {t.categories.map((c) => (
+                  <span key={c} className="text-xs rounded bg-muted px-1.5 py-0.5">{c}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Description (truncated) */}
+          {t.description && (
+            <div className="flex items-start gap-2 text-sm">
+              <AlignLeft className="h-3.5 w-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+              <p className="whitespace-pre-wrap break-words text-muted-foreground leading-relaxed line-clamp-4">
+                {t.description}
+              </p>
             </div>
           )}
         </div>

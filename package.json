@@ -1,7 +1,8 @@
 {
   "name": "dave",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -9,10 +10,20 @@
   "scripts": {
     "dev": "concurrently -n backend,frontend -c cyan,green \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
     "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
+    "start": "NODE_ENV=production node --env-file=.env packages/backend/dist/server.js",
     "test": "npm test --workspaces --if-present",
     "test:integration": "vitest run --config packages/backend/vitest.integration.config.ts",
+    "test:integration:baikal": "DAV_SERVER=baikal npm run test:integration",
+    "test:integration:radicale": "DAV_SERVER=radicale npm run test:integration",
+    "test:integration:all": "npm run test:integration:baikal && npm run test:integration:radicale",
     "test:e2e": "playwright test",
+    "test:e2e:baikal": "DAV_SERVER=baikal playwright test",
+    "test:e2e:radicale": "DAV_SERVER=radicale playwright test",
+    "test:e2e:all": "npm run test:e2e:baikal && npm run test:e2e:radicale",
     "test:e2e:ui": "playwright test --ui",
+    "stack:baikal": "docker compose -f docker-compose.test.baikal.yml up --wait",
+    "stack:radicale": "docker compose -f docker-compose.test.radicale.yml up --wait",
+    "stack:down": "docker compose -f docker-compose.test.baikal.yml down -v && docker compose -f docker-compose.test.radicale.yml down -v",
     "lint": "eslint packages/*/src",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
