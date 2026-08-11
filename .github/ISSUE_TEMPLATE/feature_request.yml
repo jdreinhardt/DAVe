@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest new functionality or an improvement
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [docs/ROADMAP.md](https://github.com/jdreinhardt/dave/blob/main/docs/ROADMAP.md)
+        first — if it's already planned, a 👍 or a comment on scope is more useful than a new issue.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the workflow or situation where DAVe falls short today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you'd like to happen. Mockups or examples from other clients welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: interop
+    attributes:
+      label: Interoperability considerations
+      description: >
+        DAVe targets standard CalDAV/CardDAV and must round-trip cleanly with other clients
+        (DAVx⁵, jtx Board) on both Baikal and Radicale. If the feature touches stored data,
+        how should it behave for other clients reading the same collections?

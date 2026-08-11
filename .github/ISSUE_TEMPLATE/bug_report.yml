@@ -1,0 +1,68 @@
+name: Bug report
+description: Something in DAVe doesn't work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Before posting, please redact anything personal from logs and
+        screenshots: server URLs, usernames, credentials, and real calendar/contact data.
+        **Security issues:** do not open an issue — use
+        [private vulnerability reporting](https://github.com/jdreinhardt/dave/security/advisories/new) instead.
+  - type: input
+    id: version
+    attributes:
+      label: DAVe version
+      description: Release tag, commit hash, or image digest (`docker image inspect ghcr.io/jdreinhardt/dave`)
+      placeholder: v0.3.0 / commit c86a202 / sha256:…
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Docker (ghcr.io image)
+        - Docker (built from source)
+        - Bare Node (npm start)
+        - Dev environment (npm run dev)
+    validations:
+      required: true
+  - type: dropdown
+    id: dav-server
+    attributes:
+      label: DAV server
+      options:
+        - Baikal
+        - Radicale
+        - Other (give details below)
+    validations:
+      required: true
+  - type: input
+    id: dav-server-version
+    attributes:
+      label: DAV server version / details
+      placeholder: e.g. Baikal 0.10.1 behind nginx, Basic auth
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: |
+        1. Go to…
+        2. Click…
+        Expected: …
+        Actual: …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Backend logs and/or browser console output. **Redact URLs, usernames, and personal data.**
+      render: text
+  - type: input
+    id: browser
+    attributes:
+      label: Browser / client
+      placeholder: e.g. Firefox 142 on Linux, Safari on iOS 19
