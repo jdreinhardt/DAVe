@@ -24,12 +24,13 @@ export default function LoginPage() {
     onSuccess: async () => {
       // Invalidate the me cache so AppLayout re-fetches with fresh session.
       await queryClient.invalidateQueries({ queryKey: ['me'] });
-      navigate('/contacts', { replace: true });
+      // "/" resolves the configured home view — LoginPage sits outside SettingsProvider.
+      navigate('/', { replace: true });
     },
   });
 
   if (meQuery.isSuccess) {
-    return <Navigate to="/contacts" replace />;
+    return <Navigate to="/" replace />;
   }
 
   const handleSubmit = (e: React.FormEvent) => {

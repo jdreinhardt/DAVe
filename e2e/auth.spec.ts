@@ -16,8 +16,10 @@ test.describe('Authentication', () => {
     await expect(page).toHaveURL(/\/login/);
   });
 
-  test('valid credentials land on the contacts page', async ({ page }) => {
+  test('valid credentials land on the default home view', async ({ page }) => {
     await formLogin(page);
+    // Contacts is the shipped default for homeView; see the settings spec for
+    // the case where the account has configured something else.
     await expect(page).toHaveURL(/\/contacts/);
     // Sidebar and contact list are present
     await expect(page.getByPlaceholder('Search contacts…')).toBeVisible();

@@ -227,7 +227,7 @@ function errorMessage(e: unknown, is412Special = false): string {
 
 export default function CalendarPage() {
   const { hiddenCalendars, hiddenCalendarTasks, hiddenCalendarJournals } = useCollectionVisibility();
-  const { calendarTaskDate, calendarShowTasks, calendarShowJournals } = useSettings();
+  const { calendarTaskDate, calendarShowTasks, calendarShowJournals, calendarDefaultView } = useSettings();
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
 
@@ -236,7 +236,8 @@ export default function CalendarPage() {
   const calRef = useRef<FullCalendar>(null);
   // Restore the view type + date the user last had, so leaving and returning to
   // the Calendar tab doesn't reset to the current month. Read once on mount.
-  const initialCalView = useRef<string>(readLs('calendar.view', 'dayGridMonth'));
+  // With nothing remembered, fall back to the configured default view.
+  const initialCalView = useRef<string>(readLs('calendar.view', calendarDefaultView));
   const initialCalDate = useRef<string | undefined>(readLs('calendar.date', '') || undefined);
   const [pendingSelectEventId, setPendingSelectEventId] = useState<string | null>(null);
   // Mirrors of FullCalendar's own view state, kept in sync from datesSet. The mobile

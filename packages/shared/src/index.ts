@@ -36,6 +36,12 @@ export const JOURNALS_VIEWS = ['timeline', 'list', 'calendar'] as const;
 export const CALENDAR_TASK_DATES = ['due', 'dtstart', 'span'] as const;
 // Whether the Calendar view shows the tasks / journals overlay layer at all.
 export const CALENDAR_LAYER_TOGGLE = ['on', 'off'] as const;
+// FullCalendar view names the Calendar page opens in. Must stay in sync with the
+// views CalendarPage registers in its toolbar.
+export const CALENDAR_DEFAULT_VIEWS = ['dayGridMonth', 'timeGridWeek', 'timeGridDay'] as const;
+// Which top-level view "/" redirects to after login. Values are route paths
+// without the leading slash.
+export const HOME_VIEWS = ['contacts', 'calendar', 'tasks', 'notes', 'journals'] as const;
 
 export type SortBy = (typeof SORT_BY)[number];
 export type SortDir = (typeof SORT_DIR)[number];
@@ -47,6 +53,8 @@ export type NotesView = (typeof NOTES_VIEWS)[number];
 export type JournalsView = (typeof JOURNALS_VIEWS)[number];
 export type CalendarTaskDate = (typeof CALENDAR_TASK_DATES)[number];
 export type CalendarLayerToggle = (typeof CALENDAR_LAYER_TOGGLE)[number];
+export type CalendarDefaultView = (typeof CALENDAR_DEFAULT_VIEWS)[number];
+export type HomeView = (typeof HOME_VIEWS)[number];
 
 // ── Collections ───────────────────────────────────────────────────────────────
 

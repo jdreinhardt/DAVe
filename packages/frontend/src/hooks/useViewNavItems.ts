@@ -20,6 +20,39 @@ export const VIEW_NAV_ITEMS: ViewNavItem[] = [
   { to: '/journals', label: 'Journals', Icon: ScrollText },
 ];
 
+export interface ViewCapabilities {
+  /** False while the calendars query is still in flight. */
+  calsLoaded: boolean;
+  hasVTodo: boolean;
+  hasVJournal: boolean;
+}
+
+/**
+ * Which optional components the account's calendars advertise. Callers use this
+ * to decide whether Tasks / Notes / Journals are reachable at all.
+ */
+export function useViewCapabilities(): ViewCapabilities {
+  const calQuery = useQuery({
+    queryKey: ['calendars'],
+    queryFn: getCalendars,
+    staleTime: 5 * 60_000,
+  });
+
+  return {
+    calsLoaded: calQuery.data !== undefined,
+    hasVTodo: (calQuery.data ?? []).some((c) => c.components.includes('VTODO')),
+    hasVJournal: (calQuery.data ?? []).some((c) => c.components.includes('VJOURNAL')),
+  };
+}
+
+/** True when `to` (a VIEW_NAV_ITEMS route) is backed by a supporting collection. */
+export function isViewSupported(to: string, caps: ViewCapabilities): boolean {
+  if (to === '/tasks') return caps.hasVTodo;
+  // Notes and Journals share the same VJOURNAL collections.
+  if (to === '/notes' || to === '/journals') return caps.hasVJournal;
+  return true;
+}
+
 /**
  * The views to show right now. Shared by the desktop sidebar and the mobile
  * bottom bar so the two can never disagree.
@@ -31,24 +64,14 @@ export const VIEW_NAV_ITEMS: ViewNavItem[] = [
  * everything to avoid a flicker for the common case where support does exist.
  */
 export function useViewNavItems(): ViewNavItem[] {
-  const calQuery = useQuery({
-    queryKey: ['calendars'],
-    queryFn: getCalendars,
-    staleTime: 5 * 60_000,
-  });
+  const caps = useViewCapabilities();
+  const { calsLoaded } = caps;
 
   const { pathname } = useLocation();
-
-  const calsLoaded = calQuery.data !== undefined;
-  const hasVTodo = (calQuery.data ?? []).some((c) => c.components.includes('VTODO'));
-  const hasVJournal = (calQuery.data ?? []).some((c) => c.components.includes('VJOURNAL'));
 
   return VIEW_NAV_ITEMS.filter((item) => {
     if (!calsLoaded) return true;
     if (pathname.startsWith(item.to)) return true;
-    if (item.to === '/tasks') return hasVTodo;
-    // Notes and Journals share the same VJOURNAL collections.
-    if (item.to === '/notes' || item.to === '/journals') return hasVJournal;
-    return true;
+    return isViewSupported(item.to, caps);
   });
 }

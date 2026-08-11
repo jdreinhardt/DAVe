@@ -64,6 +64,8 @@ export function applySessionSchema(db: DbInstance): void {
       calendar_task_date TEXT  NOT NULL DEFAULT 'due',
       calendar_show_tasks    TEXT NOT NULL DEFAULT 'on',
       calendar_show_journals TEXT NOT NULL DEFAULT 'on',
+      calendar_default_view  TEXT NOT NULL DEFAULT 'dayGridMonth',
+      home_view        TEXT    NOT NULL DEFAULT 'contacts',
       updated_at       INTEGER NOT NULL DEFAULT 0
     );
 
@@ -85,5 +87,11 @@ export function applySessionSchema(db: DbInstance): void {
   }
   if (!settingsCols.some((c) => c.name === 'calendar_show_journals')) {
     db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_journals TEXT NOT NULL DEFAULT 'on'");
+  }
+  if (!settingsCols.some((c) => c.name === 'calendar_default_view')) {
+    db.exec("ALTER TABLE user_settings ADD COLUMN calendar_default_view TEXT NOT NULL DEFAULT 'dayGridMonth'");
+  }
+  if (!settingsCols.some((c) => c.name === 'home_view')) {
+    db.exec("ALTER TABLE user_settings ADD COLUMN home_view TEXT NOT NULL DEFAULT 'contacts'");
   }
 }

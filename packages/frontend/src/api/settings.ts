@@ -12,6 +12,8 @@ export interface ServerSettings {
   calendarTaskDate: string;
   calendarShowTasks: string;
   calendarShowJournals: string;
+  calendarDefaultView: string;
+  homeView: string;
   updatedAt: number;
 }
 

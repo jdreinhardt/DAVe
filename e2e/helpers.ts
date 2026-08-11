@@ -13,13 +13,18 @@ export const AUTH_STATE_PATH = path.join(
   'user.json',
 );
 
-/** Drives the login form. Only for specs that are actually testing sign-in. */
+/**
+ * Drives the login form. Only for specs that are actually testing sign-in.
+ *
+ * Sign-in lands on "/", which resolves to the account's configured home view —
+ * so wait for any route but /login rather than a specific one.
+ */
 export async function formLogin(page: Page): Promise<void> {
   await page.goto('/login');
   await page.fill('#username', TEST_USER);
   await page.fill('#password', TEST_PASS);
   await page.click('button[type="submit"]');
-  await page.waitForURL('**/contacts');
+  await page.waitForURL((url) => !url.pathname.startsWith('/login') && url.pathname !== '/');
 }
 
 /**

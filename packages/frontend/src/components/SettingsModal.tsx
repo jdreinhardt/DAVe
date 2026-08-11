@@ -8,8 +8,9 @@ import {
 import { cn } from '../lib/utils';
 import { useSettings } from '../contexts/Settings';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { VIEW_NAV_ITEMS, useViewCapabilities, isViewSupported } from '../hooks/useViewNavItems';
 import SegmentedControl from './SegmentedControl';
-import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate, CalendarLayerToggle } from '../contexts/Settings';
+import type { SortBy, SortDir, ContactSubtitleField, MapService, DarkMode, TaskLayout, NotesView, JournalsView, CalendarTaskDate, CalendarLayerToggle, CalendarDefaultView, HomeView } from '../contexts/Settings';
 
 const LAYER_TOGGLE_OPTIONS = [
   { value: 'on'  as CalendarLayerToggle, label: 'On',  icon: <Eye className="h-3.5 w-3.5" /> },
@@ -50,9 +51,10 @@ const SELECT_CLASS =
   'flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring';
 
 export default function SettingsModal({ onClose }: SettingsModalProps) {
-  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView, calendarTaskDate, updateCalendarTaskDate, calendarShowTasks, updateCalendarShowTasks, calendarShowJournals, updateCalendarShowJournals } =
+  const { contactSort, updateContactSort, contactSubtitleField, updateContactSubtitleField, mapService, updateMapService, darkMode, updateDarkMode, taskDefaultLayout, updateTaskDefaultLayout, notesDefaultView, updateNotesDefaultView, journalsDefaultView, updateJournalsDefaultView, calendarTaskDate, updateCalendarTaskDate, calendarShowTasks, updateCalendarShowTasks, calendarShowJournals, updateCalendarShowJournals, calendarDefaultView, updateCalendarDefaultView, homeView, updateHomeView } =
     useSettings();
   const isMobile = useIsMobile();
+  const caps = useViewCapabilities();
 
   const [activeTab, setActiveTab] = useState<TabId>('contacts');
   const [sortBy, setSortBy] = useState<SortBy>(contactSort.sortBy);
@@ -66,6 +68,14 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
   const [taskDate, setTaskDate] = useState<CalendarTaskDate>(calendarTaskDate);
   const [showTasks, setShowTasks] = useState<CalendarLayerToggle>(calendarShowTasks);
   const [showJournals, setShowJournals] = useState<CalendarLayerToggle>(calendarShowJournals);
+  const [calView, setCalView] = useState<CalendarDefaultView>(calendarDefaultView);
+  const [home, setHome] = useState<HomeView>(homeView);
+
+  // Only offer views the account can actually reach. The saved value stays in the
+  // list even if its collections went away, so the select never renders blank.
+  const homeOptions = VIEW_NAV_ITEMS.filter(
+    (item) => !caps.calsLoaded || isViewSupported(item.to, caps) || item.to.slice(1) === home,
+  );
 
   const handleSave = () => {
     updateContactSort({ sortBy, sortDir });
@@ -78,6 +88,8 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     updateCalendarTaskDate(taskDate);
     updateCalendarShowTasks(showTasks);
     updateCalendarShowJournals(showJournals);
+    updateCalendarDefaultView(calView);
+    updateHomeView(home);
     onClose();
   };
 
@@ -92,7 +104,9 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
     journalsView !== journalsDefaultView ||
     taskDate !== calendarTaskDate ||
     showTasks !== calendarShowTasks ||
-    showJournals !== calendarShowJournals;
+    showJournals !== calendarShowJournals ||
+    calView !== calendarDefaultView ||
+    home !== homeView;
 
   return (
     <div
@@ -101,10 +115,15 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="flex flex-col w-full max-w-2xl h-[30rem] max-h-[90vh] mx-4 rounded-lg border border-border bg-card shadow-lg">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        className="flex flex-col w-full max-w-2xl h-[30rem] max-h-[90vh] mx-4 rounded-lg border border-border bg-card shadow-lg"
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border px-4 py-3 shrink-0">
-          <h2 className="text-sm font-semibold">Settings</h2>
+          <h2 id="settings-title" className="text-sm font-semibold">Settings</h2>
           <button
             onClick={onClose}
             className="text-muted-foreground hover:text-foreground transition-colors"
@@ -205,6 +224,18 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
 
             {activeTab === 'calendar' && (
               <>
+                <SettingRow label="Default view">
+                  <SegmentedControl<CalendarDefaultView>
+                    value={calView}
+                    onChange={setCalView}
+                    options={[
+                      { value: 'dayGridMonth', label: 'Month', icon: <CalendarDays className="h-3.5 w-3.5" /> },
+                      { value: 'timeGridWeek', label: 'Week',  icon: <CalendarRange className="h-3.5 w-3.5" /> },
+                      { value: 'timeGridDay',  label: 'Day',   icon: <CalendarClock className="h-3.5 w-3.5" /> },
+                    ]}
+                  />
+                </SettingRow>
+
                 <SettingRow label="Map service" htmlFor="map-service">
                   <select
                     id="map-service"
@@ -292,17 +323,32 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
             )}
 
             {activeTab === 'general' && (
-              <SettingRow label="Theme">
-                <SegmentedControl<DarkMode>
-                  value={dm}
-                  onChange={setDm}
-                  options={[
-                    { value: 'light',  label: 'Light',  icon: <Sun className="h-3.5 w-3.5" /> },
-                    { value: 'system', label: 'System', icon: <Monitor className="h-3.5 w-3.5" /> },
-                    { value: 'dark',   label: 'Dark',   icon: <Moon className="h-3.5 w-3.5" /> },
-                  ]}
-                />
-              </SettingRow>
+              <>
+                <SettingRow label="Theme">
+                  <SegmentedControl<DarkMode>
+                    value={dm}
+                    onChange={setDm}
+                    options={[
+                      { value: 'light',  label: 'Light',  icon: <Sun className="h-3.5 w-3.5" /> },
+                      { value: 'system', label: 'System', icon: <Monitor className="h-3.5 w-3.5" /> },
+                      { value: 'dark',   label: 'Dark',   icon: <Moon className="h-3.5 w-3.5" /> },
+                    ]}
+                  />
+                </SettingRow>
+
+                <SettingRow label="Home page" htmlFor="home-view">
+                  <select
+                    id="home-view"
+                    value={home}
+                    onChange={(e) => setHome(e.target.value as HomeView)}
+                    className={SELECT_CLASS}
+                  >
+                    {homeOptions.map((item) => (
+                      <option key={item.to} value={item.to.slice(1)}>{item.label}</option>
+                    ))}
+                  </select>
+                </SettingRow>
+              </>
             )}
           </div>
         </div>
