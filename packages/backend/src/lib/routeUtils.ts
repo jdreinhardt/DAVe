@@ -69,3 +69,25 @@ export function rowToVJournalEntry(
     data,
   };
 }
+
+/**
+ * Does a task's COMPLETED timestamp fall inside the archive-search window?
+ *
+ * The window is half-open: `[startMs, endMs)`. The end bound is exclusive
+ * because it is the retention cutoff — a task completed exactly at it is still
+ * held in the local cache, so returning it from the archive search would show
+ * the user a duplicate of a row they already have.
+ *
+ * Used to re-check what the server sent back, since the CalDAV time-range filter
+ * is only a request and a server that ignores it returns every VTODO it holds.
+ */
+export function isWithinArchiveWindow(
+  completedIso: string | null,
+  startMs: number,
+  endMs: number,
+): boolean {
+  if (!completedIso) return false;
+  const completedMs = Date.parse(completedIso);
+  if (Number.isNaN(completedMs)) return false;
+  return completedMs >= startMs && completedMs < endMs;
+}

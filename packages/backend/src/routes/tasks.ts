@@ -12,7 +12,7 @@ import {
 import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask, createTaskRaw, fetchArchivedCompletedTasks, archiveSearchWindow, restoreArchivedTask as davRestoreArchivedTask } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import { upsertEntry, deleteEntryByUid } from '../db/cacheOps.js';
-import { collectionIdFromUrl, msToIso, buildFtsQuery, type CategoryRow, type RelationRow } from '../lib/routeUtils.js';
+import { collectionIdFromUrl, msToIso, buildFtsQuery, isWithinArchiveWindow, type CategoryRow, type RelationRow } from '../lib/routeUtils.js';
 
 interface EntryRow {
   id: number;
@@ -319,9 +319,7 @@ export async function tasksRoutes(
       for (const { url, etag, rawIcs } of rawObjects) {
         const parsed = parseVTodoToTaskJson(rawIcs);
         if (!parsed || parsed.data.status !== 'COMPLETED') continue;
-        if (!parsed.data.completed) continue;
-        const completedMs = Date.parse(parsed.data.completed);
-        if (Number.isNaN(completedMs) || completedMs < startMs || completedMs >= endMs) continue;
+        if (!isWithinArchiveWindow(parsed.data.completed, startMs, endMs)) continue;
         const collectionUrl = objectUrlToCollectionUrl(url, collectionUrls);
         const task: ArchivedTask = {
           uid: parsed.uid,
