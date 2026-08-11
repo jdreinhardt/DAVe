@@ -10,7 +10,9 @@ import {
   ChevronRight,
   ClipboardList,
   CornerUpLeft,
-  Edit2,  GitBranch,
+  Edit2,
+  GanttChartSquare,
+  GitBranch,
   List,
   LayoutGrid,
   Columns3,
@@ -23,7 +25,7 @@ import {
   X,
   ArrowUpDown,
 } from 'lucide-react';
-import type { Calendar, Task, TaskJson, TasksQueryParams, ArchivedTask } from '@dave/shared';
+import type { Calendar, Task, TaskJson, TasksQueryParams, TasksResponse, ArchivedTask, TaskLayout } from '@dave/shared';
 import {
   fetchTasks,
   fetchTask,
@@ -42,6 +44,10 @@ import { useSettings } from '../contexts/Settings';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { cn } from '../lib/utils';
 import TaskEditForm, { emptyTaskJson } from '../components/TaskEditForm';
+import TaskGantt from '../components/TaskGantt';
+import { computeUnschedule } from '../lib/gantt';
+import type { GanttZoom } from '../lib/gantt';
+import { useHotkey } from '../hooks/useHotkey';
 import BulkDeleteDialog from '../components/BulkDeleteDialog';
 import TaskBulkEditModal, { applyTaskBulkEdit } from '../components/TaskBulkEditModal';
 import type { TaskBulkEditConfig, TaskBulkEditFieldId } from '../components/TaskBulkEditModal';
@@ -1413,7 +1419,6 @@ function MultiTaskPanel({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
-type Layout = 'list' | 'compact' | 'kanban';
 type SortField = TasksQueryParams['sort'];
 type FilterStatus = TasksQueryParams['status'];
 type FilterDue = TasksQueryParams['due'];
@@ -1443,7 +1448,7 @@ export default function TasksPage() {
   const { taskDefaultLayout } = useSettings();
 
   // ── Persisted UI state ────────────────────────────────────────────────────
-  const [layout, setLayout] = useState<Layout>(() =>
+  const [layout, setLayout] = useState<TaskLayout>(() =>
     loadPref('dave:tasks:layout', taskDefaultLayout),
   );
   const [sort, setSort] = useState<SortField>(() => loadPref('dave:tasks:sort', undefined));
@@ -1456,6 +1461,11 @@ export default function TasksPage() {
   );
   const [filterPriority, setFilterPriority] = useState<FilterPriority>(() =>
     loadPref('dave:tasks:filter:priority', undefined),
+  );
+  // Gantt zoom is device-local — it never round-trips to the server the way
+  // taskDefaultLayout does, so it stays out of the shared settings enum.
+  const [ganttZoom, setGanttZoom] = useState<GanttZoom>(() =>
+    loadPref<GanttZoom>('dave:tasks:ganttZoom', 'day'),
   );
 
   // ── Ephemeral UI state ────────────────────────────────────────────────────
@@ -1514,6 +1524,9 @@ export default function TasksPage() {
   useEffect(() => {
     savePref('dave:tasks:layout', layout);
   }, [layout]);
+  useEffect(() => {
+    savePref('dave:tasks:ganttZoom', ganttZoom);
+  }, [ganttZoom]);
   useEffect(() => {
     savePref('dave:tasks:sort', sort);
   }, [sort]);
@@ -1672,6 +1685,64 @@ export default function TasksPage() {
       }
     },
   });
+
+  // Gantt drags write dates only, and need the bar to stay where it was dropped
+  // rather than jump back and forth across a refetch. Kept separate from
+  // updateMutation, whose onSuccess side effects (edit-form teardown, recurrence
+  // toasts, childMoveErrors) don't apply here and whose 12 callers would have to
+  // opt out of the optimism.
+  const ganttDateMutation = useMutation({
+    mutationFn: ({ data, etag }: { data: TaskJson; etag: string }) => updateTask(data.uid, data, etag),
+    onMutate: async ({ data }) => {
+      // Prefix filter, not the exact ['tasks', params] key: the cache holds one
+      // entry per filter/sort/search variant, and patching only the active one
+      // would leave stale dates behind if the user changes a filter mid-flight.
+      const filter = { queryKey: ['tasks'] };
+      // Without this, an in-flight background refetch (staleTime is 30s) can
+      // resolve after the optimistic write and clobber it — the snap-back.
+      await queryClient.cancelQueries(filter);
+      const snapshots = queryClient.getQueriesData<TasksResponse>(filter);
+      queryClient.setQueriesData<TasksResponse>(filter, (old) =>
+        old
+          ? { ...old, tasks: old.tasks.map((t) => (t.uid === data.uid ? { ...t, data } : t)) }
+          : old,
+      );
+      return { snapshots };
+    },
+    onSuccess: (result) => {
+      // Fold the fresh etag back in, or a second drag on the same bar sends the
+      // stale one and is guaranteed to 412.
+      queryClient.setQueriesData<TasksResponse>({ queryKey: ['tasks'] }, (old) =>
+        old
+          ? {
+              ...old,
+              tasks: old.tasks.map((t) =>
+                t.uid === result.uid ? { ...t, etag: result.etag, data: result.data } : t,
+              ),
+            }
+          : old,
+      );
+    },
+    onError: (err: unknown, _vars, ctx) => {
+      for (const [key, value] of ctx?.snapshots ?? []) queryClient.setQueryData(key, value);
+      const e = err as { status?: number };
+      if (e.status === 412) {
+        setConflictMessage('This task was modified elsewhere. Reload to see the latest version.');
+      } else {
+        showToast('Failed to reschedule task. Please try again.');
+      }
+    },
+    // Fires on error too, deliberately: a rolled-back task still holds a stale
+    // etag, and the refetch repairs it before the next drag.
+    onSettled: invalidateTasks,
+  });
+
+  const handleGanttCommit = useCallback(
+    (task: Task, data: TaskJson) => {
+      ganttDateMutation.mutate({ data, etag: task.etag });
+    },
+    [ganttDateMutation],
+  );
 
   const deleteMutation = useMutation({
     mutationFn: ({
@@ -1960,6 +2031,19 @@ export default function TasksPage() {
     () => allTasks.find((t) => t.uid === selectedUid) ?? null,
     [allTasks, selectedUid],
   );
+
+  // Backspace clears a selected task's dates in the Gantt — the inverse of the
+  // drag and sweep gestures, which otherwise have no counterpart in the chart.
+  // useHotkey suppresses this whenever focus is in an input, textarea, select or
+  // contenteditable, so it can't fire while the detail panel is being edited.
+  useHotkey('Backspace', (e) => {
+    if (layout !== 'gantt' || archiveMode || !selectedTask) return;
+    const next = computeUnschedule(selectedTask.data);
+    if (!next) return; // already unscheduled — don't spend a PUT saying so
+    e.preventDefault();
+    handleGanttCommit(selectedTask, next);
+    showToast('Task unscheduled');
+  });
 
   const isMobile = useIsMobile();
 
@@ -2271,6 +2355,12 @@ export default function TasksPage() {
                 title="Kanban"
                 onClick={() => setLayout('kanban')}
               />
+              <LayoutToggleButton
+                icon={<GanttChartSquare className="h-4 w-4" />}
+                active={layout === 'gantt'}
+                title="Gantt"
+                onClick={() => setLayout('gantt')}
+              />
             </div>
             </>
           )}
@@ -2379,7 +2469,7 @@ export default function TasksPage() {
             </div>
           )}
 
-          {!archiveMode && !tasksQuery.isError && layout !== 'kanban' && (
+          {!archiveMode && !tasksQuery.isError && (layout === 'list' || layout === 'compact') && (
             <div className="py-2">
               {/* Incomplete tasks */}
               {incompleteTasks.map((task) => (
@@ -2560,6 +2650,21 @@ export default function TasksPage() {
                 </div>
               )}
             </div>
+          )}
+
+          {!archiveMode && !tasksQuery.isError && layout === 'gantt' && (
+            <TaskGantt
+              roots={roots}
+              childrenOf={childrenOf}
+              orphanedParentUid={orphanedParentUid}
+              selectedUid={selectedUid}
+              onSelect={handleSelect}
+              collectionColorMap={collectionColorMap}
+              zoom={ganttZoom}
+              onZoomChange={setGanttZoom}
+              onCommitDates={handleGanttCommit}
+              dragEnabled={!isMobile}
+            />
           )}
         </div>
       </div>

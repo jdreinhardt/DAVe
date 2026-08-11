@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  X, ArrowUpAZ, ArrowDownAZ, Sun, Moon, Monitor, List, LayoutGrid, Columns3, Grid,
+  X, ArrowUpAZ, ArrowDownAZ, Sun, Moon, Monitor, List, LayoutGrid, Columns3, Grid, GanttChartSquare,
   AlignLeft, CalendarDays, CalendarClock, CalendarRange,
   BookUser, Calendar, CheckSquare, NotebookPen, ScrollText,
   Info, Eye, EyeOff,
@@ -273,6 +273,7 @@ export default function SettingsModal({ onClose }: SettingsModalProps) {
                       { value: 'list',    label: 'List',    icon: <List className="h-3.5 w-3.5" /> },
                       { value: 'compact', label: 'Compact', icon: <LayoutGrid className="h-3.5 w-3.5" /> },
                       { value: 'kanban',  label: 'Kanban',  icon: <Columns3 className="h-3.5 w-3.5" /> },
+                      { value: 'gantt',   label: 'Gantt',   icon: <GanttChartSquare className="h-3.5 w-3.5" /> },
                     ]}
                   />
                 </SettingRow>

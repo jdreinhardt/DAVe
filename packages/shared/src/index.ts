@@ -29,7 +29,7 @@ export const SORT_DIR = ['asc', 'desc'] as const;
 export const CONTACT_SUBTITLE_FIELDS = ['nickname', 'email', 'phone', 'organization', 'title', ''] as const;
 export const MAP_SERVICES = ['osm', 'google', 'apple'] as const;
 export const DARK_MODES = ['light', 'dark', 'system'] as const;
-export const TASK_LAYOUTS = ['list', 'compact', 'kanban'] as const;
+export const TASK_LAYOUTS = ['list', 'compact', 'kanban', 'gantt'] as const;
 export const NOTES_VIEWS = ['list', 'grid'] as const;
 export const JOURNALS_VIEWS = ['timeline', 'list', 'calendar'] as const;
 // Which task date positions a task on the Calendar view's tasks layer.
