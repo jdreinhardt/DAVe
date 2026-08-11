@@ -177,12 +177,15 @@ describe('sync-collection token rejection', () => {
     expect(res.syncToken).toBe('token-2');
   });
 
-  it('keeps the previous token when the REPORT reports no changes', async () => {
-    // Documents a tsdav limitation rather than desired behaviour: an empty
-    // multistatus has no <D:response>, so tsdav returns a synthetic entry with no
-    // `raw`, and the new token is unrecoverable. Holding the old token keeps sync
-    // correct (the server still accepts it) but means an idle collection's token
-    // never advances — see extractSyncToken in lib/dav.ts.
+  it('uses the token the server returns even when nothing changed', async () => {
+    // An empty multistatus carries a <sync-token> but no <D:response>. tsdav
+    // dropped it (it only attaches the parsed document to member responses), so
+    // the old code had to fall back to reusing the previous token.
+    //
+    // Baikal and Radicale both echo the same token here, so that fallback
+    // happened to be right on both. RFC 6578 does not require a content-derived
+    // token though, so a server issuing a fresh one per REPORT would have had it
+    // silently discarded. Honor whatever the server actually said.
     fetchMock.mockResolvedValueOnce(
       xmlResponse(`<?xml version="1.0" encoding="utf-8"?>
 <D:multistatus xmlns:D="DAV:"><D:sync-token>token-2</D:sync-token></D:multistatus>`),
@@ -192,7 +195,65 @@ describe('sync-collection token rejection', () => {
 
     expect(res.full).toBe(false);
     expect(res.changed).toEqual([]);
+    expect(res.syncToken).toBe('token-2');
+  });
+
+  it('still reuses the previous token if the server omits one entirely', async () => {
+    // Spec violation on the server's part; keeping the old token is the only
+    // safe fallback, and the warning makes the degradation visible.
+    fetchMock.mockResolvedValueOnce(
+      xmlResponse(`<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:"></D:multistatus>`),
+    );
+
+    const res = await syncAddressBook(session, 'contacts', 'token-1', testConfig);
+
     expect(res.syncToken).toBe('token-1');
+  });
+
+  it('parses unprefixed DAV element names (Radicale serves a default xmlns)', async () => {
+    // Radicale emits <multistatus xmlns="DAV:"> with no prefix, Baikal emits
+    // <d:multistatus>. Both must parse — this is the reason element names are
+    // stripped of their prefix rather than matched literally.
+    fetchMock
+      .mockResolvedValueOnce(
+        xmlResponse(`<?xml version='1.0' encoding='utf-8'?>
+<multistatus xmlns="DAV:">
+  <response>
+    <href>/testuser/contacts/c1.vcf</href>
+    <propstat>
+      <prop><getetag>"e1"</getetag></prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+  <response>
+    <href>/testuser/contacts/gone.vcf</href>
+    <status>HTTP/1.1 404 Not Found</status>
+  </response>
+  <sync-token>http://radicale.org/ns/sync/abc</sync-token>
+</multistatus>`),
+      )
+      .mockResolvedValueOnce(
+        xmlResponse(`<?xml version="1.0" encoding="utf-8"?>
+<multistatus xmlns="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <response>
+    <href>/testuser/contacts/c1.vcf</href>
+    <propstat>
+      <prop>
+        <getetag>"e1"</getetag>
+        <C:address-data>BEGIN:VCARD\r\nVERSION:3.0\r\nUID:c1\r\nFN:Bob\r\nEND:VCARD</C:address-data>
+      </prop>
+      <status>HTTP/1.1 200 OK</status>
+    </propstat>
+  </response>
+</multistatus>`),
+      );
+
+    const res = await syncAddressBook(session, 'contacts', 'token-1', testConfig);
+
+    expect(res.syncToken).toBe('http://radicale.org/ns/sync/abc');
+    expect(res.deleted).toEqual(['gone']);
+    expect(res.changed.map((c) => c.id)).toEqual(['c1']);
   });
 
   it('surfaces non-token errors instead of treating them as a stale token', async () => {

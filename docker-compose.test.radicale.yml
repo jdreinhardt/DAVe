@@ -1,0 +1,46 @@
+name: dave-test-radicale
+
+# Radicale counterpart to docker-compose.test.yml. Both stacks seed the same
+# user, calendar and address book names, so the integration and e2e suites run
+# unchanged against either — that equivalence is the point of having both.
+#
+# Radicale listens on 8802; the Baikal test stack keeps 8801 and dev keeps 8800.
+
+services:
+  # One-shot seeder. It must finish *before* Radicale starts: Radicale reads
+  # /config/config once at boot, so a config written afterwards would be ignored.
+  # `/config` is a declared VOLUME in the image, so the named volume is
+  # initialised from the image's default config and this overwrites it.
+  radicale-init:
+    image: &radicale_image tomsquest/docker-radicale:3.5.4.0
+    user: root
+    volumes:
+      - radicale-test-config:/config
+      - ./scripts/seed-test-radicale.sh:/seed-test-radicale.sh:ro,z
+    entrypoint: ['/bin/sh', '/seed-test-radicale.sh']
+
+  radicale:
+    # Pinned for the same reason as the Baikal image: a floating tag has changed
+    # base image and config schema under us before, surfacing only as CI failure.
+    image: *radicale_image
+    depends_on:
+      radicale-init:
+        condition: service_completed_successfully
+    ports:
+      - '8802:5232'
+    volumes:
+      - radicale-test-config:/config
+      - radicale-test-data:/data
+    # A bare `curl -f` is wrong here: Radicale answers `GET /` with a 302 to its
+    # web UI, and would answer 401 if the web UI were disabled. Both mean the
+    # server is up, so check only that it completed an HTTP exchange.
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -s -o /dev/null http://localhost:5232/ || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
+
+volumes:
+  radicale-test-config:
+  radicale-test-data:

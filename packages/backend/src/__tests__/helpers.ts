@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
-import type { DbInstance } from '../db/index.js';
+import { applySessionSchema, type DbInstance } from '../db/index.js';
 import type { CacheDbInstance } from '../db/cache.js';
 import { applySchema } from '../db/cache.js';
 import type { Config } from '../config.js';
@@ -33,16 +33,7 @@ export const testConfig: Config = {
 /** Create an in-memory SQLite DB with the sessions table schema. */
 export function makeDb(): DbInstance {
   const db = new DatabaseSync(':memory:');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      id               TEXT    PRIMARY KEY,
-      data             TEXT    NOT NULL,
-      created_at       INTEGER NOT NULL,
-      last_activity_at INTEGER NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_sessions_last_activity
-      ON sessions(last_activity_at);
-  `);
+  applySessionSchema(db);
   return db;
 }
 

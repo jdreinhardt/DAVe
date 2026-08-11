@@ -113,4 +113,92 @@ describe('POST /api/sync', () => {
     expect(emptyResult?.changed.length ?? 0).toBe(0);
     expect(emptyResult?.deleted.length ?? 0).toBe(0);
   });
+
+  it('reports a deleted contact under the same id the contact list uses', async () => {
+    // Servers report removed members as relative hrefs ("/dav.php/…/x.vcf").
+    // Deriving the id without resolving them first yields the whole href, which
+    // matches no cached contact — so the deletion is delivered but silently never
+    // applied, and the contact lingers in the UI until a full reload.
+    const books = (
+      await app.inject({ method: 'GET', url: '/api/addressbooks', headers: { cookie } })
+    ).json() as AddressBook[];
+    expect(books.length).toBeGreaterThan(0);
+    const abId = books[0]!.id;
+
+    const uid = `delete-sync-${Date.now()}`;
+    await app.inject({
+      method: 'POST',
+      url: `/api/addressbooks/${abId}/contacts`,
+      headers: { cookie },
+      payload: {
+        data: {
+          uid, version: '4.0',
+          name: { prefix: '', given: 'Delete', middle: '', family: 'Sync', suffix: '' },
+          fullName: 'Delete Sync', nickname: '', organization: '', title: '',
+          phones: [], emails: [], addresses: [], urls: [],
+          birthday: null, anniversary: null, note: '', photo: null, customFields: [],
+        },
+      },
+    });
+
+    const contacts = (
+      await app.inject({ method: 'GET', url: `/api/addressbooks/${abId}/contacts`, headers: { cookie } })
+    ).json() as Contact[];
+    const created = contacts.find((c) => c.data.uid === uid);
+    expect(created).toBeDefined();
+
+    // Capture the token *after* the create so the delta contains only the delete.
+    const syncToken = ((
+      await app.inject({ method: 'GET', url: '/api/addressbooks', headers: { cookie } })
+    ).json() as AddressBook[]).find((b) => b.id === abId)!.syncToken;
+
+    const delRes = await app.inject({
+      method: 'DELETE',
+      url: `/api/addressbooks/${abId}/contacts/${created!.id}?etag=${encodeURIComponent(created!.etag)}`,
+      headers: { cookie },
+    });
+    expect(delRes.statusCode).toBe(204);
+
+    const syncRes = await app.inject({
+      method: 'POST',
+      url: '/api/sync',
+      headers: { cookie },
+      payload: { addressbooks: [{ id: abId, syncToken }], calendars: [] },
+    });
+    const abResult = (syncRes.json() as CollectionSyncResponse).addressbooks.find((r) => r.id === abId);
+    expect(abResult).toBeDefined();
+    // The id must match what the contact list handed out, not the raw href.
+    expect(abResult!.deleted).toContain(created!.id);
+  });
+
+  it('recovers from a sync token the server no longer recognises', async () => {
+    // Radicale prunes tokens older than max_sync_token_age (30 days by default)
+    // and answers a stale one with 403 DAV:valid-sync-token; sabre/dav does the
+    // same for tokens it has forgotten. Before this was handled, the rejection
+    // parsed as "nothing changed" and the collection silently stopped syncing
+    // forever. Both servers must recover by resending the whole collection.
+    const abRes = await app.inject({ method: 'GET', url: '/api/addressbooks', headers: { cookie } });
+    const books = abRes.json() as AddressBook[];
+    expect(books.length).toBeGreaterThan(0);
+    const abId = books[0]!.id;
+
+    const syncRes = await app.inject({
+      method: 'POST',
+      url: '/api/sync',
+      headers: { cookie },
+      payload: {
+        addressbooks: [{ id: abId, syncToken: 'http://example.invalid/ns/sync/definitely-not-real' }],
+        calendars: [],
+      },
+    });
+
+    expect(syncRes.statusCode).toBe(200);
+    const result = (syncRes.json() as CollectionSyncResponse).addressbooks.find((r) => r.id === abId);
+    expect(result).toBeDefined();
+    // Flagged full so the client replaces rather than merges, and carrying a
+    // usable token again rather than echoing the rejected one back.
+    expect(result!.full).toBe(true);
+    expect(result!.syncToken).not.toBe('http://example.invalid/ns/sync/definitely-not-real');
+    expect(result!.syncToken.length).toBeGreaterThan(0);
+  });
 });

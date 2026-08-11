@@ -27,7 +27,21 @@ export function getDb(config: Config): DbInstance {
   _db.exec('PRAGMA journal_mode = WAL');
   _db.exec('PRAGMA foreign_keys = ON');
 
-  _db.exec(`
+  applySessionSchema(_db);
+
+  return _db;
+}
+
+/**
+ * Create the session-database tables on an already-open connection.
+ *
+ * Exported so tests build their database from the same definition the app uses.
+ * They previously inlined their own copy of just the `sessions` table, which
+ * meant any route touching `address_book_colors` or `user_settings` failed with
+ * an opaque 502 that looked like a DAV error.
+ */
+export function applySessionSchema(db: DbInstance): void {
+  db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id               TEXT    PRIMARY KEY,
       data             TEXT    NOT NULL,
@@ -62,16 +76,14 @@ export function getDb(config: Config): DbInstance {
   `);
 
   // Migrations: add newer user_settings columns to existing databases.
-  const settingsCols = _db.prepare("PRAGMA table_info(user_settings)").all() as { name: string }[];
+  const settingsCols = db.prepare("PRAGMA table_info(user_settings)").all() as { name: string }[];
   if (!settingsCols.some((c) => c.name === 'calendar_task_date')) {
-    _db.exec("ALTER TABLE user_settings ADD COLUMN calendar_task_date TEXT NOT NULL DEFAULT 'due'");
+    db.exec("ALTER TABLE user_settings ADD COLUMN calendar_task_date TEXT NOT NULL DEFAULT 'due'");
   }
   if (!settingsCols.some((c) => c.name === 'calendar_show_tasks')) {
-    _db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_tasks TEXT NOT NULL DEFAULT 'on'");
+    db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_tasks TEXT NOT NULL DEFAULT 'on'");
   }
   if (!settingsCols.some((c) => c.name === 'calendar_show_journals')) {
-    _db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_journals TEXT NOT NULL DEFAULT 'on'");
+    db.exec("ALTER TABLE user_settings ADD COLUMN calendar_show_journals TEXT NOT NULL DEFAULT 'on'");
   }
-
-  return _db;
 }

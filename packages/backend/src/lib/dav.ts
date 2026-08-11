@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { xml2js } from 'xml-js';
 import type { DAVAccount } from 'tsdav';
 import type * as TsdavTypes from 'tsdav';
 import type { Config } from '../config.js';
@@ -19,7 +20,6 @@ const {
   fetchVCards: _fetchVCards,
   getBasicAuthHeaders: _getBasicAuthHeaders,
   propfind: _propfind,
-  syncCollection: _syncCollection,
   DAVNamespaceShort,
 } = _req('tsdav') as typeof TsdavTypes;
 
@@ -991,82 +991,158 @@ export class SyncTokenInvalidError extends Error {
   }
 }
 
+export interface SyncCollectionResult {
+  /** The server's new token, or undefined if it omitted one (spec violation). */
+  syncToken: string | undefined;
+  /** hrefs of added/modified members. */
+  changed: string[];
+  /** hrefs of removed members. */
+  deleted: string[];
+}
+
+/** One element of xml-js compact output: child elements plus an optional `_text`. */
+type XmlNode = Record<string, unknown>;
+
+// xml-js compact output puts character data under `_text`.
+function xmlText(node: unknown): string | undefined {
+  if (node === null || node === undefined) return undefined;
+  if (typeof node === 'string') return node;
+  if (typeof node === 'object') {
+    const t = (node as Record<string, unknown>)['_text'];
+    if (typeof t === 'string') return t;
+    if (typeof t === 'number') return String(t);
+  }
+  return undefined;
+}
+
+// '<D:status>HTTP/1.1 404 Not Found</D:status>' → 404
+function parseStatusCode(status: unknown): number | undefined {
+  const text = xmlText(status);
+  if (!text) return undefined;
+  const m = /\s(\d{3})(?:\s|$)/.exec(text);
+  return m ? Number.parseInt(m[1]!, 10) : undefined;
+}
+
+function asArray<T>(v: T | T[] | undefined): T[] {
+  if (v === undefined || v === null) return [];
+  return Array.isArray(v) ? v : [v];
+}
+
 /**
- * Run a sync-collection REPORT and turn error replies into thrown errors.
+ * Run a sync-collection REPORT (RFC 6578) and parse the multistatus ourselves.
  *
- * tsdav's `syncCollection` hands back whatever `davRequest` produced without
- * checking it. For any non-2xx reply that means a single synthetic response
- * `{ ok: false, status, raw: <body as a *string*> }` — which silently satisfies
- * none of the `r.ok` / `r.status === 404` filters below and leaves `raw` as a
- * string, so `extractSyncToken` finds nothing and returns the *old* token. Left
- * unchecked, a rejected token therefore looks exactly like "nothing changed",
- * and the same dead token gets replayed forever while the collection quietly
- * stops updating. Fail loudly instead.
+ * This deliberately bypasses tsdav's `syncCollection`, for two reasons:
+ *
+ *  1. Reading the token out of `raw.multistatus.syncToken` depended on tsdav's
+ *     internal parse shape, which a version bump could change silently — and the
+ *     failure mode is invisible, since a missing token just looks like "nothing
+ *     changed".
+ *  2. tsdav attaches the parsed document as `raw` only to *member* responses, so
+ *     when a REPORT reports no changes there are no `<D:response>` elements, no
+ *     `raw`, and the `<D:sync-token>` is unrecoverable. We then had to guess by
+ *     reusing the previous token. Both Baikal and Radicale happen to return the
+ *     same token in that case (sabre's is a changelog sequence, Radicale's a hash
+ *     of collection state), so the guess was right on both — but RFC 6578 does
+ *     not require a content-derived token, and a server that issues a fresh one
+ *     per REPORT would have had it silently dropped.
+ *
+ * The response is small and rigidly specified, so parsing it directly is less
+ * fragile than either. Namespace prefixes are stripped because servers disagree:
+ * Radicale serves a default `xmlns="DAV:"` with unprefixed names, Baikal uses
+ * `d:`.
  */
 async function runSyncCollection(
   url: string,
   syncToken: string,
   authHeaders: Record<string, string>,
-): Promise<TsdavTypes.DAVResponse[]> {
-  const results = await _syncCollection({
-    url,
-    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
-    syncLevel: 1,
-    syncToken,
-    headers: authHeaders,
+): Promise<SyncCollectionResult> {
+  // An empty <sync-token/> is RFC 6578's "send me everything".
+  const body =
+    `<?xml version="1.0" encoding="utf-8" ?>` +
+    `<D:sync-collection xmlns:D="DAV:">` +
+    `<D:sync-token>${escapeXml(syncToken)}</D:sync-token>` +
+    `<D:sync-level>1</D:sync-level>` +
+    `<D:prop><D:getetag/></D:prop>` +
+    `</D:sync-collection>`;
+
+  const res = await davFetch(url, {
+    method: 'REPORT',
+    headers: { ...authHeaders, 'Content-Type': 'text/xml;charset=UTF-8', Depth: '0' },
+    body,
   });
 
-  // A per-member 404 is normal (that's how deletions are reported); only a
-  // whole-request failure carries `ok: false` on the response for the URL itself.
-  const failure = results.find(
-    (r) => r.ok === false && typeof r.status === 'number' && r.status >= 400 && r.status !== 404,
-  );
-  if (!failure) return results;
-
-  // 409 is not what the RFC specifies, but some servers use it for the same
-  // precondition, so accept both. A 403 without the precondition element is
-  // treated the same way: the only other plausible cause is a permission change,
-  // and the resulting full re-sync will surface that as a real error instead of
-  // hiding it behind a stalled token. Log which of the two it was, since the
-  // distinction is the first thing worth knowing when this shows up in the wild.
-  if (failure.status === 403 || failure.status === 409) {
-    const raw = typeof failure.raw === 'string' ? failure.raw : '';
-    const declared = /valid-sync-token/i.test(raw);
-    console.warn(
-      `sync-collection for ${url} rejected with ${failure.status}` +
-        `${declared ? ' (DAV:valid-sync-token)' : ' without a DAV:valid-sync-token precondition'}`,
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    // 409 is not what the RFC specifies, but some servers use it for the same
+    // precondition, so accept both. A 403 without the precondition element is
+    // treated the same way: the only other plausible cause is a permission
+    // change, and the resulting full re-sync will surface that as a real error
+    // instead of hiding it behind a stalled token. Log which of the two it was,
+    // since that is the first thing worth knowing if this shows up in the wild.
+    if (res.status === 403 || res.status === 409) {
+      const declared = /valid-sync-token/i.test(text);
+      console.warn(
+        `sync-collection for ${url} rejected with ${res.status}` +
+          `${declared ? ' (DAV:valid-sync-token)' : ' without a DAV:valid-sync-token precondition'}`,
+      );
+      throw new SyncTokenInvalidError(url);
+    }
+    throw Object.assign(
+      new Error(`sync-collection REPORT failed: ${res.status} ${res.statusText ?? ''}`.trim()),
+      { statusCode: res.status },
     );
-    throw new SyncTokenInvalidError(url);
   }
-  throw Object.assign(
-    new Error(`sync-collection REPORT failed: ${failure.status} ${failure.statusText ?? ''}`.trim()),
-    { statusCode: failure.status },
-  );
-}
 
-/**
- * Extract the new sync-token from a tsdav sync-collection REPORT response.
- *
- * tsdav attaches the whole parsed document as `raw` to every member response, so
- * the token is reachable at `result[n].raw.multistatus.syncToken`.
- *
- * Known gap: when the REPORT reports *no* changes, `multistatus.response` is
- * absent, tsdav maps that to a single synthetic entry carrying no `raw` at all,
- * and the token is unrecoverable. We keep the previous token, which the server
- * still accepts, so syncing stays correct — but an idle collection's token never
- * advances and can therefore age past the server's retention window (Radicale
- * prunes at 30 days). That is exactly the case SyncTokenInvalidError recovers
- * from, so the two behaviours together are safe; the warning is here so the
- * degradation is visible rather than silent.
- */
-function extractSyncToken(results: TsdavTypes.DAVResponse[], url: string): string | undefined {
-  for (const r of results) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = (r as any).raw?.multistatus?.syncToken;
-    if (token) return String(token);
+  const text = await res.text();
+  let doc: Record<string, unknown>;
+  try {
+    doc = xml2js(text, {
+      compact: true,
+      trim: true,
+      ignoreDeclaration: true,
+      ignoreAttributes: true,
+      elementNameFn: (name) => name.replace(/^.+:/, ''),
+    }) as Record<string, unknown>;
+  } catch (err) {
+    throw Object.assign(new Error(`sync-collection REPORT returned unparseable XML for ${url}`), {
+      cause: err,
+    });
   }
-  console.warn(`sync-collection for ${url} returned no sync-token; reusing the previous one`);
-  return undefined;
+
+  const multistatus = doc.multistatus as Record<string, unknown> | undefined;
+  if (!multistatus) {
+    throw new Error(`sync-collection REPORT for ${url} returned no DAV:multistatus element`);
+  }
+
+  const token = xmlText(multistatus['sync-token']);
+  if (!token) {
+    console.warn(`sync-collection for ${url} returned no sync-token; reusing the previous one`);
+  }
+
+  const changed: string[] = [];
+  const deleted: string[] = [];
+
+  for (const response of asArray<XmlNode>(multistatus.response as XmlNode | XmlNode[])) {
+    const href = xmlText(response?.href);
+    if (!href) continue;
+
+    // Removals carry a response-level <status>; survivors carry their status
+    // inside <propstat>. Fall back to the first propstat when there is no
+    // response-level status.
+    const firstPropstat = asArray<XmlNode>(response.propstat as XmlNode | XmlNode[])[0];
+    const status = parseStatusCode(response.status) ?? parseStatusCode(firstPropstat?.status);
+
+    if (status === 404 || status === 410) {
+      deleted.push(href);
+    } else if (status === undefined || (status >= 200 && status < 300)) {
+      // No parseable status at all still means "this member exists" — the href
+      // was listed. Treating it as changed re-fetches it, which is harmless;
+      // dropping it would silently lose an update.
+      changed.push(href);
+    }
+  }
+
+  return { syncToken: token, changed, deleted };
 }
 
 export async function syncAddressBook(
@@ -1085,20 +1161,23 @@ export async function syncAddressBook(
   // delta into it — the response is the whole collection, and anything deleted
   // while our token was stale is absent rather than reported as a deletion.
   let full = false;
-  let results: TsdavTypes.DAVResponse[];
+  let result: SyncCollectionResult;
   try {
-    results = await runSyncCollection(abUrl, currentSyncToken, authHeaders);
+    result = await runSyncCollection(abUrl, currentSyncToken, authHeaders);
   } catch (err) {
     if (!(err instanceof SyncTokenInvalidError)) throw err;
     full = true;
-    results = await runSyncCollection(abUrl, '', authHeaders);
+    result = await runSyncCollection(abUrl, '', authHeaders);
   }
 
-  const newSyncToken = extractSyncToken(results, abUrl) ?? currentSyncToken;
+  const newSyncToken = result.syncToken ?? currentSyncToken;
 
-  const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
-  const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
-  const deleted = deletedHrefs.map(contactId);
+  const changedHrefs = result.changed;
+  // Resolve before deriving the id: servers report members as relative hrefs
+  // ("/dav.php/…/x.vcf"), and contactId's `new URL(href)` throws on those and
+  // falls back to returning the href verbatim. That yields ids that match no
+  // cached contact, so deletions would silently never apply.
+  const deleted = result.deleted.map((href) => contactId(new URL(href, abUrl).href));
 
   let changed: Contact[] = [];
   if (changedHrefs.length > 0) {
@@ -1134,17 +1213,17 @@ export async function syncCalendar(
   // result shape: refetch with an empty token and force `dirty` so the client
   // reloads the collection outright.
   let forceDirty = false;
-  let results: TsdavTypes.DAVResponse[];
+  let result: SyncCollectionResult;
   try {
-    results = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
+    result = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
   } catch (err) {
     if (!(err instanceof SyncTokenInvalidError)) throw err;
     forceDirty = true;
-    results = await runSyncCollection(calUrl, '', authHeaders);
+    result = await runSyncCollection(calUrl, '', authHeaders);
   }
 
-  const newSyncToken = extractSyncToken(results, calUrl) ?? currentSyncToken;
-  const dirty = forceDirty || results.some((r) => (r.ok && r.href) || r.status === 404);
+  const newSyncToken = result.syncToken ?? currentSyncToken;
+  const dirty = forceDirty || result.changed.length > 0 || result.deleted.length > 0;
 
   return { syncToken: newSyncToken, dirty };
 }
@@ -1213,17 +1292,16 @@ export async function syncCalendarForCache(
 ): Promise<CalendarCacheSyncResult> {
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
-  const results = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
+  const result = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
 
-  const newSyncToken = extractSyncToken(results, calUrl) ?? currentSyncToken;
-  const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
-  const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
+  const newSyncToken = result.syncToken ?? currentSyncToken;
+  const changedHrefs = result.changed;
 
   // Resolve relative hrefs to absolute URLs so they match what is stored in the cache.
   const resolveHref = (href: string): string => {
     try { return new URL(href, calUrl).href; } catch { return href; }
   };
-  const deleted = deletedHrefs.map(resolveHref);
+  const deleted = result.deleted.map(resolveHref);
 
   let changed: CalendarObjectRaw[] = [];
   if (changedHrefs.length > 0) {
