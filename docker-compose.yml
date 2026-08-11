@@ -8,12 +8,16 @@ services:
       - NODE_ENV=production
       - DATA_DIR=/data
     ports:
-      - "${PORT:-3000}:3000"
+      # PORT is what the app binds (same variable native runs use, passed through
+      # by env_file), so it must be the container-side port. HOST_PORT defaults to
+      # it — set it only when the published port needs to differ from the internal
+      # one, e.g. 3000 is already taken on the host.
+      - "${HOST_PORT:-${PORT:-3000}}:${PORT:-3000}"
     volumes:
       - data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:$${PORT:-3000}/healthz || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

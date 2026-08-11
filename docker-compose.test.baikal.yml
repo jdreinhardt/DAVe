@@ -1,0 +1,38 @@
+name: dave-test-baikal
+
+services:
+  # One-shot seeder, mirroring the Radicale stack's layout. It works entirely
+  # offline against the shared volumes (writes baikal.yaml, builds the SQLite DB
+  # from the image's own schema, disables the installer), so it does not need a
+  # running Baikal — and running it first keeps `up --wait` usable: compose
+  # treats a service nothing depends on as failed when it exits, even with 0.
+  baikal-init:
+    image: &baikal_image ckulka/baikal:0.10.1-nginx
+    volumes:
+      - baikal-test-config:/var/www/baikal/config
+      - baikal-test-data:/var/www/baikal/Specific
+      - ./scripts/seed-test-baikal.sh:/seed-test-baikal.sh:ro,z
+    entrypoint: ['/bin/sh', '/seed-test-baikal.sh']
+
+  # Baikal DAV server for integration and E2E tests.
+  # Runs on port 8801 (distinct from the dev stack's 8800) to avoid collisions.
+  baikal:
+    image: *baikal_image
+    depends_on:
+      baikal-init:
+        condition: service_completed_successfully
+    ports:
+      - '8801:80'
+    volumes:
+      - baikal-test-config:/var/www/baikal/config
+      - baikal-test-data:/var/www/baikal/Specific
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -s -o /dev/null http://localhost/ && exit 0 || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+volumes:
+  baikal-test-config:
+  baikal-test-data:

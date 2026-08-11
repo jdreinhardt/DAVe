@@ -8,7 +8,7 @@ const DAV_SERVER = process.env.DAV_SERVER === 'radicale' ? 'radicale' : 'baikal'
 
 const STACKS = {
   baikal: {
-    composeFile: 'docker-compose.test.yml',
+    composeFile: 'docker-compose.test.baikal.yml',
     davBaseUrl: 'http://localhost:8801/dav.php',
   },
   radicale: {

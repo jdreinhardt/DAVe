@@ -8,7 +8,7 @@
 #   3. Declares the same two collections the Baikal seeder creates, so the
 #      integration and e2e suites are identical across both servers
 #
-# This is deliberately much smaller than scripts/seed-test.sh: Radicale needs no
+# This is deliberately much smaller than scripts/seed-test-baikal.sh: Radicale needs no
 # database bootstrap, no schema file, and no install-wizard suppression. The
 # collections are declared rather than inserted — Radicale creates them from
 # `predefined_collections` on the user's first authenticated request, so we never
@@ -37,7 +37,7 @@ cat > "$USERS_PATH" <<EOF
 ${USERNAME}:${PASSWORD}
 EOF
 
-# Collection names and display names mirror scripts/seed-test.sh so no test needs
+# Collection names and display names mirror scripts/seed-test-baikal.sh so no test needs
 # to know which server it is talking to.
 #
 # supported-calendar-component-set is set explicitly even though Radicale already

@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Non-interactive test-stack seed for docker-compose.test.yml.
+# Non-interactive test-stack seed for docker-compose.test.baikal.yml.
 # Runs inside the ckulka/baikal:*-nginx container.
 #
 # What it does:

@@ -273,13 +273,13 @@ packages/
   frontend/   React SPA (Vite + Tailwind)
 scripts/
   seed.sh                  Populate a dev Baikal with a test user + collections
-  seed-test.sh             Seed the integration-test Baikal (testuser/testpass)
+  seed-test-baikal.sh             Seed the integration-test Baikal (testuser/testpass)
   seed-test-radicale.sh    Seed the integration-test Radicale (testuser/testpass)
 Dockerfile         Production multi-stage build
 Dockerfile.dev     Development image (source bind-mounted)
 docker-compose.yml           Production compose (app only)
 docker-compose.dev.yml       Dev compose (app + hot reload)
-docker-compose.test.yml          Integration test stack (Baikal, port 8801)
+docker-compose.test.baikal.yml   Integration test stack (Baikal, port 8801)
 docker-compose.test.radicale.yml Integration test stack (Radicale, port 8802)
 ```
 

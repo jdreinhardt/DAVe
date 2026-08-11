@@ -9,11 +9,11 @@ packages/
   frontend/     React 19 SPA (Vite + Tailwind v4)
 scripts/
   seed.sh                Populate dev Baikal with a test user + collections
-  seed-test.sh           Non-interactive seed for the Baikal test stack
+  seed-test-baikal.sh    Non-interactive seed for the Baikal test stack
   seed-test-radicale.sh  Non-interactive seed for the Radicale test stack
 docker-compose.yml               Production (app only)
 docker-compose.dev.yml           Dev stack (source bind-mounted)
-docker-compose.test.yml          Test stack (Baikal on 8801, seeded automatically)
+docker-compose.test.baikal.yml   Test stack (Baikal on 8801, seeded automatically)
 docker-compose.test.radicale.yml Test stack (Radicale on 8802, seeded automatically)
 playwright.config.ts        E2E test config
 ```

@@ -1,11 +1,12 @@
+name: dave-dev
+
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile.dev
     volumes:
-      # Bind-mount source for hot reload.
-      - .:/app
+      - .:/app:z
       # Anonymous volumes keep the container's node_modules intact even though
       # the bind mount would otherwise shadow them.
       - /app/node_modules
@@ -17,32 +18,61 @@ services:
       - '5173:5173' # Vite dev server (frontend + HMR)
     environment:
       - NODE_ENV=development
-      - BAIKAL_BASE_URL=http://baikal/dav.php
+      # Use the DAV_BASE_URL for the backend you want to test.
+      # Radicale enabled by default due to simplicity in standup for testing
+      # - DAV_BASE_URL=http://baikal/dav.php
+      - DAV_BASE_URL=http://radicale:5232
       - SESSION_SECRET=dev-only-secret-not-for-production-must-be-32-chars
       - SESSION_TTL_HOURS=168
       - PORT=3000
       - BIND_ADDRESS=0.0.0.0
       - DATA_DIR=/app/.dev-data
     depends_on:
-      baikal:
+      radicale:
         condition: service_healthy
     command: npm run dev
 
-  baikal:
-    image: ckulka/baikal:nginx
+# Uncomment one of the backends for a fully local dev stack. Also, uncomment the
+# DAV_BASE_URL in the app service.
+# See scripts/seed-test-<backend>.sh for the config shape
+# Test backend can also be deployed with docker-compose.test.<backend>.yml
+
+## ----- Baikal
+  # baikal:
+  #   image: ckulka/baikal:0.10.1-nginx
+  #   ports:
+  #     - '8800:80' # Baikal web UI (admin + DAV)
+  #   volumes:
+  #     - baikal-config:/var/www/baikal/config
+  #     - baikal-data:/var/www/baikal/Specific
+  #   healthcheck:
+  #     test: ['CMD-SHELL', 'curl -fs http://localhost/ -o /dev/null 2>&1 || exit 1']
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+  #     start_period: 10s
+  #   restart: unless-stopped
+#
+# volumes:
+#   baikal-config:
+#   baikal-data:
+
+# ----- Radicale
+  radicale:
+    image: tomsquest/docker-radicale:3.5.4.0
     ports:
-      - '8800:80' # Baikal web UI (admin + DAV)
+      - '8800:5232'
     volumes:
-      - baikal-config:/var/www/baikal/config
-      - baikal-data:/var/www/baikal/Specific
+      - radicale-config:/config
+      - radicale-data:/data
     healthcheck:
-      test: ['CMD-SHELL', 'curl -fs http://localhost/ -o /dev/null 2>&1 || exit 1']
+      test: ['CMD-SHELL', 'curl -s -o /dev/null http://localhost:5232/ || exit 1']
       interval: 5s
       timeout: 3s
       retries: 10
-      start_period: 10s
+      start_period: 5s
     restart: unless-stopped
 
 volumes:
-  baikal-config:
-  baikal-data:
+  radicale-config:
+  radicale-data:

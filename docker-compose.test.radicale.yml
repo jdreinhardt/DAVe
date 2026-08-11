@@ -1,6 +1,6 @@
 name: dave-test-radicale
 
-# Radicale counterpart to docker-compose.test.yml. Both stacks seed the same
+# Radicale counterpart to docker-compose.test.baikal.yml. Both stacks seed the same
 # user, calendar and address book names, so the integration and e2e suites run
 # unchanged against either — that equivalence is the point of having both.
 #

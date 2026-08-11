@@ -1,6 +1,6 @@
 {
   "name": "dave",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -19,9 +19,9 @@
     "test:e2e:radicale": "DAV_SERVER=radicale playwright test",
     "test:e2e:all": "npm run test:e2e:baikal && npm run test:e2e:radicale",
     "test:e2e:ui": "playwright test --ui",
-    "stack:baikal": "docker compose -f docker-compose.test.yml up --wait",
+    "stack:baikal": "docker compose -f docker-compose.test.baikal.yml up --wait",
     "stack:radicale": "docker compose -f docker-compose.test.radicale.yml up --wait",
-    "stack:down": "docker compose -f docker-compose.test.yml down -v && docker compose -f docker-compose.test.radicale.yml down -v",
+    "stack:down": "docker compose -f docker-compose.test.baikal.yml down -v && docker compose -f docker-compose.test.radicale.yml down -v",
     "lint": "eslint packages/*/src",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
