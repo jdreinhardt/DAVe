@@ -2032,17 +2032,27 @@ export default function TasksPage() {
     [allTasks, selectedUid],
   );
 
-  // Backspace clears a selected task's dates in the Gantt — the inverse of the
-  // drag and sweep gestures, which otherwise have no counterpart in the chart.
+  // Clearing a task's dates — the inverse of the Gantt's drag and sweep gestures,
+  // which otherwise have no counterpart in the chart. Shared by the row button and
+  // the Backspace hotkey so both behave identically.
+  const handleUnschedule = useCallback(
+    (task: Task) => {
+      const next = computeUnschedule(task.data);
+      if (!next) return; // already unscheduled — don't spend a PUT saying so
+      handleGanttCommit(task, next);
+      showToast('Task unscheduled');
+    },
+    [handleGanttCommit, showToast],
+  );
+
   // useHotkey suppresses this whenever focus is in an input, textarea, select or
-  // contenteditable, so it can't fire while the detail panel is being edited.
+  // contenteditable, so it can't fire while the detail panel or search is in use.
   useHotkey('Backspace', (e) => {
     if (layout !== 'gantt' || archiveMode || !selectedTask) return;
-    const next = computeUnschedule(selectedTask.data);
-    if (!next) return; // already unscheduled — don't spend a PUT saying so
+    // Only swallow the keystroke when there is something to clear.
+    if (!selectedTask.data.dtstart && !selectedTask.data.due) return;
     e.preventDefault();
-    handleGanttCommit(selectedTask, next);
-    showToast('Task unscheduled');
+    handleUnschedule(selectedTask);
   });
 
   const isMobile = useIsMobile();
@@ -2663,6 +2673,7 @@ export default function TasksPage() {
               zoom={ganttZoom}
               onZoomChange={setGanttZoom}
               onCommitDates={handleGanttCommit}
+              onUnschedule={handleUnschedule}
               dragEnabled={!isMobile}
             />
           )}

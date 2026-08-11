@@ -220,6 +220,35 @@ test.describe('Tasks — Gantt', () => {
     await expect(page.getByRole('heading', { name: 'E2E Gantt Click' })).toBeVisible();
   });
 
+  test('the row button unschedules without deleting the task', async ({ page }) => {
+    await openGantt(page);
+    const row = page.locator(`[data-uid="${PARENT_UID}"]`).first();
+    await expect(bar(page, PARENT_UID)).toHaveAttribute('data-gantt-shape', 'span');
+
+    await row.getByTestId('gantt-unschedule').click();
+
+    await expect(bar(page, PARENT_UID)).toHaveCount(0);
+    // The task itself must survive — the control clears dates, it is not a delete.
+    await expect(row).toBeVisible();
+    await expect(
+      page.locator(`[data-uid="${PARENT_UID}"][data-gantt-unscheduled="true"]`),
+    ).toBeVisible();
+    const server = await page.request.get(`/api/tasks/${PARENT_UID}`);
+    expect(server.ok()).toBe(true);
+    expect((await server.json()).data.summary).toBe('E2E Gantt Parent');
+  });
+
+  test('the unschedule button is offered only on dated rows', async ({ page }) => {
+    await openGantt(page);
+    // PARENT_UID was cleared by the previous test, so it now shows the tag instead.
+    const cleared = page.locator(`[data-uid="${PARENT_UID}"]`).first();
+    await expect(cleared.getByTestId('gantt-unschedule')).toHaveCount(0);
+    await expect(cleared.getByText('Unscheduled')).toBeVisible();
+
+    const dated = page.locator(`[data-uid="${SPAN_UID}"]`).first();
+    await expect(dated.getByTestId('gantt-unschedule')).toHaveCount(1);
+  });
+
   test('backspace clears the dates of the selected task', async ({ page }) => {
     await openGantt(page);
     await expect(bar(page, MILESTONE_UID)).toHaveAttribute('data-gantt-shape', 'milestone');

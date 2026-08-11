@@ -1,5 +1,6 @@
 import { useState, useRef, useMemo, useEffect, useLayoutEffect, useCallback } from 'react';
 import {
+  CalendarOff,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -81,6 +82,9 @@ interface TaskGanttProps {
   zoom: GanttZoom;
   onZoomChange: (zoom: GanttZoom) => void;
   onCommitDates: (task: Task, data: TaskJson) => void;
+  /** Clear a task's dates. Owned by the page so the button and the Backspace
+      hotkey take the same path, toast included. */
+  onUnschedule: (task: Task) => void;
   dragEnabled: boolean;
 }
 
@@ -160,12 +164,14 @@ function GanttSidebarRow({
   onSelect,
   onToggleCollapse,
   onDragStart,
+  onUnschedule,
 }: {
   row: GanttRow;
   isOrphan: boolean;
   isSelected: boolean;
   isUnscheduled: boolean;
   draggable: boolean;
+  onUnschedule: () => void;
   onSelect: () => void;
   onToggleCollapse: () => void;
   onDragStart: (e: React.DragEvent) => void;
@@ -183,7 +189,7 @@ function GanttSidebarRow({
       onClick={onSelect}
       title={task.data.summary || '(No title)'}
       className={cn(
-        'flex h-full cursor-pointer items-center gap-1 overflow-hidden border-b border-r border-border pr-2 text-sm',
+        'group flex h-full cursor-pointer items-center gap-1 overflow-hidden border-b border-r border-border pr-2 text-sm',
         isSelected ? 'bg-primary/10' : 'hover:bg-muted/50',
         (done || cancelled) && 'opacity-45',
         draggable && 'cursor-grab',
@@ -213,8 +219,30 @@ function GanttSidebarRow({
         <span className="shrink-0 text-xs text-muted-foreground">{childCount}</span>
       )}
       {isOrphan && <span className="shrink-0 text-xs text-muted-foreground">↑</span>}
-      {isUnscheduled && (
+      {/* The two states share this slot and are mutually exclusive: an undated row
+          says so, a dated one offers to become undated. A slashed *calendar* rather
+          than an ✕ so it reads as "clear the dates", not "delete the task". */}
+      {isUnscheduled ? (
         <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">Unscheduled</span>
+      ) : (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onUnschedule();
+          }}
+          title="Unschedule"
+          aria-label={`Unschedule ${task.data.summary || 'task'}`}
+          data-testid="gantt-unschedule"
+          className={cn(
+            // Revealed on hover, but also whenever the row is selected — hover
+            // doesn't exist on touch, and selection is reachable there.
+            'ml-auto shrink-0 rounded p-0.5 text-muted-foreground transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100',
+            isSelected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+          )}
+        >
+          <CalendarOff className="h-3.5 w-3.5" />
+        </button>
       )}
     </div>
   );
@@ -425,6 +453,7 @@ export default function TaskGantt({
   zoom,
   onZoomChange,
   onCommitDates,
+  onUnschedule,
   dragEnabled,
 }: TaskGanttProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -807,6 +836,7 @@ export default function TaskGantt({
                           e.dataTransfer.setData(TASK_DND_TYPE, JSON.stringify(row.task));
                           e.dataTransfer.effectAllowed = 'move';
                         }}
+                        onUnschedule={() => onUnschedule(row.task)}
                       />
                     </div>
                   );
