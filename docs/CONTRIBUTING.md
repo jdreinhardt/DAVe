@@ -17,11 +17,11 @@ cp .env.example .env   # fill in DAV_BASE_URL and SESSION_SECRET
 ## Development
 
 ```bash
-docker compose -f docker-compose.dev.yml up -d   # start app + Baikal
+docker compose -f docker-compose.dev.yml up -d   # start the app
 npm run dev                                       # backend tsx watch + Vite HMR
 ```
 
-The first time you start the dev Baikal container, complete the wizard at `http://localhost:8800/admin/` and switch **WebDAV auth type** from Digest to Basic. `tsdav` uses Basic auth; Digest causes 401 failures.
+`DAV_BASE_URL` must point at a reachable CalDAV/CardDAV server using **Basic auth** — `tsdav` does not do Digest, which fails with 401. For a fully local stack, uncomment the `radicale` service in `docker-compose.dev.yml`; Radicale needs no install wizard and no auth-type switch. If you point at a fresh Baikal instead, complete the wizard at `http://localhost:8800/admin/` first and switch **WebDAV auth type** from Digest to Basic.
 
 ## Testing
 
@@ -37,15 +37,23 @@ Backend tests cover: crypto, session lifecycle, vCard parse/serialize/round-trip
 
 ### Integration tests
 
-Integration tests run Fastify in-process against a real Baikal container. Start the test stack first:
+Integration tests run Fastify in-process against a real DAV container. There are two stacks, and
+the suite must pass against both **without any test branching on which server is running** — that
+equivalence is what keeps the app from re-acquiring server-specific behavior.
 
 ```bash
-docker compose -f docker-compose.test.yml up -d
-# Wait for baikal-init to complete (it seeds testuser/testpass)
-npm run test:integration -w packages/backend
+npm run stack:baikal              # Baikal on 8801
+npm run test:integration:baikal
+
+npm run stack:radicale            # Radicale on 8802
+npm run test:integration:radicale
+
+npm run test:integration:all      # both, sequentially
+npm run stack:down                # tear both down
 ```
 
-The test stack runs on port 8801 to avoid colliding with the dev stack on 8800.
+Both avoid colliding with the dev stack on 8800. Each seeds `testuser`/`testpass` with a `Personal`
+calendar and a `Contacts` address book.
 
 ### E2E tests (Playwright)
 
@@ -85,4 +93,5 @@ Subject in imperative mood, under 72 characters. Body explains *why*, not *what*
 - **ETags on every mutation.** Every PUT and DELETE must send `If-Match`. Handle 412 as an expected case, not an edge case.
 - **Round-trip fidelity.** Read → mutate → write must preserve unknown vCard/iCal fields. Don't drop what you don't recognise.
 - **Credentials never leave the backend.** Don't log them, don't include them in API responses, don't surface them in error messages.
-- **All DAV traffic through the proxy.** The browser should never talk to Baikal directly.
+- **All DAV traffic through the proxy.** The browser should never talk to the DAV server directly.
+- **No server-specific behavior.** The app targets standard CalDAV/CardDAV. If something only works on one server, fix it generically rather than branching — and make sure the integration suite still passes on both.

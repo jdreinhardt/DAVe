@@ -8,11 +8,13 @@ packages/
   backend/      Fastify server — DAV proxy, session management, REST API
   frontend/     React 19 SPA (Vite + Tailwind v4)
 scripts/
-  seed.sh       Populate dev Baikal with a test user + collections
-  seed-test.sh  Non-interactive seed for the integration-test Docker stack
-docker-compose.yml          Production (app only)
-docker-compose.dev.yml      Dev stack (app + Baikal, source bind-mounted)
-docker-compose.test.yml     Test stack (Baikal on 8801, seeded automatically)
+  seed.sh                Populate dev Baikal with a test user + collections
+  seed-test.sh           Non-interactive seed for the Baikal test stack
+  seed-test-radicale.sh  Non-interactive seed for the Radicale test stack
+docker-compose.yml               Production (app only)
+docker-compose.dev.yml           Dev stack (source bind-mounted)
+docker-compose.test.yml          Test stack (Baikal on 8801, seeded automatically)
+docker-compose.test.radicale.yml Test stack (Radicale on 8802, seeded automatically)
 playwright.config.ts        E2E test config
 ```
 
@@ -25,10 +27,10 @@ Browser (React SPA)
 Backend (Fastify)
    │  CalDAV/CardDAV  HTTP+XML
    ▼
-Baikal (sabre/dav)
+DAV server (Baikal / Radicale)
 ```
 
-The frontend never contacts Baikal directly. All DAV traffic goes through the backend proxy. This removes the CORS problem and keeps credentials server-side.
+The frontend never contacts the DAV server directly. All DAV traffic goes through the backend proxy. This removes the CORS problem and keeps credentials server-side.
 
 ## Backend layers
 
@@ -49,9 +51,9 @@ config.ts        Zod-validated environment variables
 
 ## Session model
 
-Sessions are stored in a local SQLite database (not in Baikal). On login:
+Sessions are stored in a local SQLite database (not on the DAV server). On login:
 
-1. The backend makes a PROPFIND to Baikal with the supplied credentials to verify they work.
+1. The backend makes a PROPFIND to the DAV server with the supplied credentials to verify they work.
 2. If successful, the credentials are encrypted with AES-256-GCM (key derived from `SESSION_SECRET` via HKDF-SHA256 with a random per-record salt) and stored in the `sessions` table alongside a random session ID.
 3. The session ID is set as an `HttpOnly; SameSite=Lax` cookie (also `Secure` when `TRUST_PROXY=1`).
 
@@ -60,13 +62,13 @@ On each authenticated request, the session plugin decrypts the stored credential
 ## vCard pipeline
 
 ```
-Baikal (vCard text)
+DAV server (vCard text)
   └─ parseVCard()      → ContactJson   (normalised TypeScript object)
         │
         │  edit in UI
         ▼
   serializeVCard()     → vCard text    (round-trips unknown fields)
-  └─ PUT to Baikal
+  └─ PUT to the DAV server
 ```
 
 The parser handles vCard 3.0 and 4.0, line unfolding, escaped characters, grouped properties, and ENCODING=b (base64) photos. Unknown properties are preserved in `customFields` and written back verbatim.
@@ -74,13 +76,13 @@ The parser handles vCard 3.0 and 4.0, line unfolding, escaped characters, groupe
 ## iCalendar pipeline
 
 ```
-Baikal (iCal text)
+DAV server (iCal text)
   └─ parseIcalEvents()      → EventJson[]  (one entry per expanded occurrence)
         │
         │  edit in UI
         ▼
   serializeIcalEvent()      → iCal text
-  └─ PUT to Baikal
+  └─ PUT to the DAV server
 ```
 
 Recurring event mutations use helpers in `lib/ical.ts`:
@@ -97,4 +99,26 @@ Recurring event mutations use helpers in `lib/ical.ts`:
 
 ## Auth note
 
-Baikal **must** be configured for **Basic auth** (not Digest). tsdav's auth layer uses Basic; Digest causes 401 failures. The dev and test seed scripts write `auth_type: 'Basic'` into `baikal.yaml` automatically. A manual Baikal install requires switching this in the admin UI under Settings → WebDAV auth type.
+The server **must** be configured for **Basic auth** (not Digest). tsdav's auth layer uses Basic; Digest causes 401 failures.
+
+- **Baikal** — the test seed script writes `dav_auth_type: 'Basic'` into `baikal.yaml`. A manual install requires switching this in the admin UI under Settings → WebDAV auth type.
+- **Radicale** — `[auth] type = htpasswd` is Basic already; nothing to switch.
+
+## Server portability
+
+The runtime speaks standard CalDAV/CardDAV (RFC 4791 / 6352 / 6578) through tsdav and holds no
+server-specific behavior. The integration and e2e suites run unchanged against both Baikal and
+Radicale; if a test ever needs to branch on the server, treat that as a portability regression.
+
+Two things are worth knowing when adding a third server:
+
+- **Collection URLs are rebuilt, not remembered.** `listCalendars`/`listAddressBooks` return the
+  hrefs PROPFIND gave us, but the read and write paths discard them and reconstruct
+  `homeUrl + '/' + id + '/'` (see `collectionId` and the URL builders in `lib/dav.ts`). This holds
+  for Baikal and Radicale, where collections are direct children of the home set, but it would break
+  for shared or delegated collections living elsewhere. The task/journal paths already do the right
+  thing by carrying absolute collection URLs.
+- **Home sets are not necessarily distinct.** Radicale returns the same URL (`/<user>/`) for both
+  `calendar-home-set` and `addressbook-home-set`, so calendars and address books are siblings in one
+  collection. The listing code separates them by `resourcetype`, which is the only reliable
+  discriminator — do not assume the two homes differ.

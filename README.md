@@ -1,6 +1,8 @@
-# DAVe — Baikal Web Client
+# DAVe — CalDAV/CardDAV Web Client
 
-A self-hosted web client for [Baikal](https://sabre.io/baikal/) (CalDAV + CardDAV).
+A self-hosted web client for CalDAV + CardDAV servers.
+Tested against [Baikal](https://sabre.io/baikal/) and [Radicale](https://radicale.org/); it speaks
+standard DAV and holds no server-specific behavior, so other servers may work but are unverified.
 
 **Stack:** Node 22 · Fastify · React 19 · Vite · Tailwind v4 · TypeScript  
 **DAV:** [tsdav](https://github.com/natelindev/tsdav) · [ical.js](https://github.com/kewisch/ical.js)
@@ -33,18 +35,18 @@ A self-hosted web client for [Baikal](https://sabre.io/baikal/) (CalDAV + CardDA
 - Calendar color swatches and visibility toggles in the sidebar
 
 ### Tasks
-- Based on VTODO; requires at least one Baikal collection with VTODO support enabled
+- Based on VTODO; requires at least one calendar collection advertising VTODO support
 - Three layouts: list, compact list, kanban by status
 - Subtask support via `RELATED-TO` with indented tree rendering
 - Recurring tasks roll forward on completion (advances DTSTART/DUE to next occurrence, resets status — no RECURRENCE-ID overrides)
 - Sort by due date, priority, alphabetical, creation/modification date, or category
 - Filter by status, category, calendar, due date range, and priority
 - Full-text search across summary, description, and categories (debounced, runs against local cache)
-- Completed tasks older than `COMPLETED_TASK_RETENTION_DAYS` are evicted from the local cache but remain on Baikal; a "Search Baikal (slower)" toggle in the search bar queries them directly and allows restoring individual tasks
+- Completed tasks older than `COMPLETED_TASK_RETENTION_DAYS` are evicted from the local cache but remain on the server; a "Search Archived" toggle in the search bar queries them directly and allows restoring individual tasks
 - Multi-select with bulk status, priority, category, calendar, and delete operations
 
 ### Notes
-- Based on VJOURNAL (without `DTSTART`); requires at least one Baikal collection with VJOURNAL support enabled
+- Based on VJOURNAL (without `DTSTART`); requires at least one calendar collection advertising VJOURNAL support
 - List and grid views with sort, category filters, and full-text search
 - Markdown rendering via `react-markdown` + `remark-gfm` (stored as plain text in `DESCRIPTION` for interop)
 - Split-pane editor (raw markdown + rendered preview) on desktop; tab-between-panes on mobile
@@ -62,7 +64,7 @@ A self-hosted web client for [Baikal](https://sabre.io/baikal/) (CalDAV + CardDA
 
 ### Global search
 - **Cmd+K** (or **Ctrl+K**) opens a modal that searches across all data types simultaneously
-- Tasks, notes, and journals are searched via SQLite FTS against the local cache; calendar events are queried from Baikal (±60 days from today); contacts are searched client-side from the in-memory cache
+- Tasks, notes, and journals are searched via SQLite FTS against the local cache; calendar events are queried from the DAV server (±60 days from today); contacts are searched client-side from the in-memory cache
 - Keyboard navigation (↑↓ to move, Enter to open, Esc to close)
 - Navigates to the correct tab and selects and scrolls to the item in the list
 
@@ -71,13 +73,20 @@ A self-hosted web client for [Baikal](https://sabre.io/baikal/) (CalDAV + CardDA
 - Sidebar collection visibility toggles with color swatches
 - Mobile-responsive layout; sidebar collapses on small screens
 - Optimistic UI for edits with rollback on failure
-- Multi-user: each user authenticates with their own Baikal credentials and sees only their own collections
+- Multi-user: each user authenticates with their own DAV credentials and sees only their own collections
 
 ---
 
 ## Quick start (development)
 
-You need an existing Baikal instance. Point `DAV_BASE_URL` at its DAV endpoint and make sure **Basic auth is enabled** in Baikal's settings (Settings → WebDAV auth type). tsdav uses Basic auth; leaving it on Digest will cause all logins to fail with 401.
+You need an existing CalDAV/CardDAV server. Point `DAV_BASE_URL` at its DAV endpoint:
+
+- **Baikal** — `https://baikal.example.com/dav.php`. Set **Basic auth** in Settings → WebDAV auth type.
+  tsdav authenticates with Basic; leaving it on Digest fails every login with 401.
+- **Radicale** — `http://radicale.example.com:5232` (served from the root, no path).
+  Use `[auth] type = htpasswd`; Radicale speaks Basic out of the box.
+
+Basic auth is a hard requirement either way — Digest is not supported.
 
 ```bash
 # 1. Clone and install
@@ -104,14 +113,19 @@ docker compose -f docker-compose.dev.yml up -d
 
 Backend changes restart automatically via `tsx watch`; frontend changes apply instantly via Vite HMR.
 
-### Baikal collection setup for Tasks, Notes, and Journals
+### Collection setup for Tasks, Notes, and Journals
 
-Baikal calendar collections default to VEVENT only. To use Tasks, Notes, or Journals you must enable the relevant component types on at least one collection:
+DAVe reads `supported-calendar-component-set` from each collection on discovery and shows a
+collection only in the tabs its components allow. No manual URL configuration is needed — but what
+you have to do first depends on the server:
 
-1. In the Baikal admin UI, go to **Users → [username] → Calendars**.
-2. Edit (or create) a calendar collection and check **VTODO** for tasks, **VJOURNAL** for notes and journals.
-
-DAVe reads the `supported-component-set` from each collection on discovery and shows it only in the appropriate tab(s). No manual URL configuration needed.
+- **Baikal** — collections default to VEVENT only. In the admin UI go to
+  **Users → [username] → Calendars**, then edit (or create) a calendar and check **VTODO** for
+  tasks, **VJOURNAL** for notes and journals. Without this, those tabs show an empty state.
+- **Radicale** — nothing to do. Radicale advertises `VEVENT,VJOURNAL,VTODO` on every calendar by
+  default, so every calendar appears in all three tabs. The flip side is that the first visit to
+  Tasks or Notes syncs *every* calendar rather than a chosen few; set
+  `supported-calendar-component-set` explicitly on a collection to narrow that.
 
 ---
 
@@ -121,18 +135,18 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DAV_BASE_URL` | Yes | — | Root URL of the Baikal DAV endpoint, e.g. `https://baikal.example.com/dav.php` |
+| `DAV_BASE_URL` | Yes | — | Root URL of the DAV endpoint, e.g. `https://baikal.example.com/dav.php` or `http://radicale.example.com:5232`. A trailing slash is stripped; a query or fragment is rejected at startup. |
 | `SESSION_SECRET` | Yes | — | Random secret ≥ 32 chars for encrypting session credentials. Generate: `openssl rand -hex 32` |
 | `SESSION_TTL_HOURS` | No | `168` | Session inactivity timeout in hours (sliding window). Default = 7 days. |
 | `PORT` | No | `3000` | Port to listen on |
 | `BIND_ADDRESS` | No | `0.0.0.0` | Address to bind |
 | `TRUST_PROXY` | No | `0` | Set to `1` when running behind a reverse proxy — enables `Secure` cookies and reads the client IP from `X-Forwarded-For` (used for login rate limiting). A startup warning is logged if this is unset in production. |
 | `DATA_DIR` | No | `/data` | Directory for the SQLite session and cache databases |
-| `SYNC_INTERVAL_SECONDS` | No | `60` | How often the background worker polls Baikal for changes to tasks, notes, and journals |
+| `SYNC_INTERVAL_SECONDS` | No | `60` | How often the background worker polls the server for changes to tasks, notes, and journals |
 | `MAX_CACHED_ENTRIES_PER_USER` | No | `10000` | Safety cap on cached task/note/journal entries per user |
-| `COMPLETED_TASK_RETENTION_DAYS` | No | `7` | Days a completed task stays in the local cache after its `COMPLETED` timestamp (1–90). Older completions remain on Baikal and are reachable via "Search Baikal." |
-| `DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS` | No | `365` | How far back the "Search Baikal (slower)" task search queries for old completed tasks |
-| `EVENT_SEARCH_RANGE_DAYS` | No | `60` | Days in each direction from today that global search queries Baikal for calendar events |
+| `COMPLETED_TASK_RETENTION_DAYS` | No | `7` | Days a completed task stays in the local cache after its `COMPLETED` timestamp (1–90). Older completions remain on the server and are reachable via "Search Archived." |
+| `DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS` | No | `365` | How far back the "Search Archived" task search queries for old completed tasks |
+| `EVENT_SEARCH_RANGE_DAYS` | No | `60` | Days in each direction from today that global search queries the server for calendar events |
 | `CACHE_DB_PATH` | No | `$DATA_DIR/cache.db` | Override path for the sync cache SQLite file |
 
 ---
@@ -155,10 +169,10 @@ The container listens on HTTP only. Terminate TLS at a reverse proxy and set `TR
 
 Two things live in the `/data` volume, with deliberately different protection:
 
-- **Baikal credentials** (`sessions.sqlite`) are **encrypted** at the app layer (AES-256-GCM, key derived from `SESSION_SECRET` via HKDF-SHA256 with a per-record salt). This is the high-value secret, so it's never stored in the clear.
-- **Cached content** (`cache.db` — your calendar events, contacts, tasks, and notes, including full vCard/iCalendar bodies) is stored **unencrypted**. This is a mirror of data Baikal already holds in plaintext, and it's kept queryable so SQLite FTS5 can power global search. Encrypting it would disable full-text search for little real gain, since the running app needs the key in memory on every request anyway.
+- **DAV credentials** (`sessions.sqlite`) are **encrypted** at the app layer (AES-256-GCM, key derived from `SESSION_SECRET` via HKDF-SHA256 with a per-record salt). This is the high-value secret, so it's never stored in the clear.
+- **Cached content** (`cache.db` — your calendar events, contacts, tasks, and notes, including full vCard/iCalendar bodies) is stored **unencrypted**. This is a mirror of data the DAV server already holds in plaintext, and it's kept queryable so SQLite FTS5 can power global search. Encrypting it would disable full-text search for little real gain, since the running app needs the key in memory on every request anyway.
 
-If the contents of `/data` are sensitive in your environment, protect them at the deployment layer rather than the app layer: **encrypt the underlying volume/disk** (LUKS, encrypted EBS/PD, etc.) and **encrypt your backups**. Volume encryption transparently covers both SQLite files and keeps search working. Note that if you run DAVe on a different host than Baikal, `cache.db` becomes a second plaintext copy of that data — factor that into where you place the volume.
+If the contents of `/data` are sensitive in your environment, protect them at the deployment layer rather than the app layer: **encrypt the underlying volume/disk** (LUKS, encrypted EBS/PD, etc.) and **encrypt your backups**. Volume encryption transparently covers both SQLite files and keeps search working. Note that if you run DAVe on a different host than the DAV server, `cache.db` becomes a second plaintext copy of that data — factor that into where you place the volume.
 
 ### Nginx
 
@@ -220,15 +234,24 @@ npm test -w packages/frontend   # frontend only (API client, hooks)
 
 ### Integration tests
 
-Integration tests use Fastify's in-process `.inject()` against a real Baikal container. Start the test stack before running:
+Integration tests use Fastify's in-process `.inject()` against a real DAV container. There are two
+stacks, and the suite is identical against both — no test branches on which server is running. That
+equivalence is the point: it is what keeps the app from silently re-acquiring server-specific
+behavior.
 
 ```bash
-docker compose -f docker-compose.test.yml up -d
-# baikal-init seeds testuser/testpass automatically; wait for it to exit
-npm run test:integration -w packages/backend
+npm run stack:baikal              # Baikal on 8801, seeded testuser/testpass
+npm run test:integration:baikal
+
+npm run stack:radicale            # Radicale on 8802, seeded testuser/testpass
+npm run test:integration:radicale
+
+npm run test:integration:all      # both, sequentially
+npm run stack:down                # tear both down
 ```
 
-The test stack runs on port 8801 (distinct from the dev stack).
+Both ports are distinct from the dev stack's 8800. The two also exercise different base-URL shapes:
+Baikal is served from a path (`/dav.php`), Radicale from the root.
 
 ### E2E tests (Playwright)
 
@@ -249,13 +272,15 @@ packages/
   backend/    Fastify server — session management, DAV proxy, sync cache, sync worker
   frontend/   React SPA (Vite + Tailwind)
 scripts/
-  seed.sh        Populate a dev Baikal with a test user + collections
-  seed-test.sh   Seed the integration-test Baikal (testuser/testpass)
+  seed.sh                  Populate a dev Baikal with a test user + collections
+  seed-test.sh             Seed the integration-test Baikal (testuser/testpass)
+  seed-test-radicale.sh    Seed the integration-test Radicale (testuser/testpass)
 Dockerfile         Production multi-stage build
 Dockerfile.dev     Development image (source bind-mounted)
 docker-compose.yml           Production compose (app only)
 docker-compose.dev.yml       Dev compose (app + hot reload)
-docker-compose.test.yml      Integration test stack (app + Baikal)
+docker-compose.test.yml          Integration test stack (Baikal, port 8801)
+docker-compose.test.radicale.yml Integration test stack (Radicale, port 8802)
 ```
 
 ### Backend internals
@@ -269,9 +294,9 @@ docker-compose.test.yml      Integration test stack (app + Baikal)
 
 ## Interoperability
 
-DAVe is tested against Baikal and designed to round-trip cleanly with:
+DAVe is tested against Baikal and Radicale, and designed to round-trip cleanly with:
 
 - **DAVx⁵** on Android for CalDAV/CardDAV sync
 - **jtx Board** on Android for tasks, notes, and journals (VTODO + VJOURNAL)
 
-Baikal stores vCard 3.0; DAVe reads and writes vCard 3.0 and preserves all unknown properties and parameters on round-trip. Notes and journals are stored as plain text in `DESCRIPTION` (with markdown syntax visible as-is in other clients) so they remain readable outside DAVe.
+DAVe reads and writes vCard 3.0 (what Baikal stores) and preserves all unknown properties and parameters on round-trip. Notes and journals are stored as plain text in `DESCRIPTION` (with markdown syntax visible as-is in other clients) so they remain readable outside DAVe.
