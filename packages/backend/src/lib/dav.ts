@@ -966,6 +966,8 @@ export interface AddressBookSyncResult {
   syncToken: string;
   changed: Contact[];
   deleted: string[];
+  /** True when `changed` is the entire collection, not a delta. See syncAddressBook. */
+  full: boolean;
 }
 
 export interface CalendarSyncResult {
@@ -973,15 +975,97 @@ export interface CalendarSyncResult {
   dirty: boolean;
 }
 
-// Extract the new sync-token from a tsdav sync-collection REPORT response.
-// tsdav puts it at result[n].raw.multistatus.syncToken for the response that
-// carries the root <D:multistatus> element.
-function extractSyncToken(results: TsdavTypes.DAVResponse[]): string | undefined {
+/**
+ * The server refused our sync-token and wants a fresh start.
+ *
+ * RFC 6578 §3.2 defines this as a 403 carrying the DAV:valid-sync-token
+ * precondition. It is not an exotic case: Radicale prunes tokens older than
+ * `max_sync_token_age` (30 days by default), and sabre/dav does the same for
+ * tokens it has forgotten, so any collection that goes unsynced for long enough
+ * lands here. Callers must discard the stored token and re-sync from scratch.
+ */
+export class SyncTokenInvalidError extends Error {
+  constructor(public readonly collectionUrl: string) {
+    super(`Server rejected the sync token for ${collectionUrl}`);
+    this.name = 'SyncTokenInvalidError';
+  }
+}
+
+/**
+ * Run a sync-collection REPORT and turn error replies into thrown errors.
+ *
+ * tsdav's `syncCollection` hands back whatever `davRequest` produced without
+ * checking it. For any non-2xx reply that means a single synthetic response
+ * `{ ok: false, status, raw: <body as a *string*> }` — which silently satisfies
+ * none of the `r.ok` / `r.status === 404` filters below and leaves `raw` as a
+ * string, so `extractSyncToken` finds nothing and returns the *old* token. Left
+ * unchecked, a rejected token therefore looks exactly like "nothing changed",
+ * and the same dead token gets replayed forever while the collection quietly
+ * stops updating. Fail loudly instead.
+ */
+async function runSyncCollection(
+  url: string,
+  syncToken: string,
+  authHeaders: Record<string, string>,
+): Promise<TsdavTypes.DAVResponse[]> {
+  const results = await _syncCollection({
+    url,
+    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
+    syncLevel: 1,
+    syncToken,
+    headers: authHeaders,
+  });
+
+  // A per-member 404 is normal (that's how deletions are reported); only a
+  // whole-request failure carries `ok: false` on the response for the URL itself.
+  const failure = results.find(
+    (r) => r.ok === false && typeof r.status === 'number' && r.status >= 400 && r.status !== 404,
+  );
+  if (!failure) return results;
+
+  // 409 is not what the RFC specifies, but some servers use it for the same
+  // precondition, so accept both. A 403 without the precondition element is
+  // treated the same way: the only other plausible cause is a permission change,
+  // and the resulting full re-sync will surface that as a real error instead of
+  // hiding it behind a stalled token. Log which of the two it was, since the
+  // distinction is the first thing worth knowing when this shows up in the wild.
+  if (failure.status === 403 || failure.status === 409) {
+    const raw = typeof failure.raw === 'string' ? failure.raw : '';
+    const declared = /valid-sync-token/i.test(raw);
+    console.warn(
+      `sync-collection for ${url} rejected with ${failure.status}` +
+        `${declared ? ' (DAV:valid-sync-token)' : ' without a DAV:valid-sync-token precondition'}`,
+    );
+    throw new SyncTokenInvalidError(url);
+  }
+  throw Object.assign(
+    new Error(`sync-collection REPORT failed: ${failure.status} ${failure.statusText ?? ''}`.trim()),
+    { statusCode: failure.status },
+  );
+}
+
+/**
+ * Extract the new sync-token from a tsdav sync-collection REPORT response.
+ *
+ * tsdav attaches the whole parsed document as `raw` to every member response, so
+ * the token is reachable at `result[n].raw.multistatus.syncToken`.
+ *
+ * Known gap: when the REPORT reports *no* changes, `multistatus.response` is
+ * absent, tsdav maps that to a single synthetic entry carrying no `raw` at all,
+ * and the token is unrecoverable. We keep the previous token, which the server
+ * still accepts, so syncing stays correct — but an idle collection's token never
+ * advances and can therefore age past the server's retention window (Radicale
+ * prunes at 30 days). That is exactly the case SyncTokenInvalidError recovers
+ * from, so the two behaviours together are safe; the warning is here so the
+ * degradation is visible rather than silent.
+ */
+function extractSyncToken(results: TsdavTypes.DAVResponse[], url: string): string | undefined {
   for (const r of results) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const token = (r as any).raw?.multistatus?.syncToken;
     if (token) return String(token);
   }
+  console.warn(`sync-collection for ${url} returned no sync-token; reusing the previous one`);
   return undefined;
 }
 
@@ -995,15 +1079,22 @@ export async function syncAddressBook(
   const abUrl = `${homeUrl}/${abId}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
-  const results = await _syncCollection({
-    url: abUrl,
-    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
-    syncLevel: 1,
-    syncToken: currentSyncToken,
-    headers: authHeaders,
-  });
+  // An empty sync-token means "send me everything" (RFC 6578 §3.2), so recovery
+  // from a rejected token is just the same REPORT with the token dropped. The
+  // `full` flag tells the client to replace its contact list rather than merge a
+  // delta into it — the response is the whole collection, and anything deleted
+  // while our token was stale is absent rather than reported as a deletion.
+  let full = false;
+  let results: TsdavTypes.DAVResponse[];
+  try {
+    results = await runSyncCollection(abUrl, currentSyncToken, authHeaders);
+  } catch (err) {
+    if (!(err instanceof SyncTokenInvalidError)) throw err;
+    full = true;
+    results = await runSyncCollection(abUrl, '', authHeaders);
+  }
 
-  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
+  const newSyncToken = extractSyncToken(results, abUrl) ?? currentSyncToken;
 
   const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
   const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
@@ -1027,7 +1118,7 @@ export async function syncAddressBook(
       }));
   }
 
-  return { syncToken: newSyncToken, changed, deleted };
+  return { syncToken: newSyncToken, changed, deleted, full };
 }
 
 export async function syncCalendar(
@@ -1039,16 +1130,21 @@ export async function syncCalendar(
   const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${calId}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
-  const results = await _syncCollection({
-    url: calUrl,
-    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
-    syncLevel: 1,
-    syncToken: currentSyncToken,
-    headers: authHeaders,
-  });
+  // Calendars only report a dirty bit, so a rejected token needs no special
+  // result shape: refetch with an empty token and force `dirty` so the client
+  // reloads the collection outright.
+  let forceDirty = false;
+  let results: TsdavTypes.DAVResponse[];
+  try {
+    results = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
+  } catch (err) {
+    if (!(err instanceof SyncTokenInvalidError)) throw err;
+    forceDirty = true;
+    results = await runSyncCollection(calUrl, '', authHeaders);
+  }
 
-  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
-  const dirty = results.some((r) => (r.ok && r.href) || r.status === 404);
+  const newSyncToken = extractSyncToken(results, calUrl) ?? currentSyncToken;
+  const dirty = forceDirty || results.some((r) => (r.ok && r.href) || r.status === 404);
 
   return { syncToken: newSyncToken, dirty };
 }
@@ -1103,6 +1199,11 @@ export async function fetchAllCalendarObjects(
  * Incremental sync via sync-collection REPORT.
  * Unlike syncCalendar(), this also fetches the bodies of changed objects
  * so the cache can be updated without a second round-trip.
+ *
+ * Unlike the other two sync helpers this one does *not* recover from a rejected
+ * token on its own: it throws SyncTokenInvalidError so the caller can clear the
+ * collection's cached rows before refetching. Retrying here would repopulate the
+ * cache while leaving rows for objects deleted in the meantime.
  */
 export async function syncCalendarForCache(
   session: SessionData,
@@ -1112,15 +1213,9 @@ export async function syncCalendarForCache(
 ): Promise<CalendarCacheSyncResult> {
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
-  const results = await _syncCollection({
-    url: calUrl,
-    props: { [`${DAVNamespaceShort.DAV}:getetag`]: {} },
-    syncLevel: 1,
-    syncToken: currentSyncToken,
-    headers: authHeaders,
-  });
+  const results = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
 
-  const newSyncToken = extractSyncToken(results) ?? currentSyncToken;
+  const newSyncToken = extractSyncToken(results, calUrl) ?? currentSyncToken;
   const changedHrefs = results.filter((r) => r.ok && r.href).map((r) => r.href as string);
   const deletedHrefs = results.filter((r) => r.status === 404 && r.href).map((r) => r.href as string);
 
@@ -1241,12 +1336,32 @@ export async function deleteTask(
 // ── DAV archive search ─────────────────────────────────────────────────────
 
 /**
+ * The COMPLETED window the archive search covers, as epoch milliseconds.
+ *
+ * start = now - DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS  (oldest to fetch)
+ * end   = now - COMPLETED_TASK_RETENTION_DAYS    (exclude still-cached tasks)
+ *
+ * Exported so callers can re-check what the server returned against the same
+ * bounds that were asked for.
+ */
+export function archiveSearchWindow(config: Config): { startMs: number; endMs: number } {
+  const now = Date.now();
+  return {
+    startMs: now - config.DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS * 86_400_000,
+    endMs: now - config.COMPLETED_TASK_RETENTION_DAYS * 86_400_000,
+  };
+}
+
+/**
  * Fetch VTODO objects whose COMPLETED timestamp falls strictly between the
  * retention window and the max archive age — i.e. tasks that have been evicted
  * from the local cache but are still within the server-side search cap.
  *
- * time-range start = now - DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS  (oldest to fetch)
- * time-range end   = now - COMPLETED_TASK_RETENTION_DAYS       (exclude still-cached tasks)
+ * The time-range filter is only a request. Radicale and sabre/dav both evaluate
+ * `time-range` inside a `prop-filter`, but a server that ignores it answers with
+ * every VTODO in the collection, which would flood the archive UI with tasks the
+ * user can already see. Callers must re-check COMPLETED against
+ * archiveSearchWindow() rather than trusting the result set.
  *
  * Per-collection failures are caught and logged so one bad collection
  * doesn't abort the entire search.
@@ -1260,10 +1375,9 @@ export async function fetchArchivedCompletedTasks(
   const toIso = (ms: number): string =>
     new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
 
-  // Oldest tasks to include
-  const startStr = toIso(Date.now() - config.DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS * 86_400_000);
-  // Exclude tasks still within the retention window (they're in the local cache)
-  const endStr = toIso(Date.now() - config.COMPLETED_TASK_RETENTION_DAYS * 86_400_000);
+  const { startMs, endMs } = archiveSearchWindow(config);
+  const startStr = toIso(startMs);
+  const endStr = toIso(endMs);
 
   const results: CalendarObjectRaw[] = [];
   for (const calUrl of collectionUrls) {

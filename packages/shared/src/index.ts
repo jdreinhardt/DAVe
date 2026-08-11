@@ -300,6 +300,9 @@ export interface AddressBookSyncResult {
   syncToken: string;
   changed: Contact[];  // added + modified contacts
   deleted: string[];   // IDs of deleted contacts
+  // True when the server rejected our sync token and `changed` is therefore the
+  // whole collection rather than a delta. Clients must replace, not merge.
+  full: boolean;
 }
 
 export interface CalendarSyncResult {

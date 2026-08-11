@@ -1,8 +1,36 @@
 import { z } from 'zod';
 import path from 'path';
 
+/**
+ * Normalize the DAV endpoint so downstream URL building has one shape to expect.
+ *
+ * Servers differ in what this points at: Baikal wants a path
+ * (`https://host/dav.php`) while Radicale is served from the root
+ * (`http://host:5232`). Both forms are fine, but a trailing slash is not — every
+ * collection URL is built by appending `/<id>/`, and `http://host:5232/` would
+ * yield a double slash that some servers 301-redirect. `davFetch` refuses to
+ * follow redirects (it must never replay the Authorization header to another
+ * target), so that redirect surfaces as a hard failure rather than a retry.
+ *
+ * A query or fragment is always a misconfiguration — it would be silently
+ * dropped when resolving relative hrefs against this base.
+ */
+const davBaseUrl = z
+  .string()
+  .url('DAV_BASE_URL must be a valid URL')
+  .superRefine((value, ctx) => {
+    const parsed = new URL(value);
+    if (parsed.search || parsed.hash) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'DAV_BASE_URL must not contain a query string or fragment',
+      });
+    }
+  })
+  .transform((value) => value.replace(/\/+$/, ''));
+
 const schema = z.object({
-  DAV_BASE_URL: z.string().url('DAV_BASE_URL must be a valid URL'),
+  DAV_BASE_URL: davBaseUrl,
   SESSION_SECRET: z
     .string()
     .min(32, 'SESSION_SECRET must be at least 32 characters'),

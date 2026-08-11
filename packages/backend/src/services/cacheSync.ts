@@ -5,11 +5,13 @@ import {
   fetchAllCalendarObjects,
   syncCalendarForCache,
   listCalendars,
+  SyncTokenInvalidError,
 } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import {
   upsertEntry,
   deleteEntryByObjectUrl,
+  deleteEntriesForCollection,
   upsertCollectionSync,
   getCollectionSync,
   countEntriesForUser,
@@ -82,12 +84,23 @@ export async function incrementalSyncCollection(
   config: Config,
   logger?: Logger,
 ): Promise<string> {
-  const { syncToken: newToken, changed, deleted } = await syncCalendarForCache(
-    session,
-    collectionUrl,
-    syncToken,
-    config,
-  );
+  let result;
+  try {
+    result = await syncCalendarForCache(session, collectionUrl, syncToken, config);
+  } catch (err) {
+    if (!(err instanceof SyncTokenInvalidError)) throw err;
+    // The server forgot our token (Radicale prunes after max_sync_token_age,
+    // 30 days by default). Rebuild: drop the collection's rows, then repeat the
+    // REPORT with an empty token, which RFC 6578 §3.2 defines as "send me
+    // everything". Clearing first is what keeps objects deleted during the gap
+    // from surviving in the cache — a full REPORT lists only current members and
+    // reports no deletions.
+    logger?.warn({ collectionUrl }, 'Sync token rejected by server; rebuilding collection cache');
+    deleteEntriesForCollection(cacheDb, collectionUrl, userId);
+    result = await syncCalendarForCache(session, collectionUrl, '', config);
+  }
+
+  const { syncToken: newToken, changed, deleted } = result;
 
   for (const { url, etag, rawIcs } of changed) {
     const entry = parseEntry(rawIcs, url, collectionUrl, userId, etag);

@@ -9,7 +9,7 @@ import {
   applyCompletion, rollForwardTask, serializeIcalTask, parseVTodoToTaskJson,
   parseDateStringsFromIcs, parseAlarmsFromIcs, parseRruleFromIcs, parseRecurringInstanceFromIcs,
 } from '../lib/ical.js';
-import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask, createTaskRaw, fetchArchivedCompletedTasks, restoreArchivedTask as davRestoreArchivedTask } from '../lib/dav.js';
+import { createTask as davCreateTask, updateTask as davUpdateTask, deleteTask as davDeleteTask, createTaskRaw, fetchArchivedCompletedTasks, archiveSearchWindow, restoreArchivedTask as davRestoreArchivedTask } from '../lib/dav.js';
 import { parseEntry } from '../lib/entryParser.js';
 import { upsertEntry, deleteEntryByUid } from '../db/cacheOps.js';
 import { collectionIdFromUrl, msToIso, buildFtsQuery, type CategoryRow, type RelationRow } from '../lib/routeUtils.js';
@@ -309,10 +309,19 @@ export async function tasksRoutes(
         return reply.status(502).send({ error: 'Failed to search the DAV server', statusCode: 502 });
       }
 
+      // Re-check the window locally. The CalDAV time-range filter is a request,
+      // not a guarantee: a server that ignores prop-filter/time-range returns
+      // every VTODO it has, which would bury the archive view in tasks the user
+      // can already see in the normal list.
+      const { startMs, endMs } = archiveSearchWindow(config);
+
       const tasks: ArchivedTask[] = [];
       for (const { url, etag, rawIcs } of rawObjects) {
         const parsed = parseVTodoToTaskJson(rawIcs);
         if (!parsed || parsed.data.status !== 'COMPLETED') continue;
+        if (!parsed.data.completed) continue;
+        const completedMs = Date.parse(parsed.data.completed);
+        if (Number.isNaN(completedMs) || completedMs < startMs || completedMs >= endMs) continue;
         const collectionUrl = objectUrlToCollectionUrl(url, collectionUrls);
         const task: ArchivedTask = {
           uid: parsed.uid,
