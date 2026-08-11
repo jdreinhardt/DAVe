@@ -300,3 +300,9 @@ DAVe is tested against Baikal and Radicale, and designed to round-trip cleanly w
 - **jtx Board** on Android for tasks, notes, and journals (VTODO + VJOURNAL)
 
 DAVe reads and writes vCard 3.0 (what Baikal stores) and preserves all unknown properties and parameters on round-trip. Notes and journals are stored as plain text in `DESCRIPTION` (with markdown syntax visible as-is in other clients) so they remain readable outside DAVe.
+
+---
+
+## License
+
+DAVe is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).

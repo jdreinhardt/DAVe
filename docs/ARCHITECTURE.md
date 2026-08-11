@@ -7,6 +7,7 @@ packages/
   shared/       TypeScript types shared by frontend and backend
   backend/      Fastify server — DAV proxy, session management, REST API
   frontend/     React 19 SPA (Vite + Tailwind v4)
+e2e/            Playwright specs; auth.setup.ts signs in once and specs share the session
 scripts/
   seed.sh                Populate dev Baikal with a test user + collections
   seed-test-baikal.sh    Non-interactive seed for the Baikal test stack
@@ -35,19 +36,54 @@ The frontend never contacts the DAV server directly. All DAV traffic goes throug
 ## Backend layers
 
 ```
-routes/          HTTP handlers — parse/validate input, call services, return JSON
-services/        session.ts — CRUD for encrypted server-side sessions
+routes/              HTTP handlers — parse/validate input, call lib/services, return JSON
+  auth, me           login/logout, current user
+  collections        address books + calendars (list/create/update/delete, colors)
+  contacts, events   live-proxied CardDAV/CalDAV reads and writes
+  tasks, notes,      cache-backed reads; DAV-first writes (see "Two data paths")
+  journals
+  settings           per-user settings persisted in sessions.sqlite
+  search             global search — cache for tasks/notes/journals, ranged DAV query for events
+  sync               client-driven delta sync + initial cache seeding endpoints
+  health             liveness probe
+services/
+  session.ts         CRUD for encrypted server-side sessions
+  cacheSync.ts       initial + incremental collection sync into the cache
+workers/
+  syncWorker.ts      background poller (SYNC_INTERVAL_SECONDS) — runs cacheSync for
+                     every collection already known to the cache, for each live session
 lib/
-  dav.ts         tsdav wrappers — all CalDAV/CardDAV operations
-  vcard.ts       vCard 3.0/4.0 parser + serializer
-  ical.ts        iCalendar parser + serializer + mutation helpers
-  crypto.ts      AES-256-GCM encrypt/decrypt for credential storage
+  dav.ts             tsdav wrappers — all CalDAV/CardDAV operations
+  vcard.ts           vCard 3.0/4.0 parser + serializer (hand-rolled; no vCard library)
+  ical.ts            iCalendar parser + serializer + mutation helpers (ical.js)
+  entryParser.ts     raw ICS → cache-row shape for tasks/notes/journals
+  routeUtils.ts      cache-row → API JSON helpers shared by task/note/journal routes
+  crypto.ts          AES-256-GCM encrypt/decrypt for credential storage
 db/
-  index.ts       node:sqlite (built-in) — sessions table only
+  index.ts           sessions.sqlite — sessions, user_settings, address_book_colors
+  cache.ts           cache.db schema — entries, entry_categories, entry_relations,
+                     collection_sync (per-collection sync tokens)
+  cacheOps.ts        prepared-statement helpers over cache.db
 plugins/
-  session.ts     Fastify plugin — authenticate request, attach session to context
-config.ts        Zod-validated environment variables
+  session.ts         Fastify plugin — authenticate request, attach session to context
+config.ts            Zod-validated environment variables
 ```
+
+## Two data paths
+
+**Contacts and calendar events are proxied live.** Route handlers call `lib/dav.ts` directly; nothing is stored locally. The frontend drives freshness via `POST /api/sync` (below).
+
+**Tasks, notes, and journals are served from a local SQLite cache** (`cache.db`). The DAV model (one HTTP round-trip per object) is too slow for list views, so:
+
+- Reads query the `entries` table (filter/sort/search happens in SQL).
+- Writes go **DAV-first**: the route PUTs/DELETEs on the server, then upserts the cache row from the server's response. A failed cache upsert is logged and tolerated — the worker will repair it.
+- The background `SyncWorker` polls every `SYNC_INTERVAL_SECONDS`, running an incremental `sync-collection` REPORT per known collection. Initial seeding happens on first navigation to Tasks/Notes/Journals (via `/api/sync/tasks` and `/api/sync/notes`), not in the worker — so idle sessions generate no PROPFIND traffic.
+- If the server rejects a stored sync token (`SyncTokenInvalidError` — Radicale prunes tokens after ~30 days), `cacheSync` clears that collection's rows and re-syncs from an empty token. This is the only correct rebuild path: a full REPORT lists current members but reports no deletions, so clearing first is what keeps gap-deleted objects out of the cache.
+- Eviction: completed tasks older than `COMPLETED_TASK_RETENTION_DAYS` leave the cache (not the server); `MAX_CACHED_ENTRIES_PER_USER` hard-caps growth. The "Search Archived" toggle in Tasks reaches past the cache with a ranged DAV query (`DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS`).
+
+The cache is disposable by design — deleting `cache.db` loses nothing; it rebuilds from the server.
+
+**Notes vs journals:** both are VJOURNAL components living in the same collections. A journal has a `DTSTART`; a note does not (`dtstart_present` in the cache schema). That single bit is the entire distinction — the two route files differ only in that filter plus journal-specific date sorting.
 
 ## Session model
 
@@ -93,9 +129,32 @@ Recurring event mutations use helpers in `lib/ical.ts`:
 
 `ical.js` (Mozilla) is the underlying parser. Do not add a second iCal parser.
 
-## Sync model
+## Client sync model
 
-`POST /api/sync` accepts per-collection sync tokens and returns a delta (changed + deleted items) using CalDAV `sync-collection` REPORT via tsdav. The frontend calls this on mount and after mutations to keep its local state current.
+`POST /api/sync` accepts per-collection sync tokens and returns a delta (changed + deleted items) using CalDAV `sync-collection` REPORT via tsdav. The frontend calls this on mount and after mutations to keep its contact/event state current. (Task/note/journal freshness is the backend cache's job — see "Two data paths".)
+
+## Frontend structure
+
+```
+src/
+  App.tsx          react-router route table; HomeRedirect resolves "/" to the
+                   user's configured default page
+  api/             typed fetch wrappers, one module per API area (client.ts = base fetch)
+  pages/           one component per view — Contacts, Calendar, Tasks, Notes, Journals,
+                   Login, and AppLayout (shell: sidebar, topbar, mobile bottom nav)
+  components/      modals, forms, detail panes; TaskGantt.tsx renders the gantt view
+  contexts/        Settings (server-persisted via /api/settings), CollectionVisibility,
+                   MobileHeader, ContactDrag, NoteDrag
+  hooks/           useIsMobile, useHotkey, useSyncCollections, useViewNavItems
+  lib/             gantt.ts (pure gantt layout math — unit-tested), calendarLayers.ts
+                   (maps tasks/journals onto FullCalendar event inputs), utils.ts
+```
+
+Server state is owned by `@tanstack/react-query`; UI state lives in contexts. The calendar view is FullCalendar; tasks and journals appear on it as derived event inputs (`lib/calendarLayers.ts`) styled with CSS classes rather than custom `eventContent` DOM. The gantt view is deliberately *not* FullCalendar — `lib/gantt.ts` computes the layout and `TaskGantt.tsx` renders it.
+
+Settings are persisted per-user in the backend (`user_settings` table) and hydrated into the `Settings` context on login. Adding a setting touches three places: the enum/type in `packages/shared`, the settings route's validation, and the context.
+
+In dev, Vite serves the frontend on :5173 and proxies `/api` to the backend on :3000. In production the backend serves the built frontend via `@fastify/static`, so the app is a single origin.
 
 ## Auth note
 
