@@ -86,6 +86,20 @@ export function applySchema(db: CacheDbInstance): void {
       PRIMARY KEY(user_id, collection_url)
     );
 
+    -- Which component types have had their initial bulk fetch for a collection.
+    -- Separate from collection_sync because a sync token is collection-scoped
+    -- while the initial fetch is per component type: a calendar advertising both
+    -- VTODO and VJOURNAL needs one seeding pass for each. Keying the "already
+    -- done" check on the collection alone let whichever type ran first claim the
+    -- collection, so the other type's existing objects were never fetched.
+    CREATE TABLE IF NOT EXISTS collection_seeded (
+      user_id        TEXT    NOT NULL,
+      collection_url TEXT    NOT NULL,
+      component_type TEXT    NOT NULL,
+      seeded_at      INTEGER NOT NULL,
+      PRIMARY KEY(user_id, collection_url, component_type)
+    );
+
     CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
       summary,
       description,

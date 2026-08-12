@@ -14,6 +14,8 @@ import {
   deleteEntriesForCollection,
   upsertCollectionSync,
   getCollectionSync,
+  hasCollectionSeeded,
+  markCollectionSeeded,
   countEntriesForUser,
   evictOldCompleted,
 } from '../db/cacheOps.js';
@@ -46,7 +48,7 @@ export async function initialSyncCollection(
   config: Config,
   logger?: Logger,
   componentType: 'VTODO' | 'VJOURNAL' = 'VTODO',
-): Promise<void> {
+): Promise<boolean> {
   const objects = await fetchAllCalendarObjects(session, collectionUrl, config, componentType);
 
   const cap = config.MAX_CACHED_ENTRIES_PER_USER;
@@ -54,9 +56,14 @@ export async function initialSyncCollection(
   let remaining = cap - existing;
 
   let count = 0;
+  let truncated = false;
   for (const { url, etag, rawIcs } of objects) {
     if (remaining <= 0) {
-      logger?.warn({ userId, cap }, 'MAX_CACHED_ENTRIES_PER_USER reached; stopping initial sync');
+      truncated = true;
+      logger?.warn(
+        { userId, cap, collectionUrl, fetched: objects.length, stored: count },
+        'MAX_CACHED_ENTRIES_PER_USER reached; initial sync truncated for this collection',
+      );
       break;
     }
     const entry = parseEntry(rawIcs, url, collectionUrl, userId, etag);
@@ -67,8 +74,22 @@ export async function initialSyncCollection(
     }
   }
 
+  // Only claim the collection is synced if it actually was. Recording the token
+  // after a truncated pass hands the collection to incremental sync, which only
+  // applies changes *since* that token — so whatever the cap cut off would never
+  // be fetched again, and the collection would look permanently half-empty.
+  // Leaving the row absent means the next initial sync retries it.
+  if (truncated) {
+    logger?.error(
+      { collectionUrl, stored: count, fetched: objects.length },
+      'Collection not marked synced because the entry cap truncated it; raise MAX_CACHED_ENTRIES_PER_USER',
+    );
+    return false;
+  }
+
   upsertCollectionSync(cacheDb, userId, collectionUrl, syncToken);
-  logger?.debug({ collectionUrl, count }, 'Initial collection sync complete');
+  logger?.info({ collectionUrl, count, componentType }, 'Initial collection sync complete');
+  return true;
 }
 
 /**
@@ -138,11 +159,40 @@ export async function initialSyncForComponentType(
   const matching = calendars.filter((cal) => cal.components.includes(componentType));
 
   for (const cal of matching) {
-    const already = getCollectionSync(cacheDb, userId, cal.url);
-    if (already) continue; // incremental sync will keep it current
+    // Gate on the component type, not the collection. A calendar advertising
+    // both VTODO and VJOURNAL needs a seeding pass for each: the initial fetch
+    // is filtered by component type, so a pass for one type never retrieves the
+    // other's objects. Keying this on the collection alone meant the first type
+    // to run claimed it and the second type's existing objects stayed invisible
+    // forever — incremental sync only reports changes *since* its token, so
+    // nothing backfilled them.
+    if (hasCollectionSeeded(cacheDb, userId, cal.url, componentType)) continue;
 
-    logger?.info({ collectionUrl: cal.url, componentType }, 'Running initial sync for new collection');
-    await initialSyncCollection(session, cal.url, cal.syncToken, userId, cacheDb, config, logger, componentType);
+    // Reuse the recorded token if another component type already seeded this
+    // collection. Advancing to a newer token here would skip changes made to
+    // that other type since it synced.
+    const existing = getCollectionSync(cacheDb, userId, cal.url);
+    const tokenToRecord = existing?.syncToken ?? cal.syncToken;
+
+    logger?.info({ collectionUrl: cal.url, componentType }, 'Running initial sync for collection');
+    try {
+      // Only record the pass as done if it completed; a truncated pass must be
+      // retried rather than remembered as finished.
+      const complete = await initialSyncCollection(
+        session, cal.url, tokenToRecord, userId, cacheDb, config, logger, componentType,
+      );
+      if (complete) markCollectionSeeded(cacheDb, userId, cal.url, componentType);
+    } catch (err) {
+      // Isolate per collection, as syncAllCollectionsForUser already does.
+      // Without this, one unreachable collection aborts the loop and every
+      // collection after it is silently never seeded — the user just sees some
+      // of their notes missing, with nothing naming the collection at fault.
+      // The next call retries, since no collection_sync row was written.
+      logger?.error(
+        { err, collectionUrl: cal.url, componentType },
+        'Initial sync failed for collection; continuing with the rest',
+      );
+    }
   }
 }
 

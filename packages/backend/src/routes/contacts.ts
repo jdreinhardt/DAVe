@@ -27,6 +27,12 @@ async function handleDavError(
   const err = e as { statusCode?: number; message?: string } & Error;
   const code = err.statusCode;
 
+  // A rejected request target never reached the DAV server, so it's a client
+  // error rather than a bad gateway.
+  if (code === 400) {
+    await reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+    return;
+  }
   if (code === 412) {
     await reply.status(412).send({
       error: 'Contact was modified by another client. Please reload and try again.',

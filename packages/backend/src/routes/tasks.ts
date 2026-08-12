@@ -5,6 +5,7 @@ import type { SessionData } from '../services/session.js';
 import type { Config } from '../config.js';
 import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest, ArchivedTask, ArchivedTasksResponse, RestoreArchivedTaskRequest } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
+import { resolveCollectionUrl, matchObjectUrl } from '../services/collectionResolver.js';
 import {
   applyCompletion, rollForwardTask, serializeIcalTask, parseVTodoToTaskJson,
   parseDateStringsFromIcs, parseAlarmsFromIcs, parseRruleFromIcs, parseRecurringInstanceFromIcs,
@@ -351,9 +352,22 @@ export async function tasksRoutes(
 
       let result;
       try {
-        result = await davRestoreArchivedTask(session, objectUrl, collectionUrl, etag, config);
+        // Both URLs come from the body, so neither is used as given. The
+        // collection is resolved against the user's own collections, then the
+        // object is matched against what the archive search actually returns —
+        // costing one REPORT, but restores are rare and the alternative is
+        // sending a client-derived URL to the DAV server.
+        const target = await resolveCollectionUrl(
+          session, session.username, collectionUrl, cacheDb, config,
+        );
+        const archived = await fetchArchivedCompletedTasks(session, [target], config);
+        const objectTarget = matchObjectUrl(objectUrl, archived.map((o) => o.url));
+        result = await davRestoreArchivedTask(session, objectTarget, target, etag, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 412) {
           return reply.status(409).send({ error: 'Task was modified on the server — reload and try again', statusCode: 409 });
         }
@@ -519,9 +533,15 @@ export async function tasksRoutes(
 
       let result;
       try {
-        result = await davCreateTask(session, data.collectionUrl, taskData, config);
+        const target = await resolveCollectionUrl(
+          session, session.username, data.collectionUrl, cacheDb, config,
+        );
+        result = await davCreateTask(session, target, taskData, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 409) {
           return reply.status(409).send({ error: 'A task with this UID already exists', statusCode: 409 });
         }
@@ -590,7 +610,10 @@ export async function tasksRoutes(
             alarms: [],             // no alarms needed on a completed copy
           };
           try {
-            const copyResult = await davCreateTask(session, completedCopy.collectionUrl, completedCopy, config);
+            const copyTarget = await resolveCollectionUrl(
+              session, session.username, completedCopy.collectionUrl, cacheDb, config,
+            );
+            const copyResult = await davCreateTask(session, copyTarget, completedCopy, config);
             // Upsert into local cache immediately so the copy appears in the
             // next GET without waiting for a background sync.
             const copyParsed = parseEntry(
@@ -613,13 +636,30 @@ export async function tasksRoutes(
       }
 
       const isMove = data.collectionUrl && data.collectionUrl !== existing.collection_url;
+      // Resolved once here and reused by the descendant cascade below, so parent
+      // and children cannot land in different collections.
+      let moveTarget = '';
 
       let result;
       try {
         if (isMove) {
-          // Move = delete from old collection + create in new.
-          await davDeleteTask(session, existing.object_url, etag);
-          result = await davCreateTask(session, data.collectionUrl, taskData, config);
+          // Create in the destination before removing the source. Deleting
+          // first means any failure of the create — an unresolvable target, a
+          // rejected write, a dropped connection — destroys the task outright.
+          // This ordering fails towards a duplicate instead, which the user can
+          // see and resolve.
+          moveTarget = await resolveCollectionUrl(
+            session, session.username, data.collectionUrl, cacheDb, config,
+          );
+          result = await davCreateTask(session, moveTarget, taskData, config);
+          try {
+            await davDeleteTask(session, existing.object_url, etag);
+          } catch (err) {
+            app.log.error(
+              { err, uid, from: existing.collection_url, to: moveTarget },
+              'Move copied the task but could not remove the original; it now exists in both collections',
+            );
+          }
         } else {
           result = await davUpdateTask(
             session,
@@ -632,6 +672,9 @@ export async function tasksRoutes(
         }
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 412) {
           return reply.status(412).send({
             error: 'conflict',
@@ -662,9 +705,9 @@ export async function tasksRoutes(
           if (!childRow?.raw_ics) continue;
 
           try {
-            const newChild = await createTaskRaw(session, data.collectionUrl, childUid, childRow.raw_ics, config);
+            const newChild = await createTaskRaw(session, moveTarget, childUid, childRow.raw_ics, config);
             await davDeleteTask(session, childRow.object_url, childRow.etag);
-            const childParsed = parseEntry(childRow.raw_ics, newChild.url, data.collectionUrl, session.username, newChild.etag);
+            const childParsed = parseEntry(childRow.raw_ics, newChild.url, moveTarget, session.username, newChild.etag);
             if (childParsed) {
               try { upsertEntry(cacheDb, childParsed); } catch (e) { app.log.warn({ e }, 'cache upsert failed after child move'); }
             }
@@ -740,6 +783,9 @@ export async function tasksRoutes(
         await davDeleteTask(session, existing.object_url, etag);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 412) {
           return reply.status(412).send({
             error: 'conflict',

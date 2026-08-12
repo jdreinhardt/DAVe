@@ -18,6 +18,12 @@ async function handleDavError(
 ): Promise<void> {
   const err = e as { statusCode?: number; message?: string } & Error;
   const msg = err.message ?? String(e);
+  // A rejected request target never reached the DAV server, so it's a client
+  // error rather than a bad gateway.
+  if (err.statusCode === 400) {
+    await reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+    return;
+  }
   if (err.statusCode === 401 || msg.includes('401') || msg.toLowerCase().includes('unauthorized')) {
     if (req.sessionId) deleteSession(req.sessionId, db);
     reply.clearCookie(COOKIE_NAME, { path: '/' });

@@ -18,6 +18,7 @@ import { applySchema } from '../../db/cache.js';
 import type { CacheDbInstance } from '../../db/cache.js';
 import { SyncWorker } from '../../workers/syncWorker.js';
 import type { Config } from '../../config.js';
+import { initDavBase } from '../../lib/dav.js';
 
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
   DatabaseSync: typeof DatabaseSyncType;
@@ -80,6 +81,7 @@ export function getTestCacheDb(): CacheDbInstance {
 }
 
 export async function buildIntegrationApp(): Promise<FastifyInstance> {
+  initDavBase(integrationConfig);
   const db = getTestDb();
   const cacheDb = getTestCacheDb();
   const app = Fastify({ logger: false });

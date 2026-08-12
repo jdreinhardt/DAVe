@@ -13,6 +13,7 @@ import type {
   TaskRelation,
 } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
+import { resolveCollectionUrl } from '../services/collectionResolver.js';
 import { serializeIcalJournal } from '../lib/ical.js';
 import {
   createJournal as davCreateJournal,
@@ -238,9 +239,15 @@ export async function notesRoutes(
 
       let result;
       try {
-        result = await davCreateJournal(session, data.collectionUrl, noteData, config);
+        const target = await resolveCollectionUrl(
+          session, session.username, data.collectionUrl, cacheDb, config,
+        );
+        result = await davCreateJournal(session, target, noteData, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 409) {
           return reply.status(409).send({ error: 'A note with this UID already exists', statusCode: 409 });
         }
@@ -296,8 +303,23 @@ export async function notesRoutes(
       let result;
       try {
         if (isMove) {
-          await davDeleteJournal(session, existing.object_url, etag);
-          result = await davCreateJournal(session, data.collectionUrl, entryData, config);
+          // Create in the destination before removing the source. Deleting
+          // first means any failure of the create — an unresolvable target, a
+          // rejected write, a dropped connection — destroys the entry outright.
+          // This ordering fails towards a duplicate instead, which the user can
+          // see and resolve.
+          const target = await resolveCollectionUrl(
+            session, session.username, data.collectionUrl, cacheDb, config,
+          );
+          result = await davCreateJournal(session, target, entryData, config);
+          try {
+            await davDeleteJournal(session, existing.object_url, etag);
+          } catch (err) {
+            app.log.error(
+              { err, uid, from: existing.collection_url, to: target },
+              'Move copied the note but could not remove the original; it now exists in both collections',
+            );
+          }
         } else {
           result = await davUpdateJournal(
             session,
@@ -310,6 +332,9 @@ export async function notesRoutes(
         }
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 412) {
           return reply.status(412).send({
             error: 'conflict',
@@ -371,6 +396,9 @@ export async function notesRoutes(
         await davDeleteJournal(session, existing.object_url, etag);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 412) {
           return reply.status(412).send({
             error: 'conflict',
