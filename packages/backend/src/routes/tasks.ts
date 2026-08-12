@@ -354,6 +354,9 @@ export async function tasksRoutes(
         result = await davRestoreArchivedTask(session, objectUrl, collectionUrl, etag, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 412) {
           return reply.status(409).send({ error: 'Task was modified on the server — reload and try again', statusCode: 409 });
         }
@@ -522,6 +525,9 @@ export async function tasksRoutes(
         result = await davCreateTask(session, data.collectionUrl, taskData, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 409) {
           return reply.status(409).send({ error: 'A task with this UID already exists', statusCode: 409 });
         }
@@ -632,6 +638,9 @@ export async function tasksRoutes(
         }
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 412) {
           return reply.status(412).send({
             error: 'conflict',
@@ -740,6 +749,9 @@ export async function tasksRoutes(
         await davDeleteTask(session, existing.object_url, etag);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
+        if (e.statusCode === 400) {
+          return reply.status(400).send({ error: 'Invalid request', statusCode: 400 });
+        }
         if (e.statusCode === 412) {
           return reply.status(412).send({
             error: 'conflict',

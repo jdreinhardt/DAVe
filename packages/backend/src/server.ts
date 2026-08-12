@@ -6,6 +6,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import fastifyRateLimit from '@fastify/rate-limit';
 import { loadConfig } from './config.js';
+import { initDavBase } from './lib/dav.js';
 import { getDb } from './db/index.js';
 import { getCacheDb } from './db/cache.js';
 import { sweepExpiredSessions } from './services/session.js';
@@ -25,6 +26,9 @@ import { settingsRoutes } from './routes/settings.js';
 import { searchRoutes } from './routes/search.js';
 
 const config = loadConfig();
+// Pin the DAV target before anything can issue a request; davFetch fails closed
+// until this runs.
+initDavBase(config);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const db = getDb(config);
 const cacheDb = getCacheDb(config);

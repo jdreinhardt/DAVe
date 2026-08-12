@@ -14,7 +14,7 @@ body:
     attributes:
       label: DAVe version
       description: Release tag, commit hash, or image digest (`docker image inspect ghcr.io/jdreinhardt/dave`)
-      placeholder: v0.3.0 / commit c86a202 / sha256:…
+      placeholder: v0.3.1 / commit c86a202 / sha256:…
     validations:
       required: true
   - type: dropdown

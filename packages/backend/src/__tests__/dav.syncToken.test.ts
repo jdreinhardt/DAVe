@@ -17,12 +17,17 @@ const { fetchMock } = vi.hoisted(() => {
 
 import {
   SyncTokenInvalidError,
+  initDavBase,
   syncAddressBook,
   syncCalendar,
   syncCalendarForCache,
 } from '../lib/dav.js';
 import type { SessionData } from '../services/session.js';
 import { testConfig } from './helpers.js';
+
+// davFetch refuses to issue a request until the DAV target is pinned, so these
+// tests have to do the bootstrap the server does.
+initDavBase(testConfig);
 
 const session: SessionData = {
   username: 'alice',

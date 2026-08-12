@@ -26,15 +26,86 @@ const {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
+ * The configured DAV server, pinned once at startup. Every authenticated request
+ * is checked against it, so this is the single source of truth for "is this URL
+ * somewhere we're allowed to send the user's credentials".
+ *
+ * Module scope rather than a threaded parameter because `davFetch` is called from
+ * ~30 places, many in helpers with no access to `Config`. Making the check a
+ * property of the sink is the point: it cannot be forgotten at a call site.
+ */
+let davBase: URL | null = null;
+
+/** Pin the DAV origin. Call once during bootstrap, before any DAV request. */
+export function initDavBase(config: Config): void {
+  davBase = new URL(config.DAV_BASE_URL);
+}
+
+/**
+ * Reject any URL that isn't inside the configured DAV server.
+ *
+ * Checks origin *and* path prefix. Origin alone is not enough: self-hosted
+ * deployments routinely put the DAV server behind a reverse proxy that also
+ * serves other apps, so an origin-only check still lets a caller aim a
+ * credential-bearing request at a neighbour. Verified against both test stacks —
+ * Baikal serves from a path (`/dav.php`) and Radicale from the root, and every
+ * discovered home set nests under its base in both.
+ *
+ * Fails closed when uninitialized: a missing `initDavBase` must break loudly
+ * rather than silently disable the guard.
+ *
+ * Exported for direct testing — it is the single predicate the whole SSRF
+ * defense rests on, including validation of the discovery response.
+ */
+export function assertDavTarget(targetUrl: string): void {
+  if (!davBase) {
+    throw new Error('DAV base URL not initialized — call initDavBase() during bootstrap');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    throw Object.assign(new Error('Invalid target URL'), { statusCode: 400 });
+  }
+  const basePath = davBase.pathname.replace(/\/$/, '');
+  const inBasePath =
+    basePath === '' || parsed.pathname === basePath || parsed.pathname.startsWith(`${basePath}/`);
+  if (parsed.origin !== davBase.origin || !inBasePath) {
+    throw Object.assign(new Error('Target URL is not inside the configured DAV server'), {
+      statusCode: 400,
+    });
+  }
+}
+
+/**
+ * Reject a client-supplied id that isn't a single safe path segment, then encode it.
+ *
+ * Collection and object ids are interpolated into URLs. Fastify percent-decodes
+ * route params, so `..%2F..%2F` arrives as `../../` and `fetch` resolves it —
+ * escaping the user's home set and reaching arbitrary paths on the DAV host with
+ * the Authorization header attached. Encoding alone would be enough for `davFetch`,
+ * but tsdav's helpers build their own requests and never reach that sink, so the
+ * segment has to be made safe here at construction time.
+ */
+function encodeSegment(id: string): string {
+  if (!id || id === '.' || id === '..' || /[/\\]/.test(id)) {
+    throw Object.assign(new Error('Invalid collection or object id'), { statusCode: 400 });
+  }
+  return encodeURIComponent(id);
+}
+
+/**
  * All authenticated DAV requests go through this wrapper so the SSRF defense is
- * the default, not something each call site has to remember. `redirect: 'error'`
- * ensures a 3xx from the DAV server is never followed — otherwise the user's basic-auth
- * Authorization header could be replayed to an arbitrary redirect target.
- * Listed first so it can't be silently dropped, but still overridable if a
- * future caller has a genuine reason.
+ * the default, not something each call site has to remember.
+ *
+ * `redirect: 'error'` ensures a 3xx from the DAV server is never followed —
+ * otherwise the user's basic-auth Authorization header could be replayed to an
+ * arbitrary redirect target. Both it and the target check are applied after the
+ * caller's `init` so neither can be overridden.
  */
 function davFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(url, { redirect: 'error', ...init });
+  assertDavTarget(url);
+  return fetch(url, { ...init, redirect: 'error' });
 }
 
 // Coerce a tsdav displayName (can be string or object with a #text key) to string.
@@ -107,12 +178,22 @@ export async function discoverAndValidate(
 
   await Promise.all([calClient.login(), cardClient.login()]);
 
-  return {
+  const result: DiscoveryResult = {
     principalUrl: calClient.account?.principalUrl ?? '',
     calendarHomeUrl: calClient.account?.homeUrl ?? '',
     addressBookHomeUrl: cardClient.account?.homeUrl ?? '',
     displayName: username,
   };
+
+  // These URLs come straight out of the server's discovery response and become
+  // the base for every subsequent request, so a hostile or compromised DAV server
+  // could otherwise point them at a host of its choosing and collect the user's
+  // credentials on every call. Validate before they reach the session.
+  assertDavTarget(result.principalUrl);
+  assertDavTarget(result.calendarHomeUrl);
+  assertDavTarget(result.addressBookHomeUrl);
+
+  return result;
 }
 
 // ── Collection listing ────────────────────────────────────────────────────────
@@ -225,7 +306,7 @@ export async function fetchContacts(
   _config: Config,
 ): Promise<Contact[]> {
   const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
-  const addressBookUrl = `${homeUrl}/${addressBookId}/`;
+  const addressBookUrl = `${homeUrl}/${encodeSegment(addressBookId)}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
   const vcards = await _fetchVCards({
@@ -257,38 +338,15 @@ function contactId(url: string): string {
 // ── Contact write operations ───────────────────────────────────────────────────
 
 function addressBookUrl(session: SessionData, addressBookId: string): string {
-  return `${session.addressBookHomeUrl.replace(/\/$/, '')}/${addressBookId}/`;
+  return `${session.addressBookHomeUrl.replace(/\/$/, '')}/${encodeSegment(addressBookId)}/`;
 }
 
 function contactUrl(session: SessionData, addressBookId: string, id: string): string {
-  return `${addressBookUrl(session, addressBookId)}${id}.vcf`;
+  return `${addressBookUrl(session, addressBookId)}${encodeSegment(id)}.vcf`;
 }
 
 function basicAuthHeader(session: SessionData): Record<string, string> {
   return _getBasicAuthHeaders({ username: session.username, password: session.password });
-}
-
-/**
- * Guard against SSRF: client-supplied collection/object URLs are fetched
- * directly (raw PUT/GET) with the user's DAV credentials attached, so we
- * must confirm they point at the configured DAV server. Reject anything
- * whose scheme/host/port differs from DAV_BASE_URL — otherwise an
- * authenticated user could redirect the request (and the Authorization header)
- * to an arbitrary internal or external host.
- */
-function assertDavOrigin(targetUrl: string, config: Config): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(targetUrl);
-  } catch {
-    throw Object.assign(new Error('Invalid target URL'), { statusCode: 400 });
-  }
-  const base = new URL(config.DAV_BASE_URL);
-  if (parsed.origin !== base.origin) {
-    throw Object.assign(new Error('Target URL host is not the configured DAV server'), {
-      statusCode: 400,
-    });
-  }
 }
 
 export interface ContactWriteResult {
@@ -388,7 +446,7 @@ export async function fetchRawContacts(
   _config: Config,
 ): Promise<{ url: string; etag: string; raw: string }[]> {
   const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
-  const abUrl = `${homeUrl}/${addressBookId}/`;
+  const abUrl = `${homeUrl}/${encodeSegment(addressBookId)}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
   const vcards = await _fetchVCards({
@@ -420,7 +478,7 @@ export async function fetchEvents(
   end: string,
   _config: Config,
 ): Promise<CalendarEvent[]> {
-  const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${calendarId}/`;
+  const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${encodeSegment(calendarId)}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
   const objects = await _fetchCalendarObjects({
@@ -446,11 +504,11 @@ export async function fetchEvents(
 // ── Calendar event write operations ───────────────────────────────────────────
 
 function calendarUrl(session: SessionData, calendarId: string): string {
-  return `${session.calendarHomeUrl.replace(/\/$/, '')}/${calendarId}/`;
+  return `${session.calendarHomeUrl.replace(/\/$/, '')}/${encodeSegment(calendarId)}/`;
 }
 
 function calendarObjectUrl(session: SessionData, calendarId: string, uid: string): string {
-  return `${calendarUrl(session, calendarId)}${uid}.ics`;
+  return `${calendarUrl(session, calendarId)}${encodeSegment(uid)}.ics`;
 }
 
 export interface EventWriteResult {
@@ -1152,7 +1210,7 @@ export async function syncAddressBook(
   _config: Config,
 ): Promise<AddressBookSyncResult> {
   const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
-  const abUrl = `${homeUrl}/${abId}/`;
+  const abUrl = `${homeUrl}/${encodeSegment(abId)}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
   // An empty sync-token means "send me everything" (RFC 6578 §3.2), so recovery
@@ -1206,7 +1264,7 @@ export async function syncCalendar(
   currentSyncToken: string,
   _config: Config,
 ): Promise<CalendarSyncResult> {
-  const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${calId}/`;
+  const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${encodeSegment(calId)}/`;
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
 
   // Calendars only report a dirty bit, so a rejected token needs no special
@@ -1336,13 +1394,13 @@ export async function createTask(
   session: SessionData,
   collectionUrl: string,
   data: TaskJson,
-  config: Config,
+  _config: Config,
 ): Promise<TaskWriteResult> {
-  assertDavOrigin(collectionUrl, config);
+  assertDavTarget(collectionUrl);
   const uid = data.uid || crypto.randomUUID();
   const taskData: TaskJson = { ...data, uid };
   const icsStr = serializeIcalTask(taskData);
-  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+  const url = `${collectionUrl.replace(/\/$/, '')}/${encodeSegment(uid)}.ics`;
 
   const res = await davFetch(url, {
     method: 'PUT',
@@ -1551,9 +1609,9 @@ export async function restoreArchivedTask(
   objectUrl: string,
   collectionUrl: string,
   etag: string,
-  config: Config,
+  _config: Config,
 ): Promise<TaskWriteResult> {
-  assertDavOrigin(objectUrl, config);
+  assertDavTarget(objectUrl);
   const authHeaders = basicAuthHeader(session);
 
   // Fetch latest ICS (in case it changed since the search was run)
@@ -1604,13 +1662,13 @@ export async function createJournal(
   session: SessionData,
   collectionUrl: string,
   data: NoteJson,
-  config: Config,
+  _config: Config,
 ): Promise<JournalWriteResult> {
-  assertDavOrigin(collectionUrl, config);
+  assertDavTarget(collectionUrl);
   const uid = data.uid || crypto.randomUUID();
   const entryData: NoteJson = { ...data, uid };
   const icsStr = serializeIcalJournal(entryData);
-  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+  const url = `${collectionUrl.replace(/\/$/, '')}/${encodeSegment(uid)}.ics`;
 
   const res = await davFetch(url, {
     method: 'PUT',
@@ -1685,10 +1743,10 @@ export async function createTaskRaw(
   collectionUrl: string,
   uid: string,
   rawIcs: string,
-  config: Config,
+  _config: Config,
 ): Promise<{ url: string; etag: string; collectionUrl: string }> {
-  assertDavOrigin(collectionUrl, config);
-  const url = `${collectionUrl.replace(/\/$/, '')}/${uid}.ics`;
+  assertDavTarget(collectionUrl);
+  const url = `${collectionUrl.replace(/\/$/, '')}/${encodeSegment(uid)}.ics`;
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
