@@ -153,6 +153,29 @@ describe('collection/object id path traversal', () => {
     await createContact(session, 'my books', contact, testConfig);
     expect(calledUrls()[0]).toBe('http://dav.test/dav.php/ab/alice/my%20books/u1.vcf');
   });
+
+  // Ids arrive both decoded (Fastify route params) and still encoded
+  // (collectionId slices a URL pathname). Encoding unconditionally double-encodes
+  // the second form, so a collection named "my books" 404s. Both forms must land
+  // on the same URL.
+  describe('encoding is idempotent across both id sources', () => {
+    const cases: [string, string, string][] = [
+      ['my books', 'my%20books', 'my%20books'],
+      ['café', 'caf%C3%A9', 'caf%C3%A9'],
+      ['a+b', 'a%2Bb', 'a%2Bb'],
+      ['100%', '100%25', '100%25'],
+      ['personal', 'personal', 'personal'],
+    ];
+
+    it.each(cases)('decoded %j and encoded %j both target %s', async (decoded, encoded, expected) => {
+      fetchMock.mockClear();
+      await createContact(session, decoded, contact, testConfig);
+      await createContact(session, encoded, contact, testConfig);
+      const urls = calledUrls();
+      expect(urls[0]).toBe(`http://dav.test/dav.php/ab/alice/${expected}/u1.vcf`);
+      expect(urls[1]).toBe(urls[0]);
+    });
+  });
 });
 
 describe('assertDavTarget on client-supplied collection URLs', () => {

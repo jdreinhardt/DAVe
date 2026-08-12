@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../lib/dav.js', () => ({ listCalendars: vi.fn() }));
 
-import { resolveCollectionUrl, resolveObjectUrl } from '../services/collectionResolver.js';
+import { resolveCollectionUrl, matchObjectUrl } from '../services/collectionResolver.js';
 import { listCalendars } from '../lib/dav.js';
 import { makeCacheDb, testConfig } from './helpers.js';
 import { upsertCollectionSync } from '../db/cacheOps.js';
@@ -126,24 +126,34 @@ describe('resolveCollectionUrl — hostile input', () => {
   });
 });
 
-describe('resolveObjectUrl', () => {
-  it('rebuilds the object URL from the resolved collection', () => {
-    expect(resolveObjectUrl(`${MINE}task-1.ics`, MINE)).toBe(`${MINE}task-1.ics`);
+describe('matchObjectUrl', () => {
+  const candidates = [`${MINE}task-1.ics`, `${MINE}task-2.ics`];
+
+  it('returns the candidate string rather than echoing the request', () => {
+    // The request is canonically equal but written differently, so the result
+    // shows which of the two strings is actually handed downstream.
+    const requested = `${MINE}task-1.ics?cachebust=1`;
+    expect(matchObjectUrl(requested, candidates)).toBe(`${MINE}task-1.ics`);
   });
 
-  it('accepts a collection URL without a trailing slash', () => {
-    const noSlash = MINE.replace(/\/$/, '');
-    expect(resolveObjectUrl(`${noSlash}/task-1.ics`, noSlash)).toBe(`${noSlash}/task-1.ics`);
+  it('matches despite a query string or fragment on the request', () => {
+    expect(matchObjectUrl(`${MINE}task-2.ics?v=1#x`, candidates)).toBe(candidates[1]);
   });
 
   const rejected: [string, string][] = [
+    [`${MINE}task-3.ics`, 'not in the candidate list'],
     [`${OTHER}task-1.ics`, 'object in a different collection'],
-    [`${MINE}nested/task-1.ics`, 'not a direct member'],
-    [MINE, 'the collection itself, no member name'],
+    [`${MINE}nested/task-1.ics`, 'nested path'],
+    [MINE, 'the collection itself'],
     ['http://evil.test/task-1.ics', 'different host'],
     ['not a url', 'unparseable'],
+    ['', 'empty'],
   ];
   it.each(rejected)('rejects %s (%s)', (objectUrl) => {
-    expect(() => resolveObjectUrl(objectUrl, MINE)).toThrow();
+    expect(() => matchObjectUrl(objectUrl, candidates)).toThrow();
+  });
+
+  it('rejects everything when the archive search returned nothing', () => {
+    expect(() => matchObjectUrl(`${MINE}task-1.ics`, [])).toThrow();
   });
 });

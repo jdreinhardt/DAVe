@@ -93,12 +93,37 @@ export function assertDavTarget(targetUrl: string): void {
  *   - tsdav's helpers build their own requests and never reach `davFetch`.
  *
  * So the segment has to be made safe here, at construction time.
+ *
+ * Decode before validating, and the whole thing is idempotent. Ids reach this
+ * function from two directions: decoded, from a Fastify route param, and still
+ * encoded, from `collectionId()`, which slices a segment out of a URL pathname
+ * and so preserves the server's percent-encoding. Encoding unconditionally
+ * would double-encode the latter — a collection named "my books" becomes
+ * `my%2520books` and 404s. Decoding first collapses both forms to the same
+ * thing.
+ *
+ * Decoding first is also the stricter order for safety: `..%2F..%2F` and
+ * `../../` both become `../../` and are rejected by the same check.
  */
 function encodeSegment(id: string): string {
-  if (!id || id === '.' || id === '..' || /[/\\]/.test(id)) {
-    throw Object.assign(new Error('Invalid collection or object id'), { statusCode: 400 });
+  const invalid = (): Error =>
+    Object.assign(new Error('Invalid collection or object id'), { statusCode: 400 });
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(id);
+  } catch {
+    // A bare '%' is a malformed escape but a legal name: a collection called
+    // "100%" reaches a route handler already decoded. Treat an undecodable id as
+    // literal text — the checks below still run on it, and it is re-encoded
+    // either way.
+    decoded = id;
   }
-  return encodeURIComponent(id);
+
+  if (!decoded || decoded === '.' || decoded === '..' || /[/\\]/.test(decoded)) {
+    throw invalid();
+  }
+  return encodeURIComponent(decoded);
 }
 
 /**

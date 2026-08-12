@@ -303,13 +303,23 @@ export async function notesRoutes(
       let result;
       try {
         if (isMove) {
-          // Resolve before the delete: an unresolvable target must not cost the
-          // user the original entry.
+          // Create in the destination before removing the source. Deleting
+          // first means any failure of the create — an unresolvable target, a
+          // rejected write, a dropped connection — destroys the entry outright.
+          // This ordering fails towards a duplicate instead, which the user can
+          // see and resolve.
           const target = await resolveCollectionUrl(
             session, session.username, data.collectionUrl, cacheDb, config,
           );
-          await davDeleteJournal(session, existing.object_url, etag);
           result = await davCreateJournal(session, target, entryData, config);
+          try {
+            await davDeleteJournal(session, existing.object_url, etag);
+          } catch (err) {
+            app.log.error(
+              { err, uid, from: existing.collection_url, to: target },
+              'Move copied the note but could not remove the original; it now exists in both collections',
+            );
+          }
         } else {
           result = await davUpdateJournal(
             session,

@@ -5,7 +5,7 @@ import type { SessionData } from '../services/session.js';
 import type { Config } from '../config.js';
 import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest, ArchivedTask, ArchivedTasksResponse, RestoreArchivedTaskRequest } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
-import { resolveCollectionUrl, resolveObjectUrl } from '../services/collectionResolver.js';
+import { resolveCollectionUrl, matchObjectUrl } from '../services/collectionResolver.js';
 import {
   applyCompletion, rollForwardTask, serializeIcalTask, parseVTodoToTaskJson,
   parseDateStringsFromIcs, parseAlarmsFromIcs, parseRruleFromIcs, parseRecurringInstanceFromIcs,
@@ -352,13 +352,16 @@ export async function tasksRoutes(
 
       let result;
       try {
-        // Both URLs come from the body. Resolving the collection says nothing
-        // about the object, so the object is separately constrained to be a
-        // direct member of the collection we just vouched for.
+        // Both URLs come from the body, so neither is used as given. The
+        // collection is resolved against the user's own collections, then the
+        // object is matched against what the archive search actually returns —
+        // costing one REPORT, but restores are rare and the alternative is
+        // sending a client-derived URL to the DAV server.
         const target = await resolveCollectionUrl(
           session, session.username, collectionUrl, cacheDb, config,
         );
-        const objectTarget = resolveObjectUrl(objectUrl, target);
+        const archived = await fetchArchivedCompletedTasks(session, [target], config);
+        const objectTarget = matchObjectUrl(objectUrl, archived.map((o) => o.url));
         result = await davRestoreArchivedTask(session, objectTarget, target, etag, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
@@ -640,14 +643,23 @@ export async function tasksRoutes(
       let result;
       try {
         if (isMove) {
-          // Resolve before the delete: an unresolvable target must not cost the
-          // user the original task.
+          // Create in the destination before removing the source. Deleting
+          // first means any failure of the create — an unresolvable target, a
+          // rejected write, a dropped connection — destroys the task outright.
+          // This ordering fails towards a duplicate instead, which the user can
+          // see and resolve.
           moveTarget = await resolveCollectionUrl(
             session, session.username, data.collectionUrl, cacheDb, config,
           );
-          // Move = delete from old collection + create in new.
-          await davDeleteTask(session, existing.object_url, etag);
           result = await davCreateTask(session, moveTarget, taskData, config);
+          try {
+            await davDeleteTask(session, existing.object_url, etag);
+          } catch (err) {
+            app.log.error(
+              { err, uid, from: existing.collection_url, to: moveTarget },
+              'Move copied the task but could not remove the original; it now exists in both collections',
+            );
+          }
         } else {
           result = await davUpdateTask(
             session,

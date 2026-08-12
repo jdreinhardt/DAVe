@@ -126,6 +126,33 @@ export function evictOldCompleted(
   return result.changes;
 }
 
+/** Has this collection had its initial bulk fetch for this component type? */
+export function hasCollectionSeeded(
+  cacheDb: CacheDbInstance,
+  userId: string,
+  collectionUrl: string,
+  componentType: string,
+): boolean {
+  const row = cacheDb.prepare(
+    'SELECT 1 FROM collection_seeded WHERE user_id = ? AND collection_url = ? AND component_type = ?',
+  ).get(userId, collectionUrl, componentType);
+  return row !== undefined;
+}
+
+export function markCollectionSeeded(
+  cacheDb: CacheDbInstance,
+  userId: string,
+  collectionUrl: string,
+  componentType: string,
+): void {
+  cacheDb.prepare(`
+    INSERT INTO collection_seeded (user_id, collection_url, component_type, seeded_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, collection_url, component_type) DO UPDATE SET
+      seeded_at = excluded.seeded_at
+  `).run(userId, collectionUrl, componentType, Date.now());
+}
+
 export function upsertCollectionSync(
   cacheDb: CacheDbInstance,
   userId: string,

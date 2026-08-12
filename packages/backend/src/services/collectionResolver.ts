@@ -76,31 +76,29 @@ export async function resolveCollectionUrl(
 }
 
 /**
- * Rebuild an object URL from an already-resolved collection URL.
+ * Pick the server's own URL for a requested object out of a list the server
+ * gave us.
  *
- * Used by the archive-restore path, which takes both a collection URL and an
- * object URL from the body. Resolving the collection says nothing about the
- * object, so the object would otherwise remain an unconstrained client-supplied
- * target.
+ * Used by the archive-restore path, which takes an object URL from the body in
+ * addition to the collection URL. Resolving the collection says nothing about
+ * the object, so the object needs its own check.
  *
- * The member name has to come from the client — it is what identifies the
- * archived task — but nothing else does: the returned URL is assembled from the
- * resolved collection plus that one validated segment, rather than passing the
- * client's string through.
+ * This matches rather than rebuilds, deliberately. An earlier version validated
+ * the client's URL and reassembled it from the resolved collection plus the
+ * member name — safe, but the name still originated in the request, so the
+ * value handed to the DAV layer was still derived from user input. Returning an
+ * element of `candidateUrls` means the string we use came from the DAV server,
+ * exactly as `resolveCollectionUrl` does.
+ *
+ * It also tightens the precondition: an object is restorable only if it really
+ * is in the archive window, not merely well-formed.
  */
-export function resolveObjectUrl(objectUrl: string, resolvedCollectionUrl: string): string {
-  const obj = canonical(objectUrl);
-  const col = canonical(resolvedCollectionUrl);
-  if (!obj || !col) throw badRequest('Invalid object URL');
+export function matchObjectUrl(requestedUrl: string, candidateUrls: string[]): string {
+  const want = canonical(requestedUrl);
+  if (!want) throw badRequest('Invalid object URL');
 
-  if (!obj.startsWith(`${col}/`)) {
-    throw badRequest('Object URL is not inside the given collection');
+  for (const candidate of candidateUrls) {
+    if (canonical(candidate) === want) return candidate;
   }
-  // Direct member only: no nested path, no traversal back out.
-  const name = obj.slice(col.length + 1);
-  if (name.length === 0 || name.includes('/') || name === '.' || name === '..') {
-    throw badRequest('Object URL is not a direct member of the collection');
-  }
-
-  return `${resolvedCollectionUrl.replace(/\/+$/, '')}/${name}`;
+  throw badRequest('Unknown object');
 }
