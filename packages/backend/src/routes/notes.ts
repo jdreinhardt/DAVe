@@ -13,6 +13,7 @@ import type {
   TaskRelation,
 } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
+import { resolveCollectionUrl } from '../services/collectionResolver.js';
 import { serializeIcalJournal } from '../lib/ical.js';
 import {
   createJournal as davCreateJournal,
@@ -238,7 +239,10 @@ export async function notesRoutes(
 
       let result;
       try {
-        result = await davCreateJournal(session, data.collectionUrl, noteData, config);
+        const target = await resolveCollectionUrl(
+          session, session.username, data.collectionUrl, cacheDb, config,
+        );
+        result = await davCreateJournal(session, target, noteData, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
         if (e.statusCode === 400) {
@@ -299,8 +303,13 @@ export async function notesRoutes(
       let result;
       try {
         if (isMove) {
+          // Resolve before the delete: an unresolvable target must not cost the
+          // user the original entry.
+          const target = await resolveCollectionUrl(
+            session, session.username, data.collectionUrl, cacheDb, config,
+          );
           await davDeleteJournal(session, existing.object_url, etag);
-          result = await davCreateJournal(session, data.collectionUrl, entryData, config);
+          result = await davCreateJournal(session, target, entryData, config);
         } else {
           result = await davUpdateJournal(
             session,

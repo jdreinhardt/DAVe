@@ -5,6 +5,7 @@ import type { SessionData } from '../services/session.js';
 import type { Config } from '../config.js';
 import type { Task, TaskJson, TasksResponse, TaskRelation, TasksQueryParams, AlarmJson, TaskWriteResponse, CreateTaskRequest, UpdateTaskRequest, ArchivedTask, ArchivedTasksResponse, RestoreArchivedTaskRequest } from '@dave/shared';
 import { requireAuth } from '../plugins/session.js';
+import { resolveCollectionUrl, resolveObjectUrl } from '../services/collectionResolver.js';
 import {
   applyCompletion, rollForwardTask, serializeIcalTask, parseVTodoToTaskJson,
   parseDateStringsFromIcs, parseAlarmsFromIcs, parseRruleFromIcs, parseRecurringInstanceFromIcs,
@@ -351,7 +352,14 @@ export async function tasksRoutes(
 
       let result;
       try {
-        result = await davRestoreArchivedTask(session, objectUrl, collectionUrl, etag, config);
+        // Both URLs come from the body. Resolving the collection says nothing
+        // about the object, so the object is separately constrained to be a
+        // direct member of the collection we just vouched for.
+        const target = await resolveCollectionUrl(
+          session, session.username, collectionUrl, cacheDb, config,
+        );
+        const objectTarget = resolveObjectUrl(objectUrl, target);
+        result = await davRestoreArchivedTask(session, objectTarget, target, etag, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
         if (e.statusCode === 400) {
@@ -522,7 +530,10 @@ export async function tasksRoutes(
 
       let result;
       try {
-        result = await davCreateTask(session, data.collectionUrl, taskData, config);
+        const target = await resolveCollectionUrl(
+          session, session.username, data.collectionUrl, cacheDb, config,
+        );
+        result = await davCreateTask(session, target, taskData, config);
       } catch (err: unknown) {
         const e = err as { statusCode?: number };
         if (e.statusCode === 400) {
@@ -596,7 +607,10 @@ export async function tasksRoutes(
             alarms: [],             // no alarms needed on a completed copy
           };
           try {
-            const copyResult = await davCreateTask(session, completedCopy.collectionUrl, completedCopy, config);
+            const copyTarget = await resolveCollectionUrl(
+              session, session.username, completedCopy.collectionUrl, cacheDb, config,
+            );
+            const copyResult = await davCreateTask(session, copyTarget, completedCopy, config);
             // Upsert into local cache immediately so the copy appears in the
             // next GET without waiting for a background sync.
             const copyParsed = parseEntry(
@@ -619,13 +633,21 @@ export async function tasksRoutes(
       }
 
       const isMove = data.collectionUrl && data.collectionUrl !== existing.collection_url;
+      // Resolved once here and reused by the descendant cascade below, so parent
+      // and children cannot land in different collections.
+      let moveTarget = '';
 
       let result;
       try {
         if (isMove) {
+          // Resolve before the delete: an unresolvable target must not cost the
+          // user the original task.
+          moveTarget = await resolveCollectionUrl(
+            session, session.username, data.collectionUrl, cacheDb, config,
+          );
           // Move = delete from old collection + create in new.
           await davDeleteTask(session, existing.object_url, etag);
-          result = await davCreateTask(session, data.collectionUrl, taskData, config);
+          result = await davCreateTask(session, moveTarget, taskData, config);
         } else {
           result = await davUpdateTask(
             session,
@@ -671,9 +693,9 @@ export async function tasksRoutes(
           if (!childRow?.raw_ics) continue;
 
           try {
-            const newChild = await createTaskRaw(session, data.collectionUrl, childUid, childRow.raw_ics, config);
+            const newChild = await createTaskRaw(session, moveTarget, childUid, childRow.raw_ics, config);
             await davDeleteTask(session, childRow.object_url, childRow.etag);
-            const childParsed = parseEntry(childRow.raw_ics, newChild.url, data.collectionUrl, session.username, newChild.etag);
+            const childParsed = parseEntry(childRow.raw_ics, newChild.url, moveTarget, session.username, newChild.etag);
             if (childParsed) {
               try { upsertEntry(cacheDb, childParsed); } catch (e) { app.log.warn({ e }, 'cache upsert failed after child move'); }
             }
