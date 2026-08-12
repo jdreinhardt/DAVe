@@ -82,10 +82,17 @@ export function assertDavTarget(targetUrl: string): void {
  *
  * Collection and object ids are interpolated into URLs. Fastify percent-decodes
  * route params, so `..%2F..%2F` arrives as `../../` and `fetch` resolves it —
- * escaping the user's home set and reaching arbitrary paths on the DAV host with
- * the Authorization header attached. Encoding alone would be enough for `davFetch`,
- * but tsdav's helpers build their own requests and never reach that sink, so the
- * segment has to be made safe here at construction time.
+ * escaping the user's home set with the Authorization header attached.
+ *
+ * `assertDavTarget` does not make this redundant, for two independent reasons:
+ *   - Traversal that stays *inside* the base path passes it. From
+ *     `/dav.php/addressbooks/alice/`, an id of `../bob` resolves to another
+ *     user's home set, which is still under `/dav.php`. Only the DAV server's
+ *     own ACLs would stop it — and `deleteCalendar`/`deleteAddressBook` issue a
+ *     DELETE, so that is a destructive primitive.
+ *   - tsdav's helpers build their own requests and never reach `davFetch`.
+ *
+ * So the segment has to be made safe here, at construction time.
  */
 function encodeSegment(id: string): string {
   if (!id || id === '.' || id === '..' || /[/\\]/.test(id)) {
@@ -888,7 +895,7 @@ export async function updateAddressBook(
   req: UpdateAddressBookRequest,
   _config: Config,
 ): Promise<void> {
-  const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${id}/`;
+  const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${encodeSegment(id)}/`;
   const descXml = req.description !== undefined
     ? `<C:addressbook-description>${escapeXml(req.description)}</C:addressbook-description>`
     : '';
@@ -920,7 +927,7 @@ export async function deleteAddressBook(
   id: string,
   _config: Config,
 ): Promise<void> {
-  const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${id}/`;
+  const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${encodeSegment(id)}/`;
   const res = await davFetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
 
   if (!res.ok && res.status !== 404) {
@@ -976,7 +983,7 @@ export async function updateCalendar(
   req: UpdateCalendarRequest,
   _config: Config,
 ): Promise<void> {
-  const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${id}/`;
+  const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${encodeSegment(id)}/`;
   const descXml = req.description !== undefined
     ? `<C:calendar-description>${escapeXml(req.description)}</C:calendar-description>`
     : '';
@@ -1009,7 +1016,7 @@ export async function deleteCalendar(
   id: string,
   _config: Config,
 ): Promise<void> {
-  const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${id}/`;
+  const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${encodeSegment(id)}/`;
   const res = await davFetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
 
   if (!res.ok && res.status !== 404) {

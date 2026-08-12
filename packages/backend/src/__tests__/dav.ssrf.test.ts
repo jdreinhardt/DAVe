@@ -19,6 +19,10 @@ import {
   createTask,
   createJournal,
   syncAddressBook,
+  updateAddressBook,
+  deleteAddressBook,
+  updateCalendar,
+  deleteCalendar,
 } from '../lib/dav.js';
 import type { SessionData } from '../services/session.js';
 import type { ContactJson, TaskJson, NoteJson } from '@dave/shared';
@@ -192,6 +196,48 @@ describe('assertDavTarget on client-supplied collection URLs', () => {
   it('accepts a collection URL inside the base path', async () => {
     await createJournal(session, 'http://dav.test/dav.php/cal/alice/', note, testConfig);
     expect(calledUrls()).toEqual(['http://dav.test/dav.php/cal/alice/n1.ics']);
+  });
+});
+
+// The collection-management writes are the case assertDavTarget cannot cover on
+// its own: `../bob` from alice's home set stays under the configured base path,
+// so only the segment check stops it — and two of these issue a DELETE.
+describe('collection management ids', () => {
+  const abReq = { displayName: 'X', description: '' } as never;
+  const calReq = { displayName: 'X', description: '', color: '#000000' } as never;
+  const sneaky = '../bob';
+
+  it('rejects a sibling-home-set traversal on updateAddressBook', async () => {
+    await expect(
+      updateAddressBook(session, sneaky, abReq, testConfig),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a sibling-home-set traversal on deleteAddressBook', async () => {
+    await expect(deleteAddressBook(session, sneaky, testConfig)).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a sibling-home-set traversal on updateCalendar', async () => {
+    await expect(updateCalendar(session, sneaky, calReq, testConfig)).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a sibling-home-set traversal on deleteCalendar', async () => {
+    await expect(deleteCalendar(session, sneaky, testConfig)).rejects.toMatchObject({
+      statusCode: 400,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('still targets the right collection for an ordinary id', async () => {
+    await deleteCalendar(session, 'personal', testConfig);
+    expect(calledUrls()).toEqual(['http://dav.test/dav.php/cal/alice/personal/']);
   });
 });
 
