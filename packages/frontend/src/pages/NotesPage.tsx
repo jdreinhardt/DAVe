@@ -482,14 +482,25 @@ export default function NotesPage() {
     }
   }, [pendingSelectUid, notes]);
 
-  // Kick off initial sync on first load
+  // Kick off initial sync on first load, then refetch.
+  //
+  // The invalidate is load-bearing. `notesQuery` becomes enabled on the same
+  // `hasCollections` flip that fires this effect, so the GET races the POST: on a
+  // cold cache it reads an unseeded cache.db, gets nothing, and caches that empty
+  // result for the full staleTime. Awaiting the seeding pass server-side does not
+  // close the race — the client has already asked. Without the invalidate the view
+  // sits empty until something unrelated happens to refetch it, which is what made
+  // a first visit look like a ~40s stall while the sync itself took ~150ms.
+  // TasksPage does this for the same reason.
   useEffect(() => {
     if (hasCollections) {
-      triggerNotesSync().catch(() => {
-        /* non-fatal */
-      });
+      triggerNotesSync()
+        .then(() => queryClient.invalidateQueries({ queryKey: ['notes'] }))
+        .catch(() => {
+          /* non-fatal */
+        });
     }
-  }, [hasCollections]);
+  }, [hasCollections, queryClient]);
 
   // Close detail when filtered out
   useEffect(() => {

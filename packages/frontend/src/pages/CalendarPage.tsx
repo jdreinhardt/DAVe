@@ -16,8 +16,8 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent,
 } from '../api/collections';
-import { fetchTasks, updateTask } from '../api/tasks';
-import { fetchJournals, updateJournal } from '../api/journals';
+import { fetchTasks, updateTask, triggerTasksSync } from '../api/tasks';
+import { fetchJournals, updateJournal, triggerJournalsSync } from '../api/journals';
 import { ApiError } from '../api/client';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
 import { useMobileHeaderTitle } from '../contexts/MobileHeader';
@@ -378,6 +378,39 @@ export default function CalendarPage() {
   });
 
   const allJournals = useMemo(() => journalsQuery.data?.journals ?? [], [journalsQuery.data]);
+
+  // ── Seed the cache-backed overlay layers ───────────────────────────────────
+  // The task and journal layers read cache.db, but this page — unlike Tasks,
+  // Notes and Journals — never triggered the initial sync that populates it. On a
+  // cold cache the overlays therefore stayed empty until the user happened to
+  // visit one of those pages, and the background worker could not rescue them: it
+  // only syncs collections already recorded in collection_sync (see cacheSync.ts).
+  //
+  // Gated per layer rather than fired unconditionally on mount. Initial sync is
+  // navigation-driven by design, so that a user who never opens these views costs
+  // no DAV traffic; seeding only what this page will actually render preserves
+  // that. Re-running when a layer is toggled back on is a cheap server-side no-op
+  // once the collection is seeded.
+  const tasksLayerActive = taskVisibleCalendars.length > 0;
+  const journalsLayerActive = journalVisibleCalendars.length > 0;
+
+  useEffect(() => {
+    if (!tasksLayerActive) return;
+    triggerTasksSync()
+      .then(() => queryClient.invalidateQueries({ queryKey: ['tasks'] }))
+      .catch(() => {
+        /* non-fatal — errors are logged server-side */
+      });
+  }, [tasksLayerActive, queryClient]);
+
+  useEffect(() => {
+    if (!journalsLayerActive) return;
+    triggerJournalsSync()
+      .then(() => queryClient.invalidateQueries({ queryKey: ['journals'] }))
+      .catch(() => {
+        /* non-fatal — errors are logged server-side */
+      });
+  }, [journalsLayerActive, queryClient]);
 
   const isLoadingEvents =
     (dateRange !== null && eventQueries.some((q) => q.isFetching)) ||
