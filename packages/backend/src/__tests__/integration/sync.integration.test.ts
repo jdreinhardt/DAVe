@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { buildIntegrationApp, loginAndGetCookie } from './setup.js';
+import { buildIntegrationApp, loginAndGetCookie, getTestCacheDb, integrationConfig, TEST_USER, TEST_PASS } from './setup.js';
+import { createJournal, discoverAndValidate } from '../../lib/dav.js';
+import type { SessionData } from '../../services/session.js';
 import type { AddressBook, CollectionSyncResponse, Contact } from '@dave/shared';
 
 let app: FastifyInstance;
@@ -200,5 +202,47 @@ describe('POST /api/sync', () => {
     expect(result!.full).toBe(true);
     expect(result!.syncToken).not.toBe('http://example.invalid/ns/sync/definitely-not-real');
     expect(result!.syncToken.length).toBeGreaterThan(0);
+  });
+});
+
+// The endpoint used to return 202 and sync in the background, so the client
+// re-queried an empty cache and rendered "no notes" until a second visit.
+// Its contract is that the cache is populated by the time it returns.
+describe('POST /api/sync/notes', () => {
+  it('returns 401 without a session', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/sync/notes' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('has the journal in the cache by the time it responds', async () => {
+    const calRes = await app.inject({ method: 'GET', url: '/api/calendars', headers: { cookie } });
+    const cal = (JSON.parse(calRes.body) as { url: string; components: string[] }[])
+      .find((c) => c.components.includes('VJOURNAL'));
+    expect(cal, 'test stack should seed a VJOURNAL-capable calendar').toBeDefined();
+
+    const uid = `sync-notes-${Date.now()}`;
+    await createJournal(
+      { username: TEST_USER, password: TEST_PASS, ...(await discoverAndValidate(TEST_USER, TEST_PASS, integrationConfig)) } as SessionData,
+      cal!.url,
+      {
+        uid, summary: uid, description: '', dtstart: null,
+        lastModified: null, categories: [], relations: [], collectionUrl: cal!.url,
+      } as never,
+      integrationConfig,
+    );
+
+    const cacheDb = getTestCacheDb();
+    cacheDb.prepare('DELETE FROM entries').run();
+    cacheDb.prepare('DELETE FROM collection_sync').run();
+    cacheDb.prepare('DELETE FROM collection_seeded').run();
+
+    const res = await app.inject({ method: 'POST', url: '/api/sync/notes', headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+
+    // No polling: if this needs a retry, the endpoint returned too early.
+    const row = cacheDb
+      .prepare("SELECT COUNT(*) c FROM entries WHERE uid = ? AND component_type = 'VJOURNAL'")
+      .get(uid) as { c: number };
+    expect(row.c).toBe(1);
   });
 });

@@ -126,10 +126,17 @@ export async function syncRoutes(
     async (req, reply) => {
       const session = req.sessionData!;
       const username = session.username;
-      void initialSyncForComponentType(session, username, 'VJOURNAL', cacheDb, config, app.log)
-        .then(() => syncWorker.triggerForUser(username))
-        .catch((err) => app.log.warn({ err }, 'notes initial sync failed'));
-      return reply.status(202).send({ ok: true });
+      // Await, exactly as the tasks endpoint does. Returning 202 before the sync
+      // finished meant the client re-queried an empty cache and rendered "no
+      // notes", and only a second visit showed anything. If the collections are
+      // already seeded this is a fast no-op.
+      try {
+        await initialSyncForComponentType(session, username, 'VJOURNAL', cacheDb, config, app.log);
+      } catch (err) {
+        app.log.warn({ err }, 'notes initial sync failed');
+      }
+      void syncWorker.triggerForUser(username);
+      return reply.status(200).send({ ok: true });
     },
   );
 }

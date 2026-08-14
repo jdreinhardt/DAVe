@@ -49,7 +49,10 @@ export async function initialSyncCollection(
   logger?: Logger,
   componentType: 'VTODO' | 'VJOURNAL' = 'VTODO',
 ): Promise<boolean> {
+  const tFetch = Date.now();
   const objects = await fetchAllCalendarObjects(session, collectionUrl, config, componentType);
+  const fetchMs = Date.now() - tFetch;
+  const tStore = Date.now();
 
   const cap = config.MAX_CACHED_ENTRIES_PER_USER;
   const existing = countEntriesForUser(cacheDb, userId);
@@ -88,7 +91,15 @@ export async function initialSyncCollection(
   }
 
   upsertCollectionSync(cacheDb, userId, collectionUrl, syncToken);
-  logger?.info({ collectionUrl, count, componentType }, 'Initial collection sync complete');
+  // Timings are split because the two halves fail differently: a slow fetch is
+  // the DAV server or the round-trip count, a slow store is the cache write
+  // path. A first visit to Notes/Tasks blocks on the sum of these across every
+  // collection advertising the type, so this is the log to read when that visit
+  // takes seconds.
+  logger?.info(
+    { collectionUrl, count, componentType, fetchMs, storeMs: Date.now() - tStore, fetched: objects.length },
+    'Initial collection sync complete',
+  );
   return true;
 }
 
@@ -155,8 +166,15 @@ export async function initialSyncForComponentType(
   config: Config,
   logger?: Logger,
 ): Promise<void> {
+  const tList = Date.now();
   const calendars = await listCalendars(session, config);
+  const listMs = Date.now() - tList;
   const matching = calendars.filter((cal) => cal.components.includes(componentType));
+  const tPass = Date.now();
+  logger?.info(
+    { componentType, listMs, calendars: calendars.length, matching: matching.length },
+    'Initial sync pass starting',
+  );
 
   for (const cal of matching) {
     // Gate on the component type, not the collection. A calendar advertising
@@ -194,6 +212,11 @@ export async function initialSyncForComponentType(
       );
     }
   }
+
+  logger?.info(
+    { componentType, listMs, seedMs: Date.now() - tPass, matching: matching.length },
+    'Initial sync pass complete',
+  );
 }
 
 /**

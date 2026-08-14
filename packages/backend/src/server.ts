@@ -1,3 +1,8 @@
+// MUST be the first import: it wraps globalThis.fetch, and tsdav binds
+// globalThis.fetch when its own module body runs. Any import above this one that
+// reaches tsdav (directly or transitively) leaves the guard installed but
+// bypassed. See lib/secureFetch.ts.
+import { setSecureTransportPolicy } from './lib/secureFetch.js';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -29,6 +34,8 @@ const config = loadConfig();
 // Pin the DAV target before anything can issue a request; davFetch fails closed
 // until this runs.
 initDavBase(config);
+// Scheme half of the same pin, covering the requests tsdav builds itself.
+setSecureTransportPolicy(config.DAV_BASE_URL);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const db = getDb(config);
 const cacheDb = getCacheDb(config);

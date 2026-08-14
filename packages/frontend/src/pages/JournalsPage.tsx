@@ -1146,14 +1146,21 @@ export default function JournalsPage() {
     [calendarJournalsQuery.data],
   );
 
-  // Kick off initial sync on first load
+  // Kick off initial sync on first load, then refetch.
+  //
+  // Same race as NotesPage — and the same collections, since notes and journals
+  // are both VJOURNAL and share one seeding pass. Whichever view is opened first
+  // is the one that reads the unseeded cache and caches an empty result, so both
+  // pages need the invalidate. The prefix covers the list and calendar queries.
   useEffect(() => {
     if (hasCollections) {
-      triggerJournalsSync().catch(() => {
-        /* non-fatal */
-      });
+      triggerJournalsSync()
+        .then(() => queryClient.invalidateQueries({ queryKey: ['journals'] }))
+        .catch(() => {
+          /* non-fatal */
+        });
     }
-  }, [hasCollections]);
+  }, [hasCollections, queryClient]);
 
   // Close detail when filtered out
   useEffect(() => {
