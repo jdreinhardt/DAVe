@@ -27,10 +27,15 @@
     "lint": "eslint packages/*/src",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
+  "overrides": {
+    "tsup": {
+      "esbuild": "^0.28.2"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
     "@playwright/test": "^1.48.0",
-    "concurrently": "^9.0.0",
+    "concurrently": "^10.0.4",
     "eslint": "^9.0.0",
     "eslint-plugin-react": "^7.37.0",
     "eslint-plugin-react-hooks": "^5.0.0",
