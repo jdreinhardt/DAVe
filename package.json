@@ -23,6 +23,9 @@
     "test:e2e:ui": "playwright test --ui",
     "stack:baikal": "docker compose -f docker-compose.test.baikal.yml up --wait",
     "stack:radicale": "docker compose -f docker-compose.test.radicale.yml up --wait",
+    "diagnose:collections": "tsx scripts/diagnose-collections.ts",
+    "diagnose:sync-timing": "tsx scripts/time-initial-sync.ts",
+    "diagnose:discovery": "tsx scripts/check-discovery-scheme.ts",
     "stack:down": "docker compose -f docker-compose.test.baikal.yml down -v && docker compose -f docker-compose.test.radicale.yml down -v",
     "lint": "eslint packages/*/src",
     "typecheck": "npm run typecheck --workspaces --if-present"
