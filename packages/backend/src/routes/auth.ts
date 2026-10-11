@@ -1,15 +1,69 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { AuthConfigResponse, LogoutResponse } from '@dave/shared';
 import type { DbInstance as DatabaseSync } from '../db/index.js';
-import type { Config } from '../config.js';
+import { isOidcEnabled, type Config } from '../config.js';
 import { discoverAndValidate } from '../lib/dav.js';
+import { endSessionUrl } from '../lib/oidc.js';
 import { createSession, deleteSession } from '../services/session.js';
 import { COOKIE_NAME, requireAuth } from '../plugins/session.js';
+
+export type DiscoveryFailure = 'unauthorized' | 'unreachable' | 'unexpected';
+
+/**
+ * Sort a DAV discovery error into what the user needs to be told. Shared by
+ * password and OIDC sign-in, which hit the same discovery path.
+ */
+export function classifyDiscoveryError(e: unknown): { kind: DiscoveryFailure; msg: string } {
+  const msg = e instanceof Error ? e.message : String(e);
+  const msgLower = msg.toLowerCase();
+  // tsdav surfaces a 401 either explicitly in the message, or implicitly:
+  // when a server rejects credentials it returns a 401 error page that has
+  // no DAV properties, so tsdav throws "cannot find principalUrl" instead of
+  // a proper 401 error. Treat that the same as a credential failure.
+  if (
+    msg.includes('401') ||
+    msgLower.includes('unauthorized') ||
+    msgLower.includes('principalurl') ||
+    msgLower.includes('not authenticated')
+  ) {
+    return { kind: 'unauthorized', msg };
+  }
+  // ECONNREFUSED / ENOTFOUND → server is not reachable at all.
+  // Anything else → reachable but not answering DAV. Common causes: the URL
+  // points at a non-DAV path, or the server is mid-setup and serving HTML
+  // (Baikal's install wizard does exactly this).
+  const isNetworkError =
+    e instanceof Error &&
+    ('code' in e
+      ? (e as NodeJS.ErrnoException).code === 'ECONNREFUSED' ||
+        (e as NodeJS.ErrnoException).code === 'ENOTFOUND'
+      : msgLower.includes('econnrefused') || msgLower.includes('enotfound'));
+  return { kind: isNetworkError ? 'unreachable' : 'unexpected', msg };
+}
+
+export function setSessionCookie(reply: FastifyReply, sessionId: string, config: Config): void {
+  reply.setCookie(COOKIE_NAME, sessionId, {
+    httpOnly: true,
+    secure: config.TRUST_PROXY, // only set Secure when behind HTTPS proxy
+    // SameSite=lax is the app's only CSRF defense: it keeps the cookie off
+    // cross-site POST/PUT/DELETE, and there are no state-changing GET routes.
+    // Do NOT relax this to 'none' without adding CSRF tokens.
+    sameSite: 'lax',
+    path: '/',
+  });
+}
 
 export async function authRoutes(
   app: FastifyInstance,
   opts: { config: Config; db: DatabaseSync },
 ) {
   const { config, db } = opts;
+  const oidc = isOidcEnabled(config);
+
+  // GET /api/auth/config — public; tells the login page which flow to run.
+  app.get<{ Reply: AuthConfigResponse }>('/api/auth/config', async (_req, reply) => {
+    return reply.send({ mode: oidc ? 'oidc' : 'password' });
+  });
 
   // POST /api/auth/login
   app.post<{ Body: { username: string; password: string } }>(
@@ -35,42 +89,31 @@ export async function authRoutes(
       },
     },
     async (req, reply) => {
+      // With OIDC on, the DAV server is expected to trust DAVe's user header,
+      // so a password would prove nothing — refuse rather than half-work.
+      if (oidc) {
+        return reply
+          .status(403)
+          .send({ error: 'Password sign-in is disabled; use single sign-on.', statusCode: 403 });
+      }
+
       const { username, password } = req.body;
 
       let discovery;
       try {
         discovery = await discoverAndValidate(username, password, config);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        const msgLower = msg.toLowerCase();
-        // tsdav surfaces a 401 either explicitly in the message, or implicitly:
-        // when a server rejects credentials it returns a 401 error page that has
-        // no DAV properties, so tsdav throws "cannot find principalUrl" instead of
-        // a proper 401 error. Treat that the same as a credential failure.
-        if (
-          msg.includes('401') ||
-          msgLower.includes('unauthorized') ||
-          msgLower.includes('principalurl') ||
-          msgLower.includes('not authenticated')
-        ) {
+        const { kind, msg } = classifyDiscoveryError(e);
+        if (kind === 'unauthorized') {
           return reply.status(401).send({ error: 'Incorrect username or password.', statusCode: 401 });
         }
         // Log only the sanitized message — never the raw error, which can carry
         // the basic-auth Authorization header from the underlying DAV request.
         app.log.error({ msg }, 'DAV discovery failed');
-        // ECONNREFUSED / ENOTFOUND → server is not reachable at all.
-        // Anything else → reachable but not answering DAV. Common causes: the URL
-        // points at a non-DAV path, or the server is mid-setup and serving HTML
-        // (Baikal's install wizard does exactly this).
-        const isNetworkError =
-          e instanceof Error &&
-          ('code' in e
-            ? (e as NodeJS.ErrnoException).code === 'ECONNREFUSED' ||
-              (e as NodeJS.ErrnoException).code === 'ENOTFOUND'
-            : msgLower.includes('econnrefused') || msgLower.includes('enotfound'));
-        const errorText = isNetworkError
-          ? 'Could not reach the DAV server — check DAV_BASE_URL and that the server is running'
-          : 'The DAV server responded unexpectedly — check DAV_BASE_URL points at the DAV endpoint and the server is fully configured';
+        const errorText =
+          kind === 'unreachable'
+            ? 'Could not reach the DAV server — check DAV_BASE_URL and that the server is running'
+            : 'The DAV server responded unexpectedly — check DAV_BASE_URL points at the DAV endpoint and the server is fully configured';
         return reply.status(502).send({ error: errorText, statusCode: 502 });
       }
 
@@ -78,6 +121,7 @@ export async function authRoutes(
         {
           username,
           password,
+          authMode: 'basic',
           displayName: discovery.displayName,
           principalUrl: discovery.principalUrl,
           calendarHomeUrl: discovery.calendarHomeUrl,
@@ -87,16 +131,7 @@ export async function authRoutes(
         db,
       );
 
-      reply.setCookie(COOKIE_NAME, sessionId, {
-        httpOnly: true,
-        secure: config.TRUST_PROXY, // only set Secure when behind HTTPS proxy
-        // SameSite=lax is the app's only CSRF defense: it keeps the cookie off
-        // cross-site POST/PUT/DELETE, and there are no state-changing GET routes.
-        // Do NOT relax this to 'none' without adding CSRF tokens.
-        sameSite: 'lax',
-        path: '/',
-      });
-
+      setSessionCookie(reply, sessionId, config);
       return reply.status(200).send({ ok: true });
     },
   );
@@ -108,7 +143,17 @@ export async function authRoutes(
     async (req, reply) => {
       if (req.sessionId) deleteSession(req.sessionId, db);
       reply.clearCookie(COOKIE_NAME, { path: '/' });
-      return reply.status(204).send();
+      if (!oidc) return reply.status(204).send();
+
+      let redirectUrl: string | null = null;
+      try {
+        redirectUrl = await endSessionUrl(config);
+      } catch (e) {
+        // The DAVe session is already gone; failing to reach the provider only
+        // means the user keeps their provider session.
+        app.log.warn({ msg: e instanceof Error ? e.message : String(e) }, 'OIDC end-session lookup failed');
+      }
+      return reply.status(200).send({ redirectUrl } satisfies LogoutResponse);
     },
   );
 }

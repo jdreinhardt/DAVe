@@ -35,10 +35,30 @@ const {
  * property of the sink is the point: it cannot be forgotten at a call site.
  */
 let davBase: URL | null = null;
+let remoteUserHeader = 'X-Remote-User';
 
 /** Pin the DAV origin. Call once during bootstrap, before any DAV request. */
 export function initDavBase(config: Config): void {
   davBase = new URL(config.DAV_BASE_URL);
+  remoteUserHeader = config.DAV_REMOTE_USER_HEADER;
+}
+
+/**
+ * The credentials a session presents to the DAV server: Basic auth for password
+ * sessions, the trusted user header for OIDC (remote-user) sessions.
+ *
+ * The header value always comes from the session — i.e. from a username DAVe
+ * itself derived from a verified ID token. Nothing from the incoming browser
+ * request is forwarded, which is what keeps a header-trusting DAV server safe
+ * behind DAVe.
+ */
+function authHeadersFor(
+  session: Pick<SessionData, 'username' | 'authMode'> & { password?: string },
+): Record<string, string> {
+  if (session.authMode === 'remote-user') {
+    return { [remoteUserHeader]: session.username };
+  }
+  return _getBasicAuthHeaders({ username: session.username, password: session.password ?? '' });
 }
 
 /**
@@ -190,21 +210,41 @@ export async function discoverAndValidate(
   password: string,
   config: Config,
 ): Promise<DiscoveryResult> {
-  const creds = { username, password };
+  return discover(username, config, { credentials: { username, password }, authMethod: 'Basic' });
+}
 
+/** Discovery for an OIDC session: the DAV server identifies the user by header. */
+export async function discoverWithRemoteUser(
+  username: string,
+  config: Config,
+): Promise<DiscoveryResult> {
+  const headers = authHeadersFor({ username, authMode: 'remote-user' });
+  return discover(username, config, {
+    credentials: { username },
+    authMethod: 'Custom',
+    authFunction: async () => headers,
+  });
+}
+
+async function discover(
+  username: string,
+  config: Config,
+  auth: Pick<
+    ConstructorParameters<typeof DAVClient>[0],
+    'credentials' | 'authMethod' | 'authFunction'
+  >,
+): Promise<DiscoveryResult> {
   // Two clients are needed because tsdav's homeUrl resolves to the matching
   // home set based on accountType (caldav → calendar-home-set,
   // carddav → addressbook-home-set).
   const calClient = new DAVClient({
     serverUrl: config.DAV_BASE_URL,
-    credentials: creds,
-    authMethod: 'Basic',
+    ...auth,
     defaultAccountType: 'caldav',
   });
   const cardClient = new DAVClient({
     serverUrl: config.DAV_BASE_URL,
-    credentials: creds,
-    authMethod: 'Basic',
+    ...auth,
     defaultAccountType: 'carddav',
   });
 
@@ -256,7 +296,7 @@ export async function listCalendars(
   session: SessionData,
   config: Config,
 ): Promise<Calendar[]> {
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
   const davCals = await _fetchCalendars({ account: calAccount(session, config), headers: authHeaders });
 
   return davCals.map((cal) => ({
@@ -277,7 +317,7 @@ export async function listAddressBooks(
   config: Config,
   db: DbInstance,
 ): Promise<AddressBook[]> {
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
   const account = cardAccount(session, config);
 
   // Use a direct PROPFIND so we can request addressbook-description, which
@@ -339,7 +379,7 @@ export async function fetchContacts(
 ): Promise<Contact[]> {
   const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
   const addressBookUrl = `${homeUrl}/${encodeSegment(addressBookId)}/`;
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
 
   const vcards = await _fetchVCards({
     addressBook: { url: addressBookUrl },
@@ -377,10 +417,6 @@ function contactUrl(session: SessionData, addressBookId: string, id: string): st
   return `${addressBookUrl(session, addressBookId)}${encodeSegment(id)}.vcf`;
 }
 
-function basicAuthHeader(session: SessionData): Record<string, string> {
-  return _getBasicAuthHeaders({ username: session.username, password: session.password });
-}
-
 export interface ContactWriteResult {
   id: string;
   url: string;
@@ -403,7 +439,7 @@ export async function createContact(
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/vcard; charset=utf-8',
       'If-None-Match': '*',
     },
@@ -433,7 +469,7 @@ export async function updateContact(
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/vcard; charset=utf-8',
       'If-Match': etag,
     },
@@ -461,7 +497,7 @@ export async function deleteContact(
   const res = await davFetch(url, {
     method: 'DELETE',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'If-Match': etag,
     },
   });
@@ -479,7 +515,7 @@ export async function fetchRawContacts(
 ): Promise<{ url: string; etag: string; raw: string }[]> {
   const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
   const abUrl = `${homeUrl}/${encodeSegment(addressBookId)}/`;
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
 
   const vcards = await _fetchVCards({
     addressBook: { url: abUrl },
@@ -511,7 +547,7 @@ export async function fetchEvents(
   _config: Config,
 ): Promise<CalendarEvent[]> {
   const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${encodeSegment(calendarId)}/`;
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
 
   const objects = await _fetchCalendarObjects({
     calendar: { url: calUrl },
@@ -565,7 +601,7 @@ export async function createEvent(
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-None-Match': '*',
     },
@@ -597,7 +633,7 @@ export async function updateEvent(
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-Match': etag,
     },
@@ -670,7 +706,7 @@ export async function moveEvent(
     const putRes = await davFetch(newUrl, {
       method: 'PUT',
       headers: {
-        ...basicAuthHeader(session),
+        ...authHeadersFor(session),
         'Content-Type': 'text/calendar; charset=utf-8',
         'If-None-Match': '*',
       },
@@ -692,7 +728,7 @@ export async function moveEvent(
   const putRes = await davFetch(newUrl, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-None-Match': '*',
     },
@@ -719,7 +755,7 @@ export async function deleteEvent(
   const res = await davFetch(url, {
     method: 'DELETE',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'If-Match': etag,
     },
   });
@@ -738,7 +774,7 @@ async function fetchRawEvent(
   id: string,
 ): Promise<{ raw: string; etag: string }> {
   const url = calendarObjectUrl(session, calendarId, id);
-  const res = await davFetch(url, { headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { headers: authHeadersFor(session) });
   if (!res.ok) {
     throw Object.assign(new Error(`GET failed: ${res.status}`), { statusCode: res.status });
   }
@@ -756,7 +792,7 @@ async function putRawIcs(
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-Match': etag,
     },
@@ -902,7 +938,7 @@ export async function createAddressBook(
 
   const res = await davFetch(url, {
     method: 'MKCOL',
-    headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
+    headers: { ...authHeadersFor(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
   });
 
@@ -937,7 +973,7 @@ export async function updateAddressBook(
 
   const res = await davFetch(url, {
     method: 'PROPPATCH',
-    headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
+    headers: { ...authHeadersFor(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
   });
 
@@ -953,7 +989,7 @@ export async function deleteAddressBook(
   _config: Config,
 ): Promise<void> {
   const url = `${session.addressBookHomeUrl.replace(/\/$/, '')}/${encodeSegment(id)}/`;
-  const res = await davFetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { method: 'DELETE', headers: authHeadersFor(session) });
 
   if (!res.ok && res.status !== 404) {
     const text = await res.text().catch(() => '');
@@ -990,7 +1026,7 @@ export async function createCalendar(
 
   const res = await davFetch(url, {
     method: 'MKCALENDAR',
-    headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
+    headers: { ...authHeadersFor(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
   });
 
@@ -1026,7 +1062,7 @@ export async function updateCalendar(
 
   const res = await davFetch(url, {
     method: 'PROPPATCH',
-    headers: { ...basicAuthHeader(session), 'Content-Type': 'application/xml; charset=utf-8' },
+    headers: { ...authHeadersFor(session), 'Content-Type': 'application/xml; charset=utf-8' },
     body,
   });
 
@@ -1042,7 +1078,7 @@ export async function deleteCalendar(
   _config: Config,
 ): Promise<void> {
   const url = `${session.calendarHomeUrl.replace(/\/$/, '')}/${encodeSegment(id)}/`;
-  const res = await davFetch(url, { method: 'DELETE', headers: basicAuthHeader(session) });
+  const res = await davFetch(url, { method: 'DELETE', headers: authHeadersFor(session) });
 
   if (!res.ok && res.status !== 404) {
     const text = await res.text().catch(() => '');
@@ -1243,7 +1279,7 @@ export async function syncAddressBook(
 ): Promise<AddressBookSyncResult> {
   const homeUrl = session.addressBookHomeUrl.replace(/\/$/, '');
   const abUrl = `${homeUrl}/${encodeSegment(abId)}/`;
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
 
   // An empty sync-token means "send me everything" (RFC 6578 §3.2), so recovery
   // from a rejected token is just the same REPORT with the token dropped. The
@@ -1297,7 +1333,7 @@ export async function syncCalendar(
   _config: Config,
 ): Promise<CalendarSyncResult> {
   const calUrl = `${session.calendarHomeUrl.replace(/\/$/, '')}/${encodeSegment(calId)}/`;
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
 
   // Calendars only report a dirty bit, so a rejected token needs no special
   // result shape: refetch with an empty token and force `dirty` so the client
@@ -1342,7 +1378,7 @@ export async function fetchAllCalendarObjects(
   _config: Config,
   componentType: 'VTODO' | 'VJOURNAL' = 'VTODO',
 ): Promise<CalendarObjectRaw[]> {
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
   const objects = await _fetchCalendarObjects({
     calendar: { url: calUrl },
     headers: authHeaders,
@@ -1380,7 +1416,7 @@ export async function syncCalendarForCache(
   currentSyncToken: string,
   _config: Config,
 ): Promise<CalendarCacheSyncResult> {
-  const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
+  const authHeaders = authHeadersFor(session);
 
   const result = await runSyncCollection(calUrl, currentSyncToken, authHeaders);
 
@@ -1437,7 +1473,7 @@ export async function createTask(
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-None-Match': '*',
     },
@@ -1466,7 +1502,7 @@ export async function updateTask(
   const res = await davFetch(objectUrl, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-Match': etag,
     },
@@ -1490,7 +1526,7 @@ export async function deleteTask(
   const res = await davFetch(objectUrl, {
     method: 'DELETE',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'If-Match': etag,
     },
   });
@@ -1539,7 +1575,7 @@ export async function fetchArchivedCompletedTasks(
   collectionUrls: string[],
   config: Config,
 ): Promise<CalendarObjectRaw[]> {
-  const authHeaders = basicAuthHeader(session);
+  const authHeaders = authHeadersFor(session);
   const toIso = (ms: number): string =>
     new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
 
@@ -1593,7 +1629,7 @@ export async function fetchEventsForSearch(
   calendars: Array<{ id: string; url: string }>,
   rangeDays: number,
 ): Promise<Array<{ url: string; etag: string; rawIcs: string; calendarId: string }>> {
-  const authHeaders = basicAuthHeader(session);
+  const authHeaders = authHeadersFor(session);
   const toIso = (ms: number): string =>
     new Date(ms).toISOString().replace(/[-:.]/g, '').slice(0, 15) + 'Z';
 
@@ -1644,7 +1680,7 @@ export async function restoreArchivedTask(
   _config: Config,
 ): Promise<TaskWriteResult> {
   assertDavTarget(objectUrl);
-  const authHeaders = basicAuthHeader(session);
+  const authHeaders = authHeadersFor(session);
 
   // Fetch latest ICS (in case it changed since the search was run)
   const getRes = await davFetch(objectUrl, { headers: authHeaders });
@@ -1705,7 +1741,7 @@ export async function createJournal(
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-None-Match': '*',
     },
@@ -1734,7 +1770,7 @@ export async function updateJournal(
   const res = await davFetch(objectUrl, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-Match': etag,
     },
@@ -1758,7 +1794,7 @@ export async function deleteJournal(
   const res = await davFetch(objectUrl, {
     method: 'DELETE',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'If-Match': etag,
     },
   });
@@ -1782,7 +1818,7 @@ export async function createTaskRaw(
   const res = await davFetch(url, {
     method: 'PUT',
     headers: {
-      ...basicAuthHeader(session),
+      ...authHeadersFor(session),
       'Content-Type': 'text/calendar; charset=utf-8',
       'If-None-Match': '*',
     },

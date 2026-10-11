@@ -27,7 +27,8 @@ You need an existing CalDAV/CardDAV server. Point `DAV_BASE_URL` at its DAV endp
 - **Radicale** — `http://radicale.example.com:5232` (served from the root, no path).
   Use `[auth] type = htpasswd`; Radicale speaks Basic out of the box.
 
-Basic auth is a hard requirement. Digest is not supported.
+Basic auth is a hard requirement. Digest is not supported. The one alternative is
+[OIDC sign-in](#oidc-sign-in), for a DAV server that trusts a user header from DAVe.
 
 ```bash
 git clone https://github.com/jdreinhardt/dave && cd dave
@@ -126,6 +127,7 @@ For development setup (hot reload, dev Docker stack), see [docs/CONTRIBUTING.md]
 - Mobile-responsive layout; sidebar collapses on small screens
 - Optimistic UI for edits with rollback on failure
 - Multi-user: each user authenticates with their own DAV credentials and sees only their own collections
+- Optional single sign-on via OIDC, against a DAV server that trusts a user header (see [OIDC sign-in](#oidc-sign-in))
 
 
 ### Collection setup for Tasks, Notes, and Journals
@@ -163,6 +165,14 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 | `DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS` | No | `365` | How far back the "Search Archived" task search queries for old completed tasks |
 | `EVENT_SEARCH_RANGE_DAYS` | No | `60` | Days in each direction from today that global search queries the server for calendar events |
 | `CACHE_DB_PATH` | No | `$DATA_DIR/cache.db` | Override path for the sync cache SQLite file |
+| `OIDC_ISSUER_URL` | No | — | Enables [OIDC sign-in](#oidc-sign-in) and disables password login. Issuer URL of the provider (its `/.well-known/openid-configuration` must be served under it). |
+| `OIDC_CLIENT_ID` | With OIDC | — | Client ID registered at the provider |
+| `OIDC_CLIENT_SECRET` | No | — | Client secret for a confidential client; omit for a public client. PKCE is used either way. |
+| `OIDC_REDIRECT_URI` | With OIDC | — | `https://<dave-host>/api/auth/oidc/callback`, registered at the provider exactly as written |
+| `OIDC_SCOPES` | No | `openid profile email` | Scopes to request; must include `openid` |
+| `OIDC_USERNAME_CLAIM` | No | `preferred_username` | Claim holding the DAV username. Read from the ID token, falling back to userinfo. |
+| `OIDC_POST_LOGOUT_REDIRECT_URI` | No | — | Where the provider sends the browser after sign-out, e.g. `https://<dave-host>/login?signedOut`. Must be registered at the provider. |
+| `DAV_REMOTE_USER_HEADER` | No | `X-Remote-User` | Header that carries the username to the DAV server in OIDC mode |
 
 ---
 
@@ -182,6 +192,85 @@ Two things live in the `/data` volume, with deliberately different protection:
 - **Cached content** (`cache.db` — your calendar events, contacts, tasks, and notes, including full vCard/iCalendar bodies) is stored **unencrypted**. This is a mirror of data the DAV server already holds in plaintext, and it's kept queryable so SQLite FTS5 can power global search. Encrypting it would disable full-text search for little real gain, since the running app needs the key in memory on every request anyway.
 
 If the contents of `/data` are sensitive in your environment, protect them at the deployment layer rather than the app layer: **encrypt the underlying volume/disk** (LUKS, encrypted EBS/PD, etc.) and **encrypt your backups**. Volume encryption transparently covers both SQLite files and keeps search working. Note that if you run DAVe on a different host than the DAV server, `cache.db` becomes a second plaintext copy of that data — factor that into where you place the volume.
+
+### OIDC sign-in
+
+By default DAVe signs users in with their DAV username and password and replays them as Basic
+auth. If you already run an identity provider (Authentik, Keycloak, Authelia, …), DAVe can instead
+sign users in with OIDC — but only against a DAV server configured to **trust a user header**,
+because after an OIDC login DAVe has no DAV password to send.
+
+With `OIDC_ISSUER_URL` set:
+
+- There is no login form. Opening DAVe without a session redirects straight to the provider.
+  Failed sign-ins and explicit sign-outs land on a page with a "Sign in" button rather than
+  redirecting again, so a broken setup can't loop.
+- DAVe runs the authorization code flow with PKCE, state and nonce, verifies the ID token, and
+  takes the DAV username from `OIDC_USERNAME_CLAIM`. Every DAV request then carries
+  `X-Remote-User: <username>` (see `DAV_REMOTE_USER_HEADER`) instead of an `Authorization` header.
+- Password login (`POST /api/auth/login`) is refused: the DAV server trusts the header, so a
+  password would prove nothing.
+- Sign-out also ends the provider session when the provider advertises an `end_session_endpoint`;
+  otherwise only the DAVe session ends.
+- Who may use DAVe is decided at the provider — restrict the client to the right users or groups
+  there.
+
+The header carries the user's identity with no proof attached, so the DAV server will believe
+anyone who can reach it. That makes the network layout the security boundary:
+
+- The header-trusting DAV endpoint must be reachable **only from DAVe** — a private network or
+  firewall rule, never the internet and never the same reverse proxy that serves clients.
+- DAVe never forwards a header from the browser; the value always comes from the verified ID token.
+- The username must match what the DAV server expects (Radicale uses it as the principal path, and
+  creates an empty principal for any new name it sees).
+
+**Radicale example.** Desktop and mobile clients (Thunderbird, DAVx⁵, Outlook add-ins) still need
+Basic auth, so the usual setup is **two Radicale instances sharing one storage folder** — Radicale
+locks its storage, so concurrent instances are safe:
+
+```ini
+# radicale-dave: only reachable by DAVe
+[auth]
+type = http_x_remote_user
+
+[rights]
+type = owner_only
+
+[storage]
+filesystem_folder = /data/collections
+```
+
+```yaml
+services:
+  radicale:           # existing instance, htpasswd auth, published via the reverse proxy for clients
+    image: tomsquest/docker-radicale
+    volumes: [./radicale/data:/data, ./radicale/config:/config:ro]
+    networks: [frontend]
+
+  radicale-dave:      # header auth, private to DAVe
+    image: tomsquest/docker-radicale
+    volumes: [./radicale/data:/data, ./radicale-dave/config:/config:ro]
+    networks: [dave-radicale]
+
+  dave:
+    image: ghcr.io/jdreinhardt/dave
+    environment:
+      DAV_BASE_URL: http://radicale-dave:5232
+      OIDC_ISSUER_URL: https://auth.example.com/application/o/dave/
+      OIDC_CLIENT_ID: dave
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OIDC_REDIRECT_URI: https://dave.example.com/api/auth/oidc/callback
+      OIDC_POST_LOGOUT_REDIRECT_URI: https://dave.example.com/login?signedOut
+    networks: [frontend, dave-radicale]
+
+networks:
+  frontend: {}
+  dave-radicale:
+    internal: true    # no other container, and no route out
+```
+
+Plain `http://` to `radicale-dave` is fine here: the hop stays on the private network and carries no
+password. (DAVe only refuses plaintext when `DAV_BASE_URL` itself is `https://`.)
 
 ### Nginx
 

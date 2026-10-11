@@ -97,6 +97,8 @@ Sessions are stored in a local SQLite database (not on the DAV server). On login
 
 On each authenticated request, the session plugin decrypts the stored credentials and creates a fresh `tsdav` client scoped to that request. Sessions use a sliding TTL (`SESSION_TTL_HOURS`, default 7 days) updated on every authenticated request.
 
+**OIDC sessions.** With `OIDC_ISSUER_URL` set, step 1 is replaced by an authorization code flow (`routes/oidc.ts`, `lib/oidc.ts`): `/api/auth/oidc/login` stores state, nonce and the PKCE verifier in an encrypted, path-scoped, 10-minute cookie and redirects to the provider; `/api/auth/oidc/callback` exchanges the code, verifies the ID token and reads the username claim. The session is stored with `authMode: 'remote-user'` and no password, and `authHeadersFor` in `lib/dav.ts` then sends `DAV_REMOTE_USER_HEADER: <username>` instead of Basic auth on every DAV request, including the sync worker's. Sessions without `authMode` predate OIDC support and are Basic.
+
 ## vCard pipeline
 
 ```
@@ -164,6 +166,10 @@ The server **must** be configured for **Basic auth** (not Digest). tsdav's auth 
 
 - **Baikal** — the test seed script writes `dav_auth_type: 'Basic'` into `baikal.yaml`. A manual install requires switching this in the admin UI under Settings → WebDAV auth type.
 - **Radicale** — `[auth] type = htpasswd` is Basic already; nothing to switch.
+
+The exception is OIDC mode, where the DAV server authenticates by a trusted user header instead
+(Radicale: `[auth] type = http_x_remote_user`). That server must be reachable only by DAVe — see
+README "OIDC sign-in".
 
 ## Server portability
 

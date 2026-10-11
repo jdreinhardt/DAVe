@@ -5,7 +5,11 @@ import { encrypt, decrypt } from '../lib/crypto.js';
 // All credential and discovery data stored per session.
 export interface SessionData {
   username: string;
-  password: string; // plaintext in memory; encrypted at rest
+  password: string; // plaintext in memory; encrypted at rest. Empty for remote-user sessions.
+  // 'remote-user' sessions came from OIDC sign-in and authenticate DAV requests
+  // with the trusted user header instead of Basic auth. Absent on sessions
+  // created before OIDC support, which are all Basic.
+  authMode?: 'basic' | 'remote-user';
   displayName: string;
   principalUrl: string;
   calendarHomeUrl: string;
