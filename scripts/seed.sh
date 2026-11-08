@@ -65,8 +65,14 @@ INSERT OR IGNORE INTO calendars
     ('principals/${USERNAME}', 'Personal', 'personal', '',
      0, '#0082C9', 'America/New_York', 'VEVENT', 0, 1);
 
-INSERT OR IGNORE INTO addressbooks (principaluri, displayname, uri, description, synctoken)
-  VALUES ('principals/${USERNAME}', 'Contacts', 'contacts', '', 1);
+-- addressbooks has no UNIQUE (principaluri, uri), so OR IGNORE would append a
+-- duplicate "contacts" book on every re-seed. Guard on the row instead.
+INSERT INTO addressbooks (principaluri, displayname, uri, description, synctoken)
+  SELECT 'principals/${USERNAME}', 'Contacts', 'contacts', '', 1
+  WHERE NOT EXISTS (
+    SELECT 1 FROM addressbooks
+     WHERE principaluri = 'principals/${USERNAME}' AND uri = 'contacts'
+  );
 SQL
 
 echo ""

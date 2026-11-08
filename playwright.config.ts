@@ -30,7 +30,11 @@ export default defineConfig({
   projects: [
     // Signs in once; every other spec inherits that session via storageState so the
     // suite stays under the login route's rate limit. See e2e/auth.setup.ts.
-    { name: 'setup', testMatch: /auth\.setup\.ts/ },
+    // `teardown` runs the fixture sweep once the dependent projects finish.
+    { name: 'setup', testMatch: /auth\.setup\.ts/, teardown: 'cleanup' },
+    // Deletes everything the specs created. The suite shares one account, so
+    // leftovers from a failed run poison the next. See e2e/cleanup.teardown.ts.
+    { name: 'cleanup', testMatch: /cleanup\.teardown\.ts/ },
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'], storageState: AUTH_STATE_PATH },
