@@ -30,6 +30,7 @@ packages/backend/src/
   lib/entryParser.ts           Raw ICS → cache-row shape for tasks/notes/journals
   lib/routeUtils.ts            Cache-row → API JSON helpers shared by task/note/journal routes
   lib/crypto.ts                AES-256-GCM credential encryption
+  lib/oidc.ts                  OIDC relying party (openid-client); routes/oidc.ts = login + callback
   db/index.ts                  sessions.sqlite: sessions, user_settings, address_book_colors
   db/cache.ts + cacheOps.ts    cache.db: entries, entry_categories, entry_relations, collection_sync
   services/session.ts          Session CRUD
@@ -120,7 +121,7 @@ These decisions are made; don't relitigate them mid-task.
 - **Credentials.** Encrypted with `SESSION_SECRET` before storage. Never log them, never include them in error responses, never surface them in API output.
 - **No server-specific branches.** The integration and e2e suites run unchanged against Baikal and Radicale. If a test (or the app) needs to know which server it's talking to, that's a portability regression to fix, not accommodate. The known shape differences (path-served vs root-served base URL, shared vs distinct home sets, sync-token pruning, redirect/trailing-slash behavior) are handled generically in `lib/dav.ts` and `services/cacheSync.ts`.
 - **Sync tokens expire.** Radicale prunes tokens after ~30 days; `cacheSync` handles `SyncTokenInvalidError` by clearing the collection's cache rows and re-syncing from scratch. Preserve that rebuild path when touching sync.
-- **Basic auth only.** tsdav does not speak Digest — the DAV server must be configured for Basic auth or every request 401s.
+- **Basic auth only.** tsdav does not speak Digest — the DAV server must be configured for Basic auth or every request 401s. The one exception is OIDC mode (`OIDC_ISSUER_URL`), where sessions have `authMode: 'remote-user'` and DAV requests carry a trusted user header instead. All DAV auth headers come from `authHeadersFor` in `lib/dav.ts`; never build them elsewhere, and never pass a browser-supplied header through.
 
 ## When to ask before acting
 

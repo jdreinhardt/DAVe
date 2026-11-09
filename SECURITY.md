@@ -34,6 +34,22 @@ especially valuable:
   cached entries, settings, or collections.
 - **Login rate limiting** — bypasses of the per-IP throttle, including via header spoofing
   when `TRUST_PROXY` is set.
+- **OIDC sign-in** — anything that lets a browser choose the username DAVe sends in the
+  trusted user header (`DAV_REMOTE_USER_HEADER`), skip ID-token, state, nonce or PKCE
+  validation, or reuse a sign-in transaction.
+
+## OIDC and trusted-header DAV servers
+
+OIDC sign-in exists for deployments where the DAV server is configured to trust a user header
+from DAVe — for example Radicale with `[auth] type = http_x_remote_user`, typically as a second
+instance next to the Basic-auth one that desktop and mobile clients use (see README
+"OIDC sign-in"). In that mode DAVe sends `X-Remote-User: <username>` taken from the verified ID
+token, and never forwards that header from the browser.
+
+Such a DAV endpoint authenticates **whoever can reach it**. Keeping it reachable only from DAVe
+(a private network, never the internet or a shared reverse proxy) is a deployment requirement,
+not something DAVe can enforce. Reports that reduce to "the header-trusting DAV server accepts
+the header from anyone who can reach it" describe a misdeployment, not a DAVe vulnerability.
 
 Known and accepted by design (see README "Data at rest"): `cache.db` stores synced
 calendar/task/note content unencrypted at the application layer — disk/volume encryption is

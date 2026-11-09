@@ -10,7 +10,7 @@ import Fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import fastifyRateLimit from '@fastify/rate-limit';
-import { loadConfig } from './config.js';
+import { isOidcEnabled, loadConfig } from './config.js';
 import { initDavBase } from './lib/dav.js';
 import { getDb } from './db/index.js';
 import { getCacheDb } from './db/cache.js';
@@ -19,6 +19,7 @@ import { SyncWorker } from './workers/syncWorker.js';
 import sessionPlugin from './plugins/session.js';
 import { healthRoutes } from './routes/health.js';
 import { authRoutes } from './routes/auth.js';
+import { oidcRoutes } from './routes/oidc.js';
 import { meRoutes } from './routes/me.js';
 import { collectionsRoutes } from './routes/collections.js';
 import { contactsRoutes } from './routes/contacts.js';
@@ -63,6 +64,13 @@ if (config.NODE_ENV === 'production' && !config.TRUST_PROXY) {
   );
 }
 
+if (isOidcEnabled(config)) {
+  app.log.info(
+    `OIDC sign-in enabled (issuer ${config.OIDC_ISSUER_URL}); password login is disabled and ` +
+      `DAV requests authenticate with the ${config.DAV_REMOTE_USER_HEADER} header`,
+  );
+}
+
 // ── Plugins ───────────────────────────────────────────────────────────────────
 
 await app.register(fastifyCookie);
@@ -86,6 +94,7 @@ const syncWorker = new SyncWorker(db, cacheDb, config);
 
 await app.register(healthRoutes);
 await app.register(authRoutes, { config, db });
+await app.register(oidcRoutes, { config, db });
 await app.register(meRoutes);
 await app.register(collectionsRoutes, { config, db });
 await app.register(contactsRoutes, { config, db });

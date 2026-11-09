@@ -3,11 +3,11 @@ import { createPortal } from 'react-dom';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronDown, ChevronRight, LogOut, Pencil, Plus, RefreshCw, Search, Settings } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, GitBranch, LogOut, Pencil, Plus, RefreshCw, Search, Settings } from 'lucide-react';
 import SettingsModal from './SettingsModal';
 import AddressBookModal from './AddressBookModal';
 import CalendarModal from './CalendarModal';
-import { cn, lightenHex, darkenHex } from '../lib/utils';
+import { cn, lightenHex, darkenHex, SOURCE_REPO_URL } from '../lib/utils';
 import { getAddressBooks, getCalendars } from '../api/collections';
 import { logout } from '../api/auth';
 import { useCollectionVisibility } from '../contexts/CollectionVisibility';
@@ -44,9 +44,12 @@ export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarPr
 
   const logoutMutation = useMutation({
     mutationFn: logout,
-    onSuccess: () => {
+    onSuccess: (res) => {
       queryClient.clear();
-      window.location.href = '/login';
+      // OIDC mode answers with a body. Without a provider logout to go through,
+      // land on a signed-out page instead of /login, whose auto-redirect would
+      // sign the user straight back in via the provider's session.
+      window.location.href = res ? (res.redirectUrl ?? '/login?signedOut') : '/login';
     },
   });
 
@@ -162,6 +165,15 @@ export default function Sidebar({ me, isOpen, onClose, onOpenSearch }: SidebarPr
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground truncate">{me.displayName || me.username}</span>
             <div className="flex items-center gap-1.5">
+              <a
+                href={SOURCE_REPO_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Source · AGPL-3.0"
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <GitBranch className="h-4 w-4" />
+              </a>
               <button
                 onClick={() => setShowSettings(true)}
                 title="Settings"

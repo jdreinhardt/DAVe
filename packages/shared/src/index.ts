@@ -12,6 +12,22 @@ export interface LoginResponse {
   ok: true;
 }
 
+export interface AuthConfigResponse {
+  // 'oidc': sign-in goes through the identity provider and there is no
+  // password form.
+  mode: 'password' | 'oidc';
+}
+
+// Returned (200) by logout only in OIDC mode; password mode answers 204.
+export interface LogoutResponse {
+  // Provider end-session URL, so the provider session ends too. Null when the
+  // provider doesn't support it.
+  redirectUrl: string | null;
+}
+
+// Values of the `error` query parameter the OIDC callback appends to /login.
+export type OidcLoginError = 'oidc_failed' | 'oidc_identity' | 'dav_denied' | 'dav_unavailable';
+
 export interface MeResponse {
   username: string;
   displayName: string;

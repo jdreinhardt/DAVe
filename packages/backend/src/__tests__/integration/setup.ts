@@ -59,6 +59,9 @@ export const integrationConfig: Config = {
   COMPLETED_TASK_RETENTION_DAYS: 7,
   DAV_ARCHIVE_SEARCH_MAX_AGE_DAYS: 365,
   EVENT_SEARCH_RANGE_DAYS: 60,
+  OIDC_SCOPES: 'openid profile email',
+  OIDC_USERNAME_CLAIM: 'preferred_username',
+  DAV_REMOTE_USER_HEADER: 'X-Remote-User',
 };
 
 let _db: DbInstance | null = null;
