@@ -1,6 +1,6 @@
 {
   "name": "dave",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -33,9 +33,6 @@
   "overrides": {
     "tsup": {
       "esbuild": "^0.28.2"
-    },
-    "typescript-eslint": {
-      "minimatch": "^11.0.1"
     }
   },
   "devDependencies": {
