@@ -252,6 +252,21 @@ function cardAccount(session: SessionData, config: Config): DAVAccount {
   };
 }
 
+/**
+ * Collapse collections that share an id.
+ *
+ * A Depth:1 multistatus is supposed to carry one <response> per resource, but a
+ * server whose store holds several rows for the same URI reports the same href
+ * several times over (differing only in ctag/sync-token). Passing those through
+ * gives the client duplicate collection ids, which it uses as React keys and as
+ * react-query cache keys — so every entry renders once per duplicate and an
+ * optimistic delete only clears one copy. First occurrence wins.
+ */
+function dedupeById<T extends { id: string }>(collections: T[]): T[] {
+  const seen = new Set<string>();
+  return collections.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
+}
+
 export async function listCalendars(
   session: SessionData,
   config: Config,
@@ -259,7 +274,7 @@ export async function listCalendars(
   const authHeaders = _getBasicAuthHeaders({ username: session.username, password: session.password });
   const davCals = await _fetchCalendars({ account: calAccount(session, config), headers: authHeaders });
 
-  return davCals.map((cal) => ({
+  return dedupeById(davCals.map((cal) => ({
     id: collectionId(cal.url),
     url: cal.url,
     displayName: str(cal.displayName, cal.url),
@@ -269,7 +284,7 @@ export async function listCalendars(
     syncToken: str(cal.syncToken),
     components: Array.isArray(cal.components) ? cal.components : ['VEVENT'],
     timezone: str(cal.timezone),
-  }));
+  })));
 }
 
 export async function listAddressBooks(
@@ -300,7 +315,7 @@ export async function listAddressBooks(
   ).all(session.username) as Array<{ address_book_id: string; color: string }>;
   const colorMap = new Map(colorRows.map((r) => [r.address_book_id, r.color]));
 
-  return (results as TsdavTypes.DAVResponse[])
+  return dedupeById((results as TsdavTypes.DAVResponse[])
     .filter((r) => {
       const rt = (r.props as Record<string, unknown> | undefined)?.resourcetype;
       return rt && typeof rt === 'object' && 'addressbook' in (rt as object);
@@ -329,7 +344,7 @@ export async function listAddressBooks(
         ctag: str(props.getctag),
         syncToken: str(props.syncToken),
       };
-    });
+    }));
 }
 
 export async function fetchContacts(

@@ -92,8 +92,17 @@ INSERT OR IGNORE INTO calendarinstances
     (1, 'principals/${USERNAME}', 1, 'Personal', 'personal', '',
      0, '#0082C9', 'America/New_York', 0);
 
-INSERT OR IGNORE INTO addressbooks (principaluri, displayname, uri, description, synctoken)
-  VALUES ('principals/${USERNAME}', 'Contacts', 'contacts', '', 1);
+-- Unlike calendarinstances, the addressbooks table carries no UNIQUE constraint
+-- on (principaluri, uri), so OR IGNORE has nothing to conflict with and would
+-- append a second "contacts" book on every re-seed of a persisted volume. The
+-- server then answers PROPFIND with several identical hrefs and the client shows
+-- every contact once per duplicate. Guard on the row instead.
+INSERT INTO addressbooks (principaluri, displayname, uri, description, synctoken)
+  SELECT 'principals/${USERNAME}', 'Contacts', 'contacts', '', 1
+  WHERE NOT EXISTS (
+    SELECT 1 FROM addressbooks
+     WHERE principaluri = 'principals/${USERNAME}' AND uri = 'contacts'
+  );
 SQL
 
 # The installer only steps aside once this marker exists.

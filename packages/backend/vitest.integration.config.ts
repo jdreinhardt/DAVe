@@ -14,9 +14,15 @@ export default defineConfig({
     include: ['src/**/*.integration.test.ts'],
     testTimeout: 30_000,
     hookTimeout: 60_000,
-    // Force a single fork so integration tests share one Fastify+DAV instance
-    // and don't race on database state.
+    // Run the files one at a time so they don't race each other on DAV and
+    // database state — they all drive the same seeded account.
+    //
+    // This was `poolOptions: { forks: { singleFork: true } }`, which Vitest 4
+    // removed in favour of top-level options. An unknown key is only warned
+    // about, so on the 3 -> 5 bump the suite silently went back to running
+    // files in parallel and failed in a way that blamed the fixture ("No
+    // address books found — is the DAV server seeded?") rather than the race.
     pool: 'forks',
-    poolOptions: { forks: { singleFork: true } },
+    fileParallelism: false,
   },
 });
