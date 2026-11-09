@@ -98,6 +98,29 @@ describe('OIDC settings', () => {
     expect(expectExit({ ...OIDC_ENV, OIDC_SCOPES: 'profile email' })).toContain('openid');
   });
 
+  // The sign-in transaction cookie carries the PKCE verifier, so OIDC in
+  // production without TRUST_PROXY would hand it out without Secure.
+  it('requires TRUST_PROXY when OIDC is enabled in production', () => {
+    expect(expectExit({ ...OIDC_ENV, NODE_ENV: 'production' })).toContain('TRUST_PROXY');
+  });
+
+  it('starts in production with OIDC once TRUST_PROXY is set', () => {
+    const cfg = load({ ...OIDC_ENV, NODE_ENV: 'production', TRUST_PROXY: '1' });
+    expect(cfg.TRUST_PROXY).toBe(true);
+    expect(isOidcEnabled(cfg)).toBe(true);
+  });
+
+  it('still allows OIDC without TRUST_PROXY outside production', () => {
+    // An http://localhost dev setup has no proxy and no TLS to inherit.
+    expect(isOidcEnabled(load({ ...OIDC_ENV, NODE_ENV: 'development' }))).toBe(true);
+  });
+
+  it('leaves non-OIDC production deployments alone', () => {
+    // Plain HTTP on a trusted network stays a warning, not a hard failure.
+    const cfg = load({ DAV_BASE_URL: 'http://radicale:5232', NODE_ENV: 'production' });
+    expect(cfg.TRUST_PROXY).toBe(false);
+  });
+
   it('rejects a header name that could smuggle extra headers', () => {
     expect(expectExit({ ...OIDC_ENV, DAV_REMOTE_USER_HEADER: 'X-User: admin\r\nX' })).toContain(
       'DAV_REMOTE_USER_HEADER',

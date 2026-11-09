@@ -31,7 +31,7 @@ Basic auth is a hard requirement. Digest is not supported. The one alternative i
 [OIDC sign-in](#oidc-sign-in), for a DAV server that trusts a user header from DAVe.
 
 ```bash
-git clone https://github.com/jdreinhardt/dave && cd dave
+git clone https://github.com/jdreinhardt/DAVe && cd DAVe
 
 cp .env.example .env
 
@@ -223,6 +223,10 @@ anyone who can reach it. That makes the network layout the security boundary:
 - DAVe never forwards a header from the browser; the value always comes from the verified ID token.
 - The username must match what the DAV server expects (Radicale uses it as the principal path, and
   creates an empty principal for any new name it sees).
+- `OIDC_USERNAME_CLAIM` decides *who the DAV user is*, so point it at a claim the provider
+  verifies and does not let users set for themselves. `preferred_username` (the default) is safe
+  on most providers. `email` is only safe where the provider verifies addresses — an unverified
+  one lets a user claim someone else's collections by changing their own address.
 
 **Radicale example.** Desktop and mobile clients (Thunderbird, DAVx⁵, Outlook add-ins) still need
 Basic auth, so the usual setup is **two Radicale instances sharing one storage folder** — Radicale
@@ -271,6 +275,19 @@ networks:
 
 Plain `http://` to `radicale-dave` is fine here: the hop stays on the private network and carries no
 password. (DAVe only refuses plaintext when `DAV_BASE_URL` itself is `https://`.)
+
+**If sign-in fails with a redirect-URI error,** the provider is comparing `OIDC_REDIRECT_URI`
+against its registered list as an exact string. `localhost` and `127.0.0.1` are different values,
+as are a differing port and a trailing slash — authentik, for one, has matched strictly by default
+since CVE-2024-52289. DAVe sends the variable verbatim rather than deriving it from the request's
+`Host`, so what it sends is exactly what you configured; print it and compare:
+
+```bash
+curl -sD - -o /dev/null http://localhost:3000/api/auth/oidc/login | grep -i '^location:'
+```
+
+Note also that the provider only ever hands this URL to the *browser* as a redirect target — it
+never connects to it — so a `localhost` callback works fine against a remote provider.
 
 ### Nginx
 

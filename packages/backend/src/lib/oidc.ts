@@ -135,6 +135,11 @@ export function isSafeUsername(value: string): boolean {
     value.length <= 256 &&
     value !== '.' &&
     value !== '..' &&
+    // DAVe never interpolates the username into a URL — collection paths all come
+    // from discovery — but a header-trusting server that percent-decodes the value
+    // before using it as a path segment would read `..%2f` as traversal. Cheap to
+    // exclude, and no provider worth trusting emits a username containing one.
+    !value.includes('%') &&
     // eslint-disable-next-line no-control-regex
     !/[/\\\u0000-\u001f\u007f]/.test(value)
   );

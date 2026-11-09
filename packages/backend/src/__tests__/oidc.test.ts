@@ -150,7 +150,7 @@ describe('isSafeUsername', () => {
     expect(isSafeUsername(v)).toBe(true);
   });
 
-  it.each(['', '.', '..', 'a/b', 'a\\b', 'alice\r\nX-Remote-User: admin', 'a\u0000', 'x'.repeat(257)])(
+  it.each(['', '.', '..', 'a/b', 'a\\b', 'alice\r\nX-Remote-User: admin', 'a\u0000', 'x'.repeat(257), '..%2fadmin', 'a%25b'])(
     'rejects %j',
     (v) => {
       expect(isSafeUsername(v)).toBe(false);

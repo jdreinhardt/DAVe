@@ -9,7 +9,7 @@ export function cn(...inputs: ClassValue[]) {
 // Public source repo. The AGPL §13 source offer to network users links here,
 // from both the login page and the sidebar (OIDC users never see the login
 // page) — keep it present and current if the repo ever moves.
-export const SOURCE_REPO_URL = 'https://github.com/jdreinhardt/dave';
+export const SOURCE_REPO_URL = 'https://github.com/jdreinhardt/DAVe';
 
 /**
  * Lighten a hex color by mixing it toward white by `amount` (0–1).

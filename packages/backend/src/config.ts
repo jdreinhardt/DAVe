@@ -103,6 +103,21 @@ const refinedSchema = schema.superRefine((cfg, ctx) => {
       message: 'OIDC_SCOPES must include "openid"',
     });
   }
+  // Required here rather than warned about at startup, unlike TRUST_PROXY on its
+  // own: OIDC needs an HTTPS issuer, so a deployment that reaches one terminates
+  // TLS somewhere, and the sign-in transaction cookie carries the PKCE code
+  // verifier and nonce. Shipping those without Secure is not a trade-off worth
+  // leaving to a log line. Development is exempt so an http://localhost setup runs.
+  if (cfg.NODE_ENV === 'production' && !cfg.TRUST_PROXY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['TRUST_PROXY'],
+      message:
+        'TRUST_PROXY must be set when OIDC_ISSUER_URL is set in production — without it the ' +
+        'session cookie and the OIDC sign-in transaction cookie (which carries the PKCE code ' +
+        'verifier and nonce) are sent without the Secure flag',
+    });
+  }
 });
 
 export type Config = z.infer<typeof schema>;
