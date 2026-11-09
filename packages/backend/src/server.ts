@@ -10,7 +10,7 @@ import Fastify from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import fastifyRateLimit from '@fastify/rate-limit';
-import { isOidcEnabled, loadConfig } from './config.js';
+import { isOidcEnabled, loadConfig, trustProxyValue } from './config.js';
 import { initDavBase } from './lib/dav.js';
 import { getDb } from './db/index.js';
 import { getCacheDb } from './db/cache.js';
@@ -49,7 +49,8 @@ const app = Fastify({
         ? { target: 'pino-pretty', options: { colorize: true } }
         : undefined,
   },
-  trustProxy: config.TRUST_PROXY,
+  // An allowlist, never `true` — see trustProxyValue.
+  trustProxy: trustProxyValue(config),
 });
 
 // In production behind an HTTPS-terminating proxy, TRUST_PROXY must be set so the

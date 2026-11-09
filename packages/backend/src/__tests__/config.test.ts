@@ -54,6 +54,24 @@ describe('DAV_BASE_URL normalization', () => {
   });
 });
 
+describe('TRUST_PROXY_IPS', () => {
+  const BASE = { DAV_BASE_URL: 'http://radicale:5232' };
+
+  it('defaults to the private-address ranges', () => {
+    expect(load(BASE).TRUST_PROXY_IPS).toBe('loopback,uniquelocal');
+  });
+
+  it('replaces the default rather than extending it', () => {
+    const cfg = load({ ...BASE, TRUST_PROXY: '1', TRUST_PROXY_IPS: '172.18.0.0/16' });
+    expect(cfg.TRUST_PROXY_IPS).toBe('172.18.0.0/16');
+  });
+
+  it('treats an empty value as unset', () => {
+    // Compose passes declared-but-empty variables through as ''.
+    expect(load({ ...BASE, TRUST_PROXY_IPS: '' }).TRUST_PROXY_IPS).toBe('loopback,uniquelocal');
+  });
+});
+
 describe('OIDC settings', () => {
   const OIDC_ENV = {
     DAV_BASE_URL: 'http://radicale:5232',

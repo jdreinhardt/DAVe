@@ -21,6 +21,7 @@ export const testConfig: Config = {
   PORT: 3001,
   BIND_ADDRESS: '0.0.0.0',
   TRUST_PROXY: false,
+  TRUST_PROXY_IPS: 'loopback,uniquelocal',
   NODE_ENV: 'test',
   DATA_DIR: '/tmp/test-dave',
   SYNC_INTERVAL_SECONDS: 60,

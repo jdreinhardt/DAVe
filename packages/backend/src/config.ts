@@ -49,6 +49,30 @@ const schema = z.object({
     .string()
     .optional()
     .transform((v) => v === '1' || v === 'true'),
+  // Which proxies may set X-Forwarded-For, as a comma-separated list of IPs,
+  // CIDRs, or the named ranges proxy-addr understands (loopback, linklocal,
+  // uniquelocal). Ignored entirely unless TRUST_PROXY is on.
+  //
+  // This exists because trusting *every* hop (Fastify's `trustProxy: true`) takes
+  // the left-most X-Forwarded-For entry as the client — and nginx's usual
+  // `$proxy_add_x_forwarded_for` preserves whatever the client sent and appends
+  // the real address on the right. So a client could name its own IP and get a
+  // private rate-limit bucket per request.
+  //
+  // The default covers every layout where the proxy reaches DAVe over a private
+  // address: same host via loopback, a shared container network, or another
+  // machine on the LAN. A proxy arriving from a *public* address (Cloudflare and
+  // friends) must be listed explicitly.
+  //
+  // Setting this replaces the default rather than adding to it, and the value is
+  // the address the proxy *connects from* — for nginx in a compose network that
+  // is the container subnet, not its public address. Narrowing it this way is
+  // also the only way to stop a client that is itself on a private address from
+  // spoofing, since `uniquelocal` trusts any private hop in the chain.
+  TRUST_PROXY_IPS: z.preprocess(
+    emptyAsUndefined,
+    z.string().default('loopback,uniquelocal'),
+  ),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   // Path to the compiled frontend build; used in production to serve the SPA.
   FRONTEND_DIST: z.string().optional(),
@@ -124,6 +148,17 @@ export type Config = z.infer<typeof schema>;
 
 export function isOidcEnabled(config: Config): boolean {
   return Boolean(config.OIDC_ISSUER_URL);
+}
+
+/**
+ * The value Fastify's `trustProxy` option wants.
+ *
+ * Deliberately never `true`: that trusts every hop and hands the client control
+ * of its own apparent IP, which defeats the per-IP login throttle. Off, or an
+ * explicit allowlist — nothing in between.
+ */
+export function trustProxyValue(config: Config): string | false {
+  return config.TRUST_PROXY ? config.TRUST_PROXY_IPS : false;
 }
 
 export function loadConfig(): Config {

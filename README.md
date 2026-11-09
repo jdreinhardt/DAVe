@@ -157,7 +157,8 @@ All configuration is via environment variables. Copy `.env.example` to `.env` an
 | `SESSION_TTL_HOURS` | No | `168` | Session inactivity timeout in hours (sliding window). Default = 7 days. |
 | `PORT` | No | `3000` | Port to listen on |
 | `BIND_ADDRESS` | No | `0.0.0.0` | Address to bind |
-| `TRUST_PROXY` | No | `0` | Set to `1` when running behind a reverse proxy — enables `Secure` cookies and reads the client IP from `X-Forwarded-For` (used for login rate limiting). A startup warning is logged if this is unset in production. |
+| `TRUST_PROXY` | No | `0` | Set to `1` when running behind a reverse proxy — enables `Secure` cookies and reads the client IP from `X-Forwarded-For` (used for login rate limiting). A startup warning is logged if this is unset in production; **required** when `OIDC_ISSUER_URL` is set in production. |
+| `TRUST_PROXY_IPS` | No | `loopback,uniquelocal` | Which proxies may set `X-Forwarded-For` — comma-separated IPs, CIDRs, or `loopback` / `linklocal` / `uniquelocal`. Ignored unless `TRUST_PROXY=1`. Only needs setting if your proxy arrives from a public address, or to tighten the default. See [Reverse proxies and client IPs](#reverse-proxies-and-client-ips). |
 | `DATA_DIR` | No | `/data` | Directory for the SQLite session and cache databases |
 | `SYNC_INTERVAL_SECONDS` | No | `60` | How often the background worker polls the server for changes to tasks, notes, and journals |
 | `MAX_CACHED_ENTRIES_PER_USER` | No | `10000` | Safety cap on cached task/note/journal entries per user |
@@ -308,6 +309,32 @@ server {
     }
 }
 ```
+
+### Reverse proxies and client IPs
+
+`$proxy_add_x_forwarded_for` above — and its equivalent in every other proxy — keeps
+whatever `X-Forwarded-For` the client sent and appends the address it connected from.
+The header is therefore partly attacker-controlled, and only the right-hand end of it
+is trustworthy.
+
+So DAVe never trusts the whole chain. With `TRUST_PROXY=1` it believes only hops
+matching `TRUST_PROXY_IPS` (default `loopback,uniquelocal`) and takes the first address
+beyond them as the client. A forged entry sits further left and is discarded, which
+keeps the per-IP login throttle meaningful.
+
+The default covers same-host proxying over loopback, a shared container network, and a
+proxy on another LAN machine. You need to set `TRUST_PROXY_IPS` when:
+
+- **the proxy reaches DAVe from a public address** — Cloudflare, or a proxy in another
+  network. List its ranges, or `X-Forwarded-For` is ignored and every client appears to
+  come from the proxy, throttling them as one.
+- **you want to stop private-address clients spoofing.** `uniquelocal` trusts any
+  private hop, so a client on your LAN can still name its own IP. Narrowing to the
+  proxy's own address closes that.
+
+Two things to get right when setting it: the value **replaces** the default rather than
+adding to it, and it is the address the proxy *connects from*. For nginx in a compose
+network that is the container subnet (`172.18.0.0/16`), not its public address.
 
 ### Caddy
 
