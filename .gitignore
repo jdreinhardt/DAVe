@@ -38,3 +38,8 @@ test-results/
 # Shared signed-in session written by the Playwright setup project
 e2e/.auth/
 test.yml
+
+# Self-signed cert for the mock OIDC provider (scripts/gen-test-oidc-cert.sh).
+# Generated on demand — a committed private key, even a throwaway, trips secret
+# scanners forever.
+.test-oidc-certs/

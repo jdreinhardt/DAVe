@@ -19,6 +19,13 @@ const STACKS = {
 
 const stack = STACKS[DAV_SERVER];
 
+/**
+ * Opt-in for the OIDC project. Its specs need a second DAVe running in OIDC mode
+ * plus the mock provider, so registering the project unconditionally would break
+ * `npm run test:e2e` for everyone else.
+ */
+const OIDC_BASE_URL = process.env.E2E_OIDC_BASE_URL;
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
@@ -37,9 +44,40 @@ export default defineConfig({
     { name: 'cleanup', testMatch: /cleanup\.teardown\.ts/ },
     {
       name: 'chromium',
+      // oidc.spec.ts is excluded: it needs a second app instance running in OIDC
+      // mode, where password sign-in is refused and the shared session from
+      // `setup` cannot exist.
+      testIgnore: /oidc\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], storageState: AUTH_STATE_PATH },
       dependencies: ['setup'],
     },
+    // The OIDC sign-in flow, against the mock provider in
+    // docker-compose.test.radicale-oidc.yml and a DAVe started with
+    // OIDC_ISSUER_URL. Separate project rather than another spec because OIDC
+    // mode is all-or-nothing: it disables password login, so it cannot share an
+    // app instance with the suite above. See e2e/oidc.spec.ts.
+    //
+    // Registered only when E2E_OIDC_BASE_URL is set (npm run test:e2e:oidc), so
+    // a bare `playwright test` still needs just one app and one stack. Without
+    // the opt-in these four specs would fail for anyone who has not started the
+    // second instance.
+    ...(OIDC_BASE_URL
+      ? [
+          {
+            name: 'oidc',
+            testMatch: /oidc\.spec\.ts/,
+            use: {
+              ...devices['Desktop Chrome'],
+              baseURL: OIDC_BASE_URL,
+              // The mock provider serves a self-signed cert — openid-client
+              // refuses a plain-http issuer, so there is no HTTP alternative.
+              // DAVe trusts it via NODE_EXTRA_CA_CERTS; the browser needs
+              // telling separately.
+              ignoreHTTPSErrors: true,
+            },
+          },
+        ]
+      : []),
   ],
   // When running in CI, start the full test stack first.
   // Locally, reuse an already-running instance if available.

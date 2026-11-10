@@ -1,0 +1,15 @@
+# Users for the mock OIDC provider in docker-compose.test.radicale-oidc.yml.
+#
+# `preferred_username` is what matters: it is DAVe's default
+# OIDC_USERNAME_CLAIM, and the trusted-header Radicale turns it into the
+# principal path. So this value is the DAV username the e2e run ends up as, and
+# the collections it sees are created for it on first request.
+#
+# Deliberately not `testuser` — the Basic-auth stacks seed that name, and reusing
+# it here would let an e2e failure look like a pass by landing on the wrong
+# server's data.
+- sub: e2e-oidc-user
+  idClaims:
+    preferred_username: e2e-oidc-user
+    name: E2E OIDC User
+    email: e2e-oidc-user@example.test

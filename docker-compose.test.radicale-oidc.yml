@@ -97,6 +97,34 @@ services:
 #      - OIDC_USERNAME_CLAIM=preferred_username
 #    command: npm run dev
 
+  # Mock identity provider for the e2e sign-in flow. Serves HTTPS because
+  # openid-client v6 refuses a plain-http issuer — the cert comes from
+  # scripts/gen-test-oidc-cert.sh, which `npm run stack:oidc` runs first.
+  #
+  # Client authentication is not enforced by this mock, so any client id works
+  # and OIDC_CLIENT_SECRET can be omitted. PKCE, nonce and end-session are all
+  # supported, which is what DAVe's flow exercises.
+  oidc-provider:
+    image: ghcr.io/bluecatengineering/mock-oidc-provider:latest
+    environment:
+      - PORT=8092
+      - TLS_PORT=8443
+      - CERT_FILE=/certs/cert.pem
+      - KEY_FILE=/certs/key.pem
+      # Must match what DAVe is configured with and what the browser is sent to,
+      # byte for byte — see README "OIDC sign-in".
+      - ISSUER_URL=https://localhost:8443
+      - USERS_FILE=/config/users.yml
+    volumes:
+      - ./.test-oidc-certs:/certs:ro,z
+      - ./scripts/test-oidc-users.yml:/config/users.yml:ro,z
+    ports:
+      - '127.0.0.1:8443:8443'
+    # No healthcheck: the image is distroless, so there is no shell to run one in
+    # and `CMD-SHELL` fails to exec rather than reporting unhealthy. It binds both
+    # ports during startup anyway, so `up --wait` waiting for "started" is enough;
+    # the Playwright project probes discovery before the first spec.
+
 volumes:
   radicale-oidc-config:
   radicale-oidc-data:

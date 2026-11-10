@@ -65,6 +65,22 @@ export const integrationConfig: Config = {
   DAV_REMOTE_USER_HEADER: 'X-Remote-User',
 };
 
+/**
+ * Where the trusted-header Radicale lives (docker-compose.test.radicale-oidc.yml).
+ *
+ * Deliberately not a third `DavServer`: that type distinguishes *server shapes*
+ * the whole suite must handle identically, and adding a value would make every
+ * existing spec branch on an auth mode it has nothing to do with. The
+ * remote-user suite opts in on its own instead, and skips when this is unset so
+ * `test:integration:baikal` and `:radicale` keep working with two stacks up.
+ */
+export const DAV_OIDC_URL = process.env.DAV_OIDC_URL;
+
+export const remoteUserConfig: Config = {
+  ...integrationConfig,
+  DAV_BASE_URL: DAV_OIDC_URL ?? 'http://localhost:8803',
+};
+
 let _db: DbInstance | null = null;
 let _cacheDb: CacheDbInstance | null = null;
 
@@ -84,23 +100,33 @@ export function getTestCacheDb(): CacheDbInstance {
   return _cacheDb;
 }
 
-export async function buildIntegrationApp(): Promise<FastifyInstance> {
-  initDavBase(integrationConfig);
+/**
+ * Build the app against an explicit config.
+ *
+ * `initDavBase` pins the DAV origin in module scope, so one process must not
+ * serve two base URLs — call this once per test file.
+ */
+export async function buildAppWithConfig(config: Config): Promise<FastifyInstance> {
+  initDavBase(config);
   const db = getTestDb();
   const cacheDb = getTestCacheDb();
   const app = Fastify({ logger: false });
   await app.register(fastifyCookie);
-  await app.register(sessionPlugin, { config: integrationConfig, db });
+  await app.register(sessionPlugin, { config, db });
   await app.register(healthRoutes);
-  await app.register(authRoutes, { config: integrationConfig, db });
+  await app.register(authRoutes, { config, db });
   await app.register(meRoutes);
-  await app.register(collectionsRoutes, { config: integrationConfig, db });
-  await app.register(contactsRoutes, { config: integrationConfig, db });
-  await app.register(eventsRoutes, { config: integrationConfig, db });
-  const syncWorker = new SyncWorker(db, cacheDb, integrationConfig);
-  await app.register(syncRoutes, { config: integrationConfig, db, cacheDb, syncWorker });
+  await app.register(collectionsRoutes, { config, db });
+  await app.register(contactsRoutes, { config, db });
+  await app.register(eventsRoutes, { config, db });
+  const syncWorker = new SyncWorker(db, cacheDb, config);
+  await app.register(syncRoutes, { config, db, cacheDb, syncWorker });
   await app.ready();
   return app;
+}
+
+export function buildIntegrationApp(): Promise<FastifyInstance> {
+  return buildAppWithConfig(integrationConfig);
 }
 
 /** Log in as the test user and return the raw cookie string for inject calls. */
