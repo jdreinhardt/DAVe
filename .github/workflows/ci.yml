@@ -1,0 +1,60 @@
+name: CI
+
+# Feedback on a PR before anyone pulls the branch. Runs on open and on every
+# push to the PR.
+#
+# `npm ci` is deliberately the first real step: it is the check that was missing
+# when a lockfile desync reached main and only surfaced in the image build. A
+# lockfile that cannot be installed fails here instead.
+#
+# Pushes to main are deliberately *not* here. The same checks run as the `check`
+# job in docker-publish.yml, which gates the image on them — two workflows on the
+# same trigger would run in parallel with no relationship, and a red CI would not
+# stop `latest` from moving.
+on:
+  pull_request:
+
+# A second push to the same branch supersedes the first — no point finishing a
+# run for code that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Dockerfile's node:22-alpine. Vitest 5 needs >=22.12, so
+          # do not drop below 22 here without checking its engines field.
+          node-version: '22'
+          cache: npm
+
+      # Not `npm install`: ci fails on a package.json/package-lock.json mismatch
+      # rather than quietly resolving around it, which is the point.
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # Catches the frontend build breaking, which the unit tests do not cover.
+      - name: Build
+        run: npm run build
+
+  # Integration and e2e are not here yet. Both need DAV containers (and e2e a
+  # running app), so they are a follow-up rather than a reason to delay the
+  # cheap checks above. See docs/CONTRIBUTING.md for running them locally.

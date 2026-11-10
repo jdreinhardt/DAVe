@@ -6,11 +6,59 @@ on:
   release:
     types: [published]
 
+# Serialize rather than cancel: two pushes landing close together would
+# otherwise race to move the same tag, and the loser could win. Queueing keeps
+# them ordered, so the newest commit is the one `latest` ends up pointing at.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   IMAGE: ghcr.io/jdreinhardt/dave
 
 jobs:
+  # Gate for everything below: no green checks, no published image.
+  #
+  # These are the same steps ci.yml runs on pull requests, repeated here on
+  # purpose. A PR check that was green at review time does not prove the *merge
+  # result* is green — the base can move underneath it — and `latest` moving is
+  # not something to discover after the fact. Also covers direct pushes to main
+  # and release publishes, neither of which raise a PR.
+  check:
+    name: lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Dockerfile's node:22-alpine. Vitest 5 needs >=22.12.
+          node-version: '22'
+          cache: npm
+
+      # Not `npm install`: ci fails on a package.json/package-lock.json mismatch
+      # rather than quietly resolving around it. That mismatch is what last
+      # reached main and broke the image build.
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # The image build compiles too, but failing here is faster and says why.
+      - name: Build
+        run: npm run build
+
   build:
+    needs: [check]
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
