@@ -1,0 +1,102 @@
+name: dave-test-radicale-oidc
+
+# Radicale configured for trusted-header auth (`[auth] type = http_x_remote_user`),
+# which is what OIDC sign-in needs on the DAV side. Baikal cannot stand in here:
+# its only auth modes are Basic and Digest.
+#
+# Third stack alongside the Basic-auth pair — Baikal on 8801, Radicale on 8802,
+# this on 8803 (dev keeps 8800). Like those, it serves only the DAV server; the
+# integration suite builds its own Fastify in-process.
+#
+#   npm run stack:oidc        # up --wait
+#   npm run stack:down        # tears down all three
+#
+# To click through a real OIDC sign-in by hand rather than run the suite,
+# uncomment the `app` service at the bottom and fill in the three provider
+# values. Stop docker-compose.dev.yml first — both publish 3000 and 5173.
+
+services:
+  # One-shot seeder. Must finish before Radicale starts: Radicale reads /config
+  # once at boot, so a config written afterwards is ignored. `/config` is a
+  # declared VOLUME in the image, so the named volume initialises from the
+  # image default and this overwrites it.
+  radicale-oidc-init:
+    image: &radicale_image tomsquest/docker-radicale:3.5.4.0
+    user: root
+    volumes:
+      - radicale-oidc-config:/config
+      - ./scripts/seed-test-radicale-oidc.sh:/seed-test-radicale-oidc.sh:ro,z
+    entrypoint: ['/bin/sh', '/seed-test-radicale-oidc.sh']
+
+  radicale-oidc:
+    image: *radicale_image
+    depends_on:
+      radicale-oidc-init:
+        condition: service_completed_successfully
+    # 127.0.0.1 ONLY, and deliberately so. With http_x_remote_user this server
+    # grants whatever identity the header claims to anyone who can reach it, so
+    # publishing on 0.0.0.0 would hand the LAN unauthenticated access to every
+    # collection. The integration suite reaches it over loopback; a containerised
+    # app would use http://radicale-oidc:5232 and need no published port at all.
+    ports:
+      - '127.0.0.1:8803:5232'
+    volumes:
+      - radicale-oidc-config:/config
+      - radicale-oidc-data:/data
+    # A bare `curl -f` is wrong here: Radicale answers `GET /` with a 302 to its
+    # web UI, and would answer 401 if that were disabled. Both mean it is up, so
+    # check only that an HTTP exchange completed.
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -s -o /dev/null http://localhost:5232/ || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
+
+# ----- Manual sign-in trial (not used by any suite)
+#
+# Uncomment, then replace the three CHANGE_ME values with a provider client.
+# Inline rather than via .env on purpose: this stack is disposable and the point
+# is to get someone to a working sign-in in one edit. Do not copy this block into
+# a real deployment — put the secret in .env there (see README "OIDC sign-in").
+#
+# The redirect URI must be registered at the provider byte-for-byte as written.
+#
+#  app:
+#    build:
+#      context: .
+#      dockerfile: Dockerfile.dev
+#    depends_on:
+#      radicale-oidc:
+#        condition: service_healthy
+#    volumes:
+#      - .:/app:z
+#      - /app/node_modules
+#      - /app/packages/shared/node_modules
+#      - /app/packages/backend/node_modules
+#      - /app/packages/frontend/node_modules
+#    ports:
+#      - '3000:3000'   # Fastify backend / API
+#      - '5173:5173'   # Vite dev server (frontend + HMR)
+#    environment:
+#      - NODE_ENV=development
+#      - PORT=3000
+#      - BIND_ADDRESS=0.0.0.0
+#      - DATA_DIR=/app/.dev-data-oidc
+#      - SESSION_SECRET=oidc-test-stack-secret-not-for-production
+#      # Over the compose network, so the header-trusting server needs no host port.
+#      - DAV_BASE_URL=http://radicale-oidc:5232
+#      # Must be an https issuer — openid-client refuses plain http.
+#      - OIDC_ISSUER_URL=CHANGE_ME   # e.g. https://auth.example.com/application/o/dave/
+#      - OIDC_CLIENT_ID=CHANGE_ME
+#      # Omit for a public client; PKCE is used either way.
+#      - OIDC_CLIENT_SECRET=CHANGE_ME
+#      - OIDC_REDIRECT_URI=http://localhost:5173/api/auth/oidc/callback
+#      - OIDC_POST_LOGOUT_REDIRECT_URI=http://localhost:5173/login?signedOut
+#      # Claim holding the DAV username; Radicale uses it as the principal path.
+#      - OIDC_USERNAME_CLAIM=preferred_username
+#    command: npm run dev
+
+volumes:
+  radicale-oidc-config:
+  radicale-oidc-data:
